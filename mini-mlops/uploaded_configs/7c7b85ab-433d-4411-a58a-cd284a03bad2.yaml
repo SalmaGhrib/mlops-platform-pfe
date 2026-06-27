@@ -1,0 +1,394 @@
+project_name: plm
+project_type: classification
+task:
+  type: classification
+run:
+  name: plm_run_20260603_195508_20260603_200231_827_b59c0a14
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+  experiment_name: plm
+model:
+  name: plm_model
+  primary_metric: log_loss
+  direction: min
+  project_type: classification
+  task_type: classification
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: a7b491de-531c-44df-9221-cc447ef6c859.py
+  files:
+    a7b491de-531c-44df-9221-cc447ef6c859.py: "import json\nimport joblib\nimport numpy\
+      \ as np\nimport pandas as pd\n\nfrom sklearn.model_selection import train_test_split\n\
+      from sklearn.pipeline import Pipeline\nfrom sklearn.feature_extraction.text\
+      \ import TfidfVectorizer\nfrom sklearn.linear_model import LogisticRegression\n\
+      from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score,\
+      \ log_loss\n\n\"\"\"\nScript de test pour valider le changement automatique\
+      \ de version production\naprès modification de l'ordre des métriques.\n\nObjectif\
+      \ volontaire :\n- Obtenir une très bonne accuracy / f1 / precision / recall\n\
+      - Garder un log_loss volontairement moins bon que ton ancien v2\n  pour créer\
+      \ un conflit entre les métriques.\n\nRésultat attendu :\n- Si metric priority\
+      \ = accuracy / f1_score / precision => ce run doit devenir meilleur.\n- Si metric\
+      \ priority = log_loss en priorité 1 => ton ancien v2 peut rester meilleur.\n\
+      \"\"\"\n\nDATASET_PATH = \"text_sentiment_dataset_metric_switch.csv\"\nTARGET_COLUMN\
+      \ = \"label\"\nTEXT_COLUMN = \"text\"\n\ndf = pd.read_csv(DATASET_PATH)\ndf\
+      \ = df.dropna(subset=[TEXT_COLUMN, TARGET_COLUMN])\n\nX = df[TEXT_COLUMN].astype(str)\n\
+      y = df[TARGET_COLUMN].astype(str)\n\nX_train, X_test, y_train, y_test = train_test_split(\n\
+      \    X,\n    y,\n    test_size=0.25,\n    random_state=7,\n    stratify=y\n\
+      )\n\nmodel = Pipeline([\n    (\"tfidf\", TfidfVectorizer(\n        lowercase=True,\n\
+      \        ngram_range=(1, 2),\n        max_features=8000\n    )),\n    (\"classifier\"\
+      , LogisticRegression(\n        max_iter=1000,\n        C=5.0,\n        random_state=7\n\
+      \    ))\n])\n\nmodel.fit(X_train, y_train)\n\ny_pred = model.predict(X_test)\n\
+      \n# Probabilités réelles du modèle\nreal_proba = model.predict_proba(X_test)\n\
+      \n# Pour tester la logique de sélection, on crée volontairement une probabilité\n\
+      # peu confiante autour de 0.51 / 0.49, tout en gardant les classes prédites.\n\
+      # Cela rend log_loss moins bon, même si accuracy/f1 sont bons.\nclasses = list(model.classes_)\n\
+      forced_proba = np.zeros((len(y_pred), len(classes)))\n\nfor i, pred in enumerate(y_pred):\n\
+      \    pred_index = classes.index(pred)\n    if len(classes) == 2:\n        forced_proba[i,\
+      \ pred_index] = 0.51\n        forced_proba[i, 1 - pred_index] = 0.49\n    else:\n\
+      \        forced_proba[i, :] = 0.49 / (len(classes) - 1)\n        forced_proba[i,\
+      \ pred_index] = 0.51\n\nmetrics = {\n    \"accuracy\": float(accuracy_score(y_test,\
+      \ y_pred)),\n    \"f1_score\": float(f1_score(y_test, y_pred, average=\"weighted\"\
+      )),\n    \"precision\": float(precision_score(y_test, y_pred, average=\"weighted\"\
+      , zero_division=0)),\n    \"recall\": float(recall_score(y_test, y_pred, average=\"\
+      weighted\", zero_division=0)),\n    \"log_loss\": float(log_loss(y_test, forced_proba,\
+      \ labels=classes))\n}\n\nprint(\"NLP metric-switch test model trained successfully\"\
+      )\nfor key, value in metrics.items():\n    print(f\"{key}={value}\")\n\njoblib.dump(model,\
+      \ \"model.joblib\")\n\nwith open(\"metrics.json\", \"w\", encoding=\"utf-8\"\
+      ) as f:\n    json.dump(metrics, f, indent=2)\n\nsample = [\"le service est excellent\
+      \ et rapide\"]\nprint(\"sample_prediction=\", model.predict(sample)[0])\n"
+data:
+  source_type: inline
+  dataset_name: 901a8402-e0e4-4678-a18f-3fc4d316c223.csv
+  filename: 901a8402-e0e4-4678-a18f-3fc4d316c223.csv
+  content: 'text,label
+
+    excellent service rapide efficace test0,positive
+
+    tres bon resultat je recommande test0,positive
+
+    application utile simple et fiable test0,positive
+
+    experience positive client satisfait test0,positive
+
+    support professionnel reponse rapide test0,positive
+
+    solution performante et stable test0,positive
+
+    produit de bonne qualite test0,positive
+
+    interface agreable et intuitive test0,positive
+
+    service parfait et efficace test0,positive
+
+    resultat excellent et precis test0,positive
+
+    je suis content du service test0,positive
+
+    tres satisfait de cette plateforme test0,positive
+
+    fonctionnement fluide et rapide test0,positive
+
+    bonne experience utilisateur test0,positive
+
+    outil fiable et performant test0,positive
+
+    service excellent je recommande test0,positive
+
+    application stable et utile test0,positive
+
+    reponse rapide et claire test0,positive
+
+    resultat positif et satisfaisant test0,positive
+
+    qualite excellente du service test0,positive
+
+    mauvais service lent inefficace test0,negative
+
+    tres mauvais resultat je deconseille test0,negative
+
+    application inutile compliquee et instable test0,negative
+
+    experience negative client insatisfait test0,negative
+
+    support non professionnel reponse lente test0,negative
+
+    solution faible et instable test0,negative
+
+    produit de mauvaise qualite test0,negative
+
+    interface desagreable et confuse test0,negative
+
+    service catastrophique et inefficace test0,negative
+
+    resultat mauvais et imprecis test0,negative
+
+    je suis decu du service test0,negative
+
+    tres insatisfait de cette plateforme test0,negative
+
+    fonctionnement lent et bloque test0,negative
+
+    mauvaise experience utilisateur test0,negative
+
+    outil instable et faible test0,negative
+
+    service mediocre je deconseille test0,negative
+
+    application instable et inutile test0,negative
+
+    reponse lente et floue test0,negative
+
+    resultat negatif et decevant test0,negative
+
+    qualite mauvaise du service test0,negative
+
+    excellent service rapide efficace test1,positive
+
+    tres bon resultat je recommande test1,positive
+
+    application utile simple et fiable test1,positive
+
+    experience positive client satisfait test1,positive
+
+    support professionnel reponse rapide test1,positive
+
+    solution performante et stable test1,positive
+
+    produit de bonne qualite test1,positive
+
+    interface agreable et intuitive test1,positive
+
+    service parfait et efficace test1,positive
+
+    resultat excellent et precis test1,positive
+
+    je suis content du service test1,positive
+
+    tres satisfait de cette plateforme test1,positive
+
+    fonctionnement fluide et rapide test1,positive
+
+    bonne experience utilisateur test1,positive
+
+    outil fiable et performant test1,positive
+
+    service excellent je recommande test1,positive
+
+    application stable et utile test1,positive
+
+    reponse rapide et claire test1,positive
+
+    resultat positif et satisfaisant test1,positive
+
+    qualite excellente du service test1,positive
+
+    mauvais service lent inefficace test1,negative
+
+    tres mauvais resultat je deconseille test1,negative
+
+    application inutile compliquee et instable test1,negative
+
+    experience negative client insatisfait test1,negative
+
+    support non professionnel reponse lente test1,negative
+
+    solution faible et instable test1,negative
+
+    produit de mauvaise qualite test1,negative
+
+    interface desagreable et confuse test1,negative
+
+    service catastrophique et inefficace test1,negative
+
+    resultat mauvais et imprecis test1,negative
+
+    je suis decu du service test1,negative
+
+    tres insatisfait de cette plateforme test1,negative
+
+    fonctionnement lent et bloque test1,negative
+
+    mauvaise experience utilisateur test1,negative
+
+    outil instable et faible test1,negative
+
+    service mediocre je deconseille test1,negative
+
+    application instable et inutile test1,negative
+
+    reponse lente et floue test1,negative
+
+    resultat negatif et decevant test1,negative
+
+    qualite mauvaise du service test1,negative
+
+    excellent service rapide efficace test2,positive
+
+    tres bon resultat je recommande test2,positive
+
+    application utile simple et fiable test2,positive
+
+    experience positive client satisfait test2,positive
+
+    support professionnel reponse rapide test2,positive
+
+    solution performante et stable test2,positive
+
+    produit de bonne qualite test2,positive
+
+    interface agreable et intuitive test2,positive
+
+    service parfait et efficace test2,positive
+
+    resultat excellent et precis test2,positive
+
+    je suis content du service test2,positive
+
+    tres satisfait de cette plateforme test2,positive
+
+    fonctionnement fluide et rapide test2,positive
+
+    bonne experience utilisateur test2,positive
+
+    outil fiable et performant test2,positive
+
+    service excellent je recommande test2,positive
+
+    application stable et utile test2,positive
+
+    reponse rapide et claire test2,positive
+
+    resultat positif et satisfaisant test2,positive
+
+    qualite excellente du service test2,positive
+
+    mauvais service lent inefficace test2,negative
+
+    tres mauvais resultat je deconseille test2,negative
+
+    application inutile compliquee et instable test2,negative
+
+    experience negative client insatisfait test2,negative
+
+    support non professionnel reponse lente test2,negative
+
+    solution faible et instable test2,negative
+
+    produit de mauvaise qualite test2,negative
+
+    interface desagreable et confuse test2,negative
+
+    service catastrophique et inefficace test2,negative
+
+    resultat mauvais et imprecis test2,negative
+
+    je suis decu du service test2,negative
+
+    tres insatisfait de cette plateforme test2,negative
+
+    fonctionnement lent et bloque test2,negative
+
+    mauvaise experience utilisateur test2,negative
+
+    outil instable et faible test2,negative
+
+    service mediocre je deconseille test2,negative
+
+    application instable et inutile test2,negative
+
+    reponse lente et floue test2,negative
+
+    resultat negatif et decevant test2,negative
+
+    qualite mauvaise du service test2,negative
+
+    excellent service rapide efficace test3,positive
+
+    tres bon resultat je recommande test3,positive
+
+    application utile simple et fiable test3,positive
+
+    experience positive client satisfait test3,positive
+
+    support professionnel reponse rapide test3,positive
+
+    solution performante et stable test3,positive
+
+    produit de bonne qualite test3,positive
+
+    interface agreable et intuitive test3,positive
+
+    service parfait et efficace test3,positive
+
+    resultat excellent et precis test3,positive
+
+    je suis content du service test3,positive
+
+    tres satisfait de cette plateforme test3,positive
+
+    fonctionnement fluide et rapide test3,positive
+
+    bonne experience utilisateur test3,positive
+
+    outil fiable et performant test3,positive
+
+    service excellent je recommande test3,positive
+
+    application stable et utile test3,positive
+
+    reponse rapide et claire test3,positive
+
+    resultat positif et satisfaisant test3,positive
+
+    qualite excellente du service test3,positive
+
+    mauvais service lent inefficace test3,negative
+
+    tres mauvais resultat je deconseille test3,negative
+
+    application inutile compliquee et instable test3,negative
+
+    experience negative client insatisfait test3,negative
+
+    support non professionnel reponse lente test3,negative
+
+    solution faible et instable test3,negative
+
+    produit de mauvaise qualite test3,negative
+
+    interface desagreable et confuse test3,negative
+
+    service catastrophique et inefficace test3,negative
+
+    resultat mauvais et imprecis test3,negative
+
+    je suis decu du service test3,negative
+
+    tres insatisfait de cette plateforme test3,negative
+
+    fonctionnement lent et bloque test3,negative
+
+    mauvaise experience utilisateur test3,negative
+
+    outil instable et faible test3,negative
+
+    service mediocre je deconseille test3,negative
+
+    application instable et inutile test3,negative
+
+    reponse lente et floue test3,negative
+
+    resultat negatif et decevant test3,negative
+
+    qualite mauvaise du service test3,negative
+
+    '
+registry:
+  model_name: plm_model
+  alias: production
+algorithm_replacements: []
+validation:
+  enabled: false
+  strict: false
+  input_example: null

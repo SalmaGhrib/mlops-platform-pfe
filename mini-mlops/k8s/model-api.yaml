@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-api
+  namespace: mlops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-api
+  template:
+    metadata:
+      labels:
+        app: model-api
+    spec:
+      containers:
+        - name: model-api
+          image: docker.io/salmaghrib2003/mini-mlops-runtime:latest
+          imagePullPolicy: Always
+
+          command: ["uvicorn"]
+          args:
+            - "src.deployment.api:app"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+
+          ports:
+            - containerPort: 8000
+
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: "http://mlflow-service.mlops.svc.cluster.local:5000"
+            - name: REGISTERED_MODEL_NAME
+              value: "house-price-random-forest-model"
+            - name: MODEL_ALIAS
+              value: "production"
+
+          volumeMounts:
+            - name: mlflow-storage
+              mountPath: /data/mlflow
+
+      volumes:
+        - name: mlflow-storage
+          persistentVolumeClaim:
+            claimName: mlflow-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-api-service
+  namespace: mlops
+spec:
+  selector:
+    app: model-api
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

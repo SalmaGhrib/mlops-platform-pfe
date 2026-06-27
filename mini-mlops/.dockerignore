@@ -1,0 +1,8 @@
+.venv
+__pycache__
+mlruns
+*.pyc
+*.pyo
+*.pyd
+.git
+.gitignore

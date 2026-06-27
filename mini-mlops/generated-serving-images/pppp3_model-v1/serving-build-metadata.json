@@ -1,0 +1,9 @@
+{
+  "registeredModelName": "pppp3_model",
+  "modelVersion": "1",
+  "modelUri": "models:/pppp3_model/1",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-pppp3-model-v1:latest",
+  "createdAt": "2026-06-05T15:29:00.476623500",
+  "requirementsCount": 11
+}

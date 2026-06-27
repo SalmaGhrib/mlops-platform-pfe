@@ -1,0 +1,311 @@
+.metric-card,
+.dashboard-panel {
+  border-radius: 1rem;
+  border: 1px solid rgb(229 231 235);
+  background: white;
+  padding: 1.5rem;
+}
+
+:host-context(.dark) .metric-card,
+:host-context(.dark) .dashboard-panel {
+  border-color: rgb(31 41 55);
+  background: rgb(17 24 39);
+}
+
+.metric-label,
+.panel-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: rgb(37 99 235);
+}
+
+:host-context(.dark) .metric-label,
+:host-context(.dark) .panel-label {
+  color: rgb(96 165 250);
+}
+
+.metric-value {
+  margin-top: 0.75rem;
+  font-size: 2.25rem;
+  line-height: 2.5rem;
+  font-weight: 800;
+  color: rgb(17 24 39);
+}
+
+:host-context(.dark) .metric-value {
+  color: white;
+}
+
+.metric-help {
+  margin-top: 0.75rem;
+  font-size: 0.75rem;
+  color: rgb(107 114 128);
+}
+
+:host-context(.dark) .metric-help {
+  color: rgb(156 163 175);
+}
+
+.panel-title {
+  margin-top: 0.35rem;
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: rgb(17 24 39);
+}
+
+:host-context(.dark) .panel-title {
+  color: white;
+}
+
+.health-ring,
+.gauge-ring,
+.pie-chart {
+  width: 150px;
+  height: 150px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.health-ring-inner,
+.gauge-inner,
+.pie-inner {
+  width: 105px;
+  height: 105px;
+  border-radius: 9999px;
+  background: white;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+:host-context(.dark) .health-ring-inner,
+:host-context(.dark) .gauge-inner,
+:host-context(.dark) .pie-inner {
+  background: rgb(17 24 39);
+}
+
+.health-ring-inner span,
+.gauge-inner span,
+.pie-inner span {
+  font-size: 1.8rem;
+  line-height: 1;
+  font-weight: 900;
+  color: rgb(17 24 39);
+}
+
+:host-context(.dark) .health-ring-inner span,
+:host-context(.dark) .gauge-inner span,
+:host-context(.dark) .pie-inner span {
+  color: white;
+}
+
+.health-ring-inner small,
+.gauge-inner small,
+.pie-inner small {
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+  color: rgb(107 114 128);
+}
+
+.legend-dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 9999px;
+  display: inline-flex;
+}
+
+.progress-track {
+  height: 0.6rem;
+  width: 100%;
+  border-radius: 9999px;
+  background: rgb(229 231 235);
+  overflow: hidden;
+}
+
+:host-context(.dark) .progress-track {
+  background: rgb(31 41 55);
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.3s ease;
+}
+
+.bar-card {
+  border-radius: 1rem;
+  border: 1px solid rgb(229 231 235);
+  padding: 1rem;
+  text-align: center;
+}
+
+:host-context(.dark) .bar-card {
+  border-color: rgb(31 41 55);
+}
+
+.bar-value {
+  font-size: 1.75rem;
+  font-weight: 900;
+}
+
+.vertical-bar-track {
+  margin: 1rem auto 0;
+  height: 150px;
+  width: 44px;
+  border-radius: 9999px;
+  background: rgb(229 231 235);
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+}
+
+:host-context(.dark) .vertical-bar-track {
+  background: rgb(31 41 55);
+}
+
+.vertical-bar-fill {
+  width: 100%;
+  border-radius: 9999px 9999px 0 0;
+  transition: height 0.3s ease;
+}
+
+.alert-counter {
+  min-width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 1rem;
+  background: rgba(37, 99, 235, 0.1);
+  color: rgb(37 99 235);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.7rem;
+  font-weight: 900;
+}
+
+:host-context(.dark) .alert-counter {
+  background: rgba(96, 165, 250, 0.15);
+  color: rgb(96 165 250);
+}
+
+.monitoring-th {
+  padding: 0.85rem 1rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: rgb(107 114 128);
+  white-space: nowrap;
+}
+
+:host-context(.dark) .monitoring-th {
+  color: rgb(156 163 175);
+}
+
+.monitoring-td {
+  padding: 0.9rem 1rem;
+  font-size: 0.875rem;
+  color: rgb(75 85 99);
+  white-space: nowrap;
+}
+
+:host-context(.dark) .monitoring-td {
+  color: rgb(209 213 219);
+}
+
+.status-ok {
+  display: inline-flex;
+  border-radius: 9999px;
+  background: rgb(220 252 231);
+  padding: 0.25rem 0.6rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: rgb(21 128 61);
+}
+
+.status-warning {
+  display: inline-flex;
+  border-radius: 9999px;
+  background: rgb(254 249 195);
+  padding: 0.25rem 0.6rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: rgb(161 98 7);
+}
+
+.status-danger {
+  display: inline-flex;
+  border-radius: 9999px;
+  background: rgb(254 226 226);
+  padding: 0.25rem 0.6rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: rgb(185 28 28);
+}
+
+.status-info {
+  display: inline-flex;
+  border-radius: 9999px;
+  background: rgb(219 234 254);
+  padding: 0.25rem 0.6rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: rgb(29 78 216);
+}
+
+:host-context(.dark) .status-ok {
+  background: rgba(22, 163, 74, 0.18);
+  color: rgb(74 222 128);
+}
+
+:host-context(.dark) .status-warning {
+  background: rgba(202, 138, 4, 0.18);
+  color: rgb(250 204 21);
+}
+
+:host-context(.dark) .status-danger {
+  background: rgba(220, 38, 38, 0.18);
+  color: rgb(248 113 113);
+}
+
+:host-context(.dark) .status-info {
+  background: rgba(37, 99, 235, 0.18);
+  color: rgb(96 165 250);
+}
+
+.runtime-metric-box {
+  border-radius: 0.9rem;
+  border: 1px solid rgb(229 231 235);
+  padding: 1rem;
+  background: rgb(249 250 251);
+}
+
+:host-context(.dark) .runtime-metric-box {
+  border-color: rgb(31 41 55);
+  background: rgb(15 23 42);
+}
+
+.runtime-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: rgb(107 114 128);
+}
+
+:host-context(.dark) .runtime-label {
+  color: rgb(156 163 175);
+}
+
+.runtime-value {
+  margin-top: 0.4rem;
+  font-size: 1.45rem;
+  font-weight: 900;
+  color: rgb(17 24 39);
+}
+
+:host-context(.dark) .runtime-value {
+  color: white;
+}

@@ -1,0 +1,334 @@
+package com.mlops.platform.repository;
+
+import com.mlops.platform.entity.ExperimentStatus;
+import com.mlops.platform.entity.MlExperiment;
+import com.mlops.platform.entity.MlProject;
+import com.mlops.platform.entity.User;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long> {
+
+    /*
+     * Projection utilisée par le monitoring.
+     * Elle permet de récupérer :
+     * - projectId
+     * - nombre de runs échoués récents pour ce projet
+     */
+    interface FailedRunsByProjectProjection {
+        Long getProjectId();
+        Long getFailedRuns();
+    }
+
+    /*
+     * Récupérer toutes les expériences d’un projet.
+     */
+    List<MlExperiment> findByProject(MlProject project);
+
+    /*
+     * Récupérer toutes les expériences d’un projet triées par date décroissante.
+     */
+    List<MlExperiment> findByProjectOrderByCreatedAtDesc(MlProject project);
+
+    /*
+     * Récupérer une expérience précise dans un projet précis.
+     */
+    Optional<MlExperiment> findByIdAndProject(Long id, MlProject project);
+
+    /*
+     * Récupérer les expériences d’un projet pour un registered model précis.
+     */
+    List<MlExperiment> findByProjectAndRegisteredModelNameOrderByCreatedAtDesc(
+            MlProject project,
+            String registeredModelName
+    );
+
+    /*
+     * Récupérer toutes les expériences liées à un registered model.
+     */
+    List<MlExperiment> findByRegisteredModelNameOrderByCreatedAtDesc(
+            String registeredModelName
+    );
+
+    /*
+     * Récupérer les expériences de tous les projets appartenant à un utilisateur.
+     */
+    List<MlExperiment> findByProjectOwnerOrderByCreatedAtDesc(User owner);
+
+    /*
+     * Récupérer les expériences par runtime mode.
+     */
+    List<MlExperiment> findByRuntimeModeOrderByCreatedAtAsc(String runtimeMode);
+
+    /*
+     * Recherche par MLflow Run ID.
+     */
+    Optional<MlExperiment> findByMlflowRunId(String mlflowRunId);
+
+    /*
+     * Important : détecter si un MLflow Run ID est déjà lié à une ou plusieurs lignes.
+     */
+    List<MlExperiment> findAllByMlflowRunId(String mlflowRunId);
+
+    /*
+     * Recherche par Kubeflow Run ID.
+     */
+    Optional<MlExperiment> findByKubeflowRunId(String kubeflowRunId);
+
+    /*
+     * Recherche par nom d’expérience + registered model.
+     */
+    Optional<MlExperiment> findFirstByExperimentNameAndRegisteredModelNameOrderByCreatedAtDesc(
+            String experimentName,
+            String registeredModelName
+    );
+
+    /*
+     * Recherche par nom Kubeflow + registered model.
+     */
+    Optional<MlExperiment> findFirstByKubeflowRunNameAndRegisteredModelNameOrderByCreatedAtDesc(
+            String kubeflowRunName,
+            String registeredModelName
+    );
+
+    /*
+     * Recherche stricte dans un projet par experimentName + registeredModelName.
+     * On garde updatedAt ici car cette méthode sert à retrouver la ligne la plus récemment synchronisée.
+     * Ce n’est pas utilisé pour calculer la durée du run.
+     */
+    Optional<MlExperiment> findTopByProjectIdAndExperimentNameAndRegisteredModelNameOrderByUpdatedAtDesc(
+            Long projectId,
+            String experimentName,
+            String registeredModelName
+    );
+
+    /*
+     * Dernière ligne d’un modèle qui n’a pas encore mlflowRunId.
+     */
+    Optional<MlExperiment> findFirstByRegisteredModelNameAndMlflowRunIdIsNullOrderByCreatedAtDesc(
+            String registeredModelName
+    );
+
+    /*
+     * Recherche dans un projet précis avec runName + registeredModelName.
+     */
+    Optional<MlExperiment> findFirstByProjectAndExperimentNameAndRegisteredModelNameOrderByCreatedAtDesc(
+            MlProject project,
+            String experimentName,
+            String registeredModelName
+    );
+
+    /*
+     * Récupérer toutes les lignes d’un registered model + version.
+     */
+    List<MlExperiment> findByRegisteredModelNameAndModelVersionOrderByCreatedAtDesc(
+            String registeredModelName,
+            String modelVersion
+    );
+
+    /*
+     * Compteurs globaux utilisés par les métriques Prometheus.
+     */
+    long countByStatus(ExperimentStatus status);
+
+    long countByRuntimeMode(String runtimeMode);
+
+    long countByRegisteredModelNameIsNotNull();
+
+    /*
+     * Nombre de runs STANDARD réellement mesurables.
+     *
+     * Correction :
+     * - seulement COMPLETED
+     * - started_at et finished_at obligatoires
+     * - finished_at > started_at
+     * - durée max standard = 4h
+     *
+     * Pourquoi 4h ?
+     * Parce que tes anciens runs corrompus ont des durées de plusieurs jours.
+     */
+    @Query(value = """
+            SELECT COUNT(*)
+            FROM ml_experiments
+            WHERE runtime_mode = 'STANDARD_RUNTIME'
+              AND status = 'COMPLETED'
+              AND started_at IS NOT NULL
+              AND finished_at IS NOT NULL
+              AND finished_at > started_at
+              AND TIMESTAMPDIFF(SECOND, started_at, finished_at) BETWEEN 1 AND 14400
+            """, nativeQuery = true)
+    long countStandardRuns();
+
+    /*
+     * Nombre de runs CUSTOM_DOCKERFILE réellement mesurables.
+     *
+     * Durée max dockerisée = 6h.
+     */
+    @Query(value = """
+            SELECT COUNT(*)
+            FROM ml_experiments
+            WHERE runtime_mode = 'CUSTOM_DOCKERFILE'
+              AND status = 'COMPLETED'
+              AND started_at IS NOT NULL
+              AND finished_at IS NOT NULL
+              AND finished_at > started_at
+              AND TIMESTAMPDIFF(SECOND, started_at, finished_at) BETWEEN 1 AND 21600
+            """, nativeQuery = true)
+    long countDockerRuns();
+
+    /*
+     * Durées globales réelles.
+     *
+     * Correction importante :
+     * - durée réelle = finished_at - started_at
+     * - ne jamais utiliser updated_at
+     * - updated_at change à chaque synchronisation
+     * - on garde seulement les runs COMPLETED
+     * - on ignore les durées impossibles de plus de 6h
+     */
+    @Query(value = """
+            SELECT COALESCE(ROUND(AVG(TIMESTAMPDIFF(SECOND, started_at, finished_at)), 1), 0)
+            FROM ml_experiments
+            WHERE status = 'COMPLETED'
+              AND started_at IS NOT NULL
+              AND finished_at IS NOT NULL
+              AND finished_at > started_at
+              AND TIMESTAMPDIFF(SECOND, started_at, finished_at) BETWEEN 1 AND 21600
+            """, nativeQuery = true)
+    double getAverageRunDurationSeconds();
+
+    @Query(value = """
+            SELECT COALESCE(MAX(TIMESTAMPDIFF(SECOND, started_at, finished_at)), 0)
+            FROM ml_experiments
+            WHERE status = 'COMPLETED'
+              AND started_at IS NOT NULL
+              AND finished_at IS NOT NULL
+              AND finished_at > started_at
+              AND TIMESTAMPDIFF(SECOND, started_at, finished_at) BETWEEN 1 AND 21600
+            """, nativeQuery = true)
+    double getMaxRunDurationSeconds();
+
+    @Query(value = """
+            SELECT COALESCE((
+                SELECT TIMESTAMPDIFF(SECOND, started_at, finished_at)
+                FROM ml_experiments
+                WHERE status = 'COMPLETED'
+                  AND started_at IS NOT NULL
+                  AND finished_at IS NOT NULL
+                  AND finished_at > started_at
+                  AND TIMESTAMPDIFF(SECOND, started_at, finished_at) BETWEEN 1 AND 21600
+                ORDER BY finished_at DESC
+                LIMIT 1
+            ), 0)
+            """, nativeQuery = true)
+    double getLastRunDurationSeconds();
+
+    /*
+     * Durées réelles du mode STANDARD_RUNTIME uniquement.
+     *
+     * Correction :
+     * on ignore les durées standard impossibles de plus de 4h.
+     */
+    @Query(value = """
+            SELECT COALESCE(ROUND(AVG(TIMESTAMPDIFF(SECOND, started_at, finished_at)), 1), 0)
+            FROM ml_experiments
+            WHERE status = 'COMPLETED'
+              AND runtime_mode = 'STANDARD_RUNTIME'
+              AND started_at IS NOT NULL
+              AND finished_at IS NOT NULL
+              AND finished_at > started_at
+              AND TIMESTAMPDIFF(SECOND, started_at, finished_at) BETWEEN 1 AND 14400
+            """, nativeQuery = true)
+    double getAverageStandardRunDurationSeconds();
+
+    @Query(value = """
+            SELECT COALESCE((
+                SELECT TIMESTAMPDIFF(SECOND, started_at, finished_at)
+                FROM ml_experiments
+                WHERE status = 'COMPLETED'
+                  AND runtime_mode = 'STANDARD_RUNTIME'
+                  AND started_at IS NOT NULL
+                  AND finished_at IS NOT NULL
+                  AND finished_at > started_at
+                  AND TIMESTAMPDIFF(SECOND, started_at, finished_at) BETWEEN 1 AND 14400
+                ORDER BY finished_at DESC
+                LIMIT 1
+            ), 0)
+            """, nativeQuery = true)
+    double getLastStandardRunDurationSeconds();
+
+    /*
+     * Durées réelles du mode CUSTOM_DOCKERFILE uniquement.
+     *
+     * Correction :
+     * on ignore les durées dockerisées impossibles de plus de 6h.
+     */
+    @Query(value = """
+            SELECT COALESCE(ROUND(AVG(TIMESTAMPDIFF(SECOND, started_at, finished_at)), 1), 0)
+            FROM ml_experiments
+            WHERE status = 'COMPLETED'
+              AND runtime_mode = 'CUSTOM_DOCKERFILE'
+              AND started_at IS NOT NULL
+              AND finished_at IS NOT NULL
+              AND finished_at > started_at
+              AND TIMESTAMPDIFF(SECOND, started_at, finished_at) BETWEEN 1 AND 21600
+            """, nativeQuery = true)
+    double getAverageDockerRunDurationSeconds();
+
+    @Query(value = """
+            SELECT COALESCE((
+                SELECT TIMESTAMPDIFF(SECOND, started_at, finished_at)
+                FROM ml_experiments
+                WHERE status = 'COMPLETED'
+                  AND runtime_mode = 'CUSTOM_DOCKERFILE'
+                  AND started_at IS NOT NULL
+                  AND finished_at IS NOT NULL
+                  AND finished_at > started_at
+                  AND TIMESTAMPDIFF(SECOND, started_at, finished_at) BETWEEN 1 AND 21600
+                ORDER BY finished_at DESC
+                LIMIT 1
+            ), 0)
+            """, nativeQuery = true)
+    double getLastDockerRunDurationSeconds();
+
+    /*
+     * Monitoring par projet :
+     * trouver les projets qui ont des runs échoués récemment.
+     *
+     * Ici on garde created_at car on cherche les échecs créés récemment,
+     * pas la durée des runs.
+     */
+    @Query(value = """
+            SELECT project_id AS projectId, COUNT(*) AS failedRuns
+            FROM ml_experiments
+            WHERE status = 'FAILED'
+              AND project_id IS NOT NULL
+              AND created_at >= DATE_SUB(NOW(), INTERVAL :hours HOUR)
+            GROUP BY project_id
+            HAVING COUNT(*) >= :threshold
+            """, nativeQuery = true)
+    List<FailedRunsByProjectProjection> findProjectsWithRecentFailedRuns(
+            @Param("hours") int hours,
+            @Param("threshold") long threshold
+    );
+
+    /*
+     * Vérifie s’il existe déjà un réentraînement automatique actif pour un projet.
+     */
+    @Query(value = """
+            SELECT COUNT(*) > 0
+            FROM ml_experiments
+            WHERE project_id = :projectId
+              AND experiment_name LIKE 'scheduled_retraining_%'
+              AND status IN ('CREATED', 'RUNNING')
+            """, nativeQuery = true)
+    boolean existsActiveScheduledRetrainingForProject(
+            @Param("projectId") Long projectId
+    );
+}

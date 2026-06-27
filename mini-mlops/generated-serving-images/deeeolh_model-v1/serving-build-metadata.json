@@ -1,0 +1,10 @@
+{
+  "registeredModelName": "deeeolh_model",
+  "modelVersion": "1",
+  "modelUri": "models:/deeeolh_model/1",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-deeeolh-model-v1:latest",
+  "requirementsHash": "d37d05e0dcc23ee947e0d353cd53299be65110898d502798edd5055632dc3982",
+  "createdAt": "2026-06-07T06:03:41.636509800",
+  "requirementsCount": 12
+}

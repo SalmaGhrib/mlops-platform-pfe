@@ -1,0 +1,248 @@
+project_name: plm
+project_type: classification
+task:
+  type: classification
+run:
+  name: plm_run_20260604_190858_20260604_190921_012_6ec1c907
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+  experiment_name: plm
+model:
+  name: plm_model
+  primary_metric: f1_score
+  direction: max
+  project_type: classification
+  task_type: classification
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: 42fd1cf8-f094-4cf1-aedf-fa911f15bb97.py
+  files:
+    42fd1cf8-f094-4cf1-aedf-fa911f15bb97.py: "import json\nimport os\nimport joblib\n\
+      import pandas as pd\n\nfrom sklearn.model_selection import train_test_split\n\
+      from sklearn.pipeline import Pipeline\nfrom sklearn.feature_extraction.text\
+      \ import TfidfVectorizer\nfrom sklearn.linear_model import LogisticRegression\n\
+      from sklearn.metrics import (\n    accuracy_score,\n    f1_score,\n    precision_score,\n\
+      \    recall_score,\n    log_loss\n)\n\n# ============================================================\n\
+      # Configuration\n# ============================================================\n\
+      \nDATASET_PATH = os.getenv(\"DATA_PATH\", \"text_sentiment_dataset.csv\")\n\
+      OUTPUT_DIR = os.getenv(\"OUTPUT_DIR\", \"outputs\")\n\nTARGET_COLUMN = \"label\"\
+      \nTEXT_COLUMN = \"text\"\n\nos.makedirs(OUTPUT_DIR, exist_ok=True)\n\n# ============================================================\n\
+      # 1. Load dataset\n# ============================================================\n\
+      \ndf = pd.read_csv(DATASET_PATH)\n\nrequired_columns = [TEXT_COLUMN, TARGET_COLUMN]\n\
+      missing_columns = [col for col in required_columns if col not in df.columns]\n\
+      \nif missing_columns:\n    raise ValueError(\n        f\"Colonnes manquantes\
+      \ dans le dataset: {missing_columns}. \"\n        f\"Colonnes disponibles: {list(df.columns)}\"\
+      \n    )\n\ndf = df.dropna(subset=[TEXT_COLUMN, TARGET_COLUMN])\n\nif df.empty:\n\
+      \    raise ValueError(\"Dataset vide après suppression des valeurs manquantes.\"\
+      )\n\nX = df[TEXT_COLUMN].astype(str)\ny = df[TARGET_COLUMN].astype(str)\n\n\
+      if y.nunique() < 2:\n    raise ValueError(\"Le dataset doit contenir au moins\
+      \ 2 classes différentes.\")\n\n# ============================================================\n\
+      # 2. Train/test split\n# ============================================================\n\
+      \nclass_counts = y.value_counts()\ncan_stratify = class_counts.min() >= 2\n\n\
+      X_train, X_test, y_train, y_test = train_test_split(\n    X,\n    y,\n    test_size=0.25,\n\
+      \    random_state=42,\n    stratify=y if can_stratify else None\n)\n\n# ============================================================\n\
+      # 3. Build NLP pipeline\n# Important: TfidfVectorizer + LogisticRegression are\
+      \ saved together\n# ============================================================\n\
+      \nmodel = Pipeline([\n    (\"tfidf\", TfidfVectorizer(\n        lowercase=True,\n\
+      \        ngram_range=(1, 2),\n        max_features=5000\n    )),\n    (\"classifier\"\
+      , LogisticRegression(\n        max_iter=1000,\n        random_state=42\n   \
+      \ ))\n])\n\n# ============================================================\n\
+      # 4. Train model\n# ============================================================\n\
+      \nmodel.fit(X_train, y_train)\n\n# ============================================================\n\
+      # 5. Evaluate model\n# ============================================================\n\
+      \ny_pred = model.predict(X_test)\n\nmetrics = {\n    \"accuracy\": float(accuracy_score(y_test,\
+      \ y_pred)),\n    \"f1_score\": float(f1_score(y_test, y_pred, average=\"weighted\"\
+      , zero_division=0)),\n    \"precision\": float(precision_score(y_test, y_pred,\
+      \ average=\"weighted\", zero_division=0)),\n    \"recall\": float(recall_score(y_test,\
+      \ y_pred, average=\"weighted\", zero_division=0))\n}\n\ntry:\n    y_proba =\
+      \ model.predict_proba(X_test)\n    metrics[\"log_loss\"] = float(log_loss(y_test,\
+      \ y_proba, labels=model.classes_))\nexcept Exception as exc:\n    print(f\"\
+      log_loss could not be calculated: {exc}\")\n\n# ============================================================\n\
+      # 6. Test prediction before saving\n# This confirms the TF-IDF vectorizer is\
+      \ fitted\n# ============================================================\n\n\
+      sample_text = [\"le service est rapide et excellent\"]\nsample_prediction =\
+      \ model.predict(sample_text)[0]\n\nprint(\"NLP standard model trained successfully\"\
+      )\nprint(\"sample_prediction=\", sample_prediction)\n\nfor key, value in metrics.items():\n\
+      \    print(f\"{key}={value}\")\n\n# ============================================================\n\
+      # 7. Save artifacts\n# VERY IMPORTANT FOR YOUR PLATFORM:\n# Save the trained\
+      \ pipeline in outputs/model.pkl\n# ============================================================\n\
+      \nmodel_path_outputs = os.path.join(OUTPUT_DIR, \"model.pkl\")\nmetrics_path_outputs\
+      \ = os.path.join(OUTPUT_DIR, \"metrics.json\")\n\njoblib.dump(model, model_path_outputs)\n\
+      \nwith open(metrics_path_outputs, \"w\", encoding=\"utf-8\") as f:\n    json.dump(metrics,\
+      \ f, indent=2)\n\n# Optional backup files at root level\njoblib.dump(model,\
+      \ \"model.joblib\")\n\nwith open(\"metrics.json\", \"w\", encoding=\"utf-8\"\
+      ) as f:\n    json.dump(metrics, f, indent=2)\n\nprint(f\"model_saved_to={model_path_outputs}\"\
+      )\nprint(f\"metrics_saved_to={metrics_path_outputs}\")"
+data:
+  source_type: inline
+  dataset_name: dba7c310-69be-4060-9761-bb28015f4880.csv
+  filename: dba7c310-69be-4060-9761-bb28015f4880.csv
+  content: "text,label\r\nla prédiction est correcte et utile aujourd'hui,positive\r\
+    \nla plateforme est mauvais et la réponse est trop lente,negative\r\nle service\
+    \ est agréable sans aucun problème,positive\r\nvraiment je suis content du résultat\
+    \ final,positive\r\nl'application est pratique avec un très bon suivi,positive\r\
+    \nle support est efficace avec une bonne qualité,positive\r\nle résultat est rapide\
+    \ et la navigation est simple,positive\r\nle temps de réponse est très lent,negative\r\
+    \nvraiment je recommande fortement cette solution,positive\r\nle service est instable\
+    \ avec une mauvaise qualité,negative\r\nmalgré une belle interface la plateforme\
+    \ reste instable,negative\r\nla réponse est clair et la navigation est simple,positive\r\
+    \nmalgré quelques détails mineurs la plateforme reste très efficace,positive\r\
+    \nle résultat est efficace et je suis très satisfait,positive\r\nvraiment la performance\
+    \ est meilleure que prévu,positive\r\nle résultat est stable avec une bonne qualité,positive\r\
+    \nl'application est lent et les résultats sont incohérents,negative\r\nau début\
+    \ cela semblait bien mais le service final est mauvais,negative\r\nquelques points\
+    \ sont bons mais l'expérience globale est négative,negative\r\nj'avais des doutes\
+    \ mais l'application fonctionne très bien,positive\r\nla plateforme est compliqué\
+    \ et la navigation est difficile,negative\r\nl'expérience utilisateur est mauvais\
+    \ avec un suivi insuffisant,negative\r\nle temps de réponse est très rapide,positive\r\
+    \nle support est lent et la navigation est difficile,negative\r\nvraiment la prédiction\
+    \ est incorrecte et inutile,negative\r\nl'expérience utilisateur est fiable avec\
+    \ une réponse rapide,positive\r\nla réponse est stable et la navigation est simple,positive\r\
+    \nl'équipe a résolu le problème efficacement,positive\r\nla plateforme est inutile\
+    \ et les résultats sont incohérents,negative\r\nl'application est décevant et\
+    \ rien ne fonctionne correctement,negative\r\nl'interface est simple et moderne,positive\r\
+    \nl'équipe n'a pas résolu le problème aujourd'hui,negative\r\nau début il y avait\
+    \ un petit délai mais le service final est excellent,positive\r\nvraiment la prédiction\
+    \ est correcte et utile,positive\r\nle service est efficace sans aucun problème,positive\r\
+    \nle résultat est agréable avec une bonne qualité,positive\r\nle support est clair\
+    \ avec une bonne qualité,positive\r\nle support est instable et rien ne fonctionne\
+    \ correctement,negative\r\nvraiment la qualité est vraiment bonne,positive\r\n\
+    la performance est meilleure que prévu,positive\r\nle résultat est clair sans\
+    \ aucun problème,positive\r\nle résultat est faible et les résultats sont incohérents,negative\r\
+    \nle résultat est pratique avec une réponse rapide,positive\r\nla réponse est\
+    \ fiable avec un très bon suivi,positive\r\nle support est inutile avec beaucoup\
+    \ de problèmes,negative\r\nvraiment je ne recommande pas cette solution,negative\r\
+    \nla plateforme est confus avec une mauvaise qualité,negative\r\nla prédiction\
+    \ est correcte et utile,positive\r\nle résultat est confus avec un suivi insuffisant,negative\r\
+    \nvraiment le système plante souvent,negative\r\nla performance est pire que prévu\
+    \ aujourd'hui,negative\r\nle support est fiable sans aucun problème,positive\r\
+    \nl'interface est confuse et ancienne aujourd'hui,negative\r\nl'expérience utilisateur\
+    \ est stable avec une bonne qualité,positive\r\nle service est fiable avec une\
+    \ réponse rapide,positive\r\nl'expérience utilisateur est pratique avec un très\
+    \ bon suivi,positive\r\nle système fonctionne sans bug,positive\r\nla qualité\
+    \ est vraiment mauvaise aujourd'hui,negative\r\nl'interface est simple et moderne\
+    \ aujourd'hui,positive\r\nla qualité est vraiment mauvaise,negative\r\nla réponse\
+    \ est mauvais et la réponse est trop lente,negative\r\nvraiment l'équipe a résolu\
+    \ le problème efficacement,positive\r\nle support est confus et je ne suis pas\
+    \ satisfait,negative\r\nla plateforme est instable avec beaucoup de problèmes,negative\r\
+    \nl'application est confus et la réponse est trop lente,negative\r\nla réponse\
+    \ est confus avec une mauvaise qualité,negative\r\nle résultat est lent avec beaucoup\
+    \ de problèmes,negative\r\nla plateforme est fiable et je suis très satisfait,positive\r\
+    \nje recommande fortement cette solution aujourd'hui,positive\r\nvraiment le temps\
+    \ de réponse est très rapide,positive\r\nle démarrage était correct mais le résultat\
+    \ est décevant,negative\r\nla performance est pire que prévu,negative\r\nje recommande\
+    \ fortement cette solution,positive\r\nle démarrage était lent mais le résultat\
+    \ est satisfaisant,positive\r\nje suis déçu du résultat final,negative\r\nl'équipe\
+    \ a résolu le problème efficacement aujourd'hui,positive\r\nle résultat est excellent\
+    \ avec une réponse rapide,positive\r\nje suis content du résultat final aujourd'hui,positive\r\
+    \nle service est décevant et la navigation est difficile,negative\r\nle temps\
+    \ de réponse est très rapide aujourd'hui,positive\r\nl'expérience utilisateur\
+    \ est faible et je ne suis pas satisfait,negative\r\nle démarrage était lent mais\
+    \ le résultat est satisfaisant,positive\r\nl'expérience utilisateur est clair\
+    \ avec une bonne qualité,positive\r\nl'application est inutile avec un suivi insuffisant,negative\r\
+    \nl'application est agréable avec une réponse rapide,positive\r\nj'avais des doutes\
+    \ mais l'application fonctionne très bien,positive\r\nla réponse est compliqué\
+    \ et la réponse est trop lente,negative\r\nla réponse est lent et je ne suis pas\
+    \ satisfait,negative\r\nl'application est instable et la réponse est trop lente,negative\r\
+    \nl'expérience utilisateur est efficace et les résultats sont cohérents,positive\r\
+    \nla réponse est faible et la navigation est difficile,negative\r\nle résultat\
+    \ est compliqué et la réponse est trop lente,negative\r\nl'application est faible\
+    \ avec un suivi insuffisant,negative\r\nle service est excellent avec une bonne\
+    \ qualité,positive\r\nl'expérience utilisateur est inutile et la réponse est trop\
+    \ lente,negative\r\nl'équipe n'a pas résolu le problème,negative\r\nle service\
+    \ est stable avec une bonne qualité,positive\r\nvraiment l'équipe n'a pas résolu\
+    \ le problème,negative\r\nle support est mauvais avec une mauvaise qualité,negative\r\
+    \nj'avais confiance mais l'application fonctionne très mal,negative\r\nj'avais\
+    \ confiance mais l'application fonctionne très mal,negative\r\nla réponse est\
+    \ efficace et les résultats sont cohérents,positive\r\nle démarrage était correct\
+    \ mais le résultat est décevant,negative\r\nvraiment rien n'est clair et c'est\
+    \ difficile à utiliser,negative\r\nmalgré quelques détails mineurs la plateforme\
+    \ reste très efficace,positive\r\nla plateforme est agréable avec une bonne qualité,positive\r\
+    \nle produit est instable et la navigation est difficile,negative\r\nvraiment\
+    \ tout est clair et facile à utiliser,positive\r\nle système fonctionne sans bug\
+    \ aujourd'hui,positive\r\nle service est pratique avec une bonne qualité,positive\r\
+    \nla plateforme est efficace sans aucun problème,positive\r\nla qualité est vraiment\
+    \ bonne,positive\r\nle service est confus avec une mauvaise qualité,negative\r\
+    \nl'expérience utilisateur est décevant avec un suivi insuffisant,negative\r\n\
+    la réponse est instable et rien ne fonctionne correctement,negative\r\nle produit\
+    \ est décevant et les résultats sont incohérents,negative\r\nla plateforme est\
+    \ rapide et je suis très satisfait,positive\r\nle service est faible et la navigation\
+    \ est difficile,negative\r\nle support est stable avec une bonne qualité,positive\r\
+    \nle produit est agréable avec une bonne qualité,positive\r\nl'expérience utilisateur\
+    \ est agréable et je suis très satisfait,positive\r\nl'application est stable\
+    \ et la navigation est simple,positive\r\nle produit est compliqué et je ne suis\
+    \ pas satisfait,negative\r\nla réponse est inutile et rien ne fonctionne correctement,negative\r\
+    \nvraiment le temps de réponse est très lent,negative\r\ntout est clair et facile\
+    \ à utiliser aujourd'hui,positive\r\nvraiment la performance est pire que prévu,negative\r\
+    \nla réponse est rapide avec une bonne qualité,positive\r\nrien n'est clair et\
+    \ c'est difficile à utiliser aujourd'hui,negative\r\nle support est agréable et\
+    \ la navigation est simple,positive\r\nje ne recommande pas cette solution aujourd'hui,negative\r\
+    \nquelques améliorations sont possibles mais l'expérience est positive,positive\r\
+    \nle produit est lent et rien ne fonctionne correctement,negative\r\nle support\
+    \ est rapide et tout fonctionne bien,positive\r\nla plateforme est clair sans\
+    \ aucun problème,positive\r\nla plateforme est faible avec un suivi insuffisant,negative\r\
+    \nle service est mauvais et la réponse est trop lente,negative\r\nle système plante\
+    \ souvent,negative\r\nvraiment l'interface est simple et moderne,positive\r\n\
+    le service est inutile et je ne suis pas satisfait,negative\r\nle temps de réponse\
+    \ est très lent aujourd'hui,negative\r\nle support est excellent avec une réponse\
+    \ rapide,positive\r\nla réponse est excellent sans aucun problème,positive\r\n\
+    le service est lent avec un suivi insuffisant,negative\r\nle résultat est décevant\
+    \ avec beaucoup de problèmes,negative\r\nle produit est pratique et tout fonctionne\
+    \ bien,positive\r\nl'interface est confuse et ancienne,negative\r\nle résultat\
+    \ est instable et la navigation est difficile,negative\r\nl'expérience utilisateur\
+    \ est rapide et la navigation est simple,positive\r\nje suis déçu du résultat\
+    \ final aujourd'hui,negative\r\nvraiment je suis déçu du résultat final,negative\r\
+    \nmalgré une belle interface la plateforme reste instable,negative\r\nla qualité\
+    \ est vraiment bonne aujourd'hui,positive\r\nle produit est efficace et tout fonctionne\
+    \ bien,positive\r\nle support est décevant et les résultats sont incohérents,negative\r\
+    \nle produit est mauvais et je ne suis pas satisfait,negative\r\nvraiment le système\
+    \ fonctionne sans bug,positive\r\nla plateforme est excellent avec un très bon\
+    \ suivi,positive\r\nau début cela semblait bien mais le support final est mauvais,negative\r\
+    \nle produit est confus avec beaucoup de problèmes,negative\r\nla plateforme est\
+    \ stable sans aucun problème,positive\r\nl'application est fiable et les résultats\
+    \ sont cohérents,positive\r\nle service est rapide et je suis très satisfait,positive\r\
+    \nle produit est excellent et la navigation est simple,positive\r\nle produit\
+    \ est faible et la réponse est trop lente,negative\r\nle produit est fiable avec\
+    \ une réponse rapide,positive\r\nl'expérience utilisateur est confus et les résultats\
+    \ sont incohérents,negative\r\nle résultat est inutile et rien ne fonctionne correctement,negative\r\
+    \nle service est clair et tout fonctionne bien,positive\r\nla performance est\
+    \ meilleure que prévu aujourd'hui,positive\r\nl'application est excellent avec\
+    \ un très bon suivi,positive\r\nle produit est rapide sans aucun problème,positive\r\
+    \nle produit est stable et les résultats sont cohérents,positive\r\nle support\
+    \ est pratique avec un très bon suivi,positive\r\nla plateforme est décevant avec\
+    \ une mauvaise qualité,negative\r\nle support est compliqué avec beaucoup de problèmes,negative\r\
+    \nla plateforme est lent avec un suivi insuffisant,negative\r\nau début il y avait\
+    \ un petit délai mais le support final est excellent,positive\r\nle produit est\
+    \ inutile et la navigation est difficile,negative\r\nrien n'est clair et c'est\
+    \ difficile à utiliser,negative\r\nquelques améliorations sont possibles mais\
+    \ l'expérience est positive,positive\r\nje suis content du résultat final,positive\r\
+    \nla réponse est agréable avec une réponse rapide,positive\r\nvraiment la qualité\
+    \ est vraiment mauvaise,negative\r\nl'expérience utilisateur est instable avec\
+    \ beaucoup de problèmes,negative\r\nla réponse est pratique et tout fonctionne\
+    \ bien,positive\r\nle service est compliqué et je ne suis pas satisfait,negative\r\
+    \nla réponse est décevant avec beaucoup de problèmes,negative\r\nle support est\
+    \ faible et rien ne fonctionne correctement,negative\r\ntout est clair et facile\
+    \ à utiliser,positive\r\nle résultat est fiable sans aucun problème,positive\r\
+    \nl'expérience utilisateur est compliqué avec un suivi insuffisant,negative\r\n\
+    l'application est mauvais et rien ne fonctionne correctement,negative\r\nje ne\
+    \ recommande pas cette solution,negative\r\nla prédiction est incorrecte et inutile,negative\r\
+    \nl'expérience utilisateur est excellent et la navigation est simple,positive\r\
+    \nla prédiction est incorrecte et inutile aujourd'hui,negative\r\nl'expérience\
+    \ utilisateur est lent et rien ne fonctionne correctement,negative\r\nvraiment\
+    \ l'interface est confuse et ancienne,negative\r\nl'application est rapide sans\
+    \ aucun problème,positive\r\nl'application est compliqué avec une mauvaise qualité,negative\r\
+    \nle système plante souvent aujourd'hui,negative\r\nl'application est clair et\
+    \ tout fonctionne bien,positive\r\nl'application est efficace et je suis très\
+    \ satisfait,positive\r\nle résultat est mauvais et la réponse est trop lente,negative\r\
+    \nquelques points sont bons mais l'expérience globale est négative,negative\r\n\
+    la plateforme est pratique et je suis très satisfait,positive\r\nle produit est\
+    \ clair sans aucun problème,positive\r\n"
+registry:
+  model_name: plm_model
+  alias: production
+algorithm_replacements: []
+validation:
+  enabled: false
+  strict: false
+  input_example: null

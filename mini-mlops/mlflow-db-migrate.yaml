@@ -1,0 +1,29 @@
+﻿apiVersion: v1
+kind: Pod
+metadata:
+  name: mlflow-db-migrate
+  namespace: mlops
+spec:
+  restartPolicy: Never
+  containers:
+  - name: migrate
+    image: python:3.10-slim
+    command:
+    - /bin/sh
+    - -c
+    - |
+      echo "Installing MLflow..."
+      pip install mlflow
+      echo "Backup database..."
+      cp /data/mlflow/mlflow.db /data/mlflow/mlflow-backup-before-upgrade.db
+      echo "Upgrade MLflow database..."
+      mlflow db upgrade sqlite:////data/mlflow/mlflow.db
+      echo "Migration finished successfully."
+      sleep 3600
+    volumeMounts:
+    - name: mlflow-storage
+      mountPath: /data/mlflow
+  volumes:
+  - name: mlflow-storage
+    persistentVolumeClaim:
+      claimName: mlflow-pvc

@@ -1,0 +1,182 @@
+project_name: plm
+project_type: classification
+task:
+  type: classification
+run:
+  name: plm_run_20260603_194542_20260603_194656_911_d611e6e3
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+  experiment_name: plm
+model:
+  name: plm_model
+  primary_metric: log_loss
+  direction: min
+  project_type: classification
+  task_type: classification
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: 68209a19-23f7-42c1-8416-9752dfc44dae.py
+  files:
+    68209a19-23f7-42c1-8416-9752dfc44dae.py: "import json\nimport joblib\nimport pandas\
+      \ as pd\n\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.pipeline\
+      \ import Pipeline\nfrom sklearn.feature_extraction.text import TfidfVectorizer\n\
+      from sklearn.linear_model import LogisticRegression\nfrom sklearn.metrics import\
+      \ accuracy_score, f1_score, precision_score, recall_score, log_loss\n\nDATASET_PATH\
+      \ = \"text_sentiment_dataset.csv\"\nTARGET_COLUMN = \"label\"\nTEXT_COLUMN =\
+      \ \"text\"\n\ndf = pd.read_csv(DATASET_PATH)\ndf = df.dropna(subset=[TEXT_COLUMN,\
+      \ TARGET_COLUMN])\n\nX = df[TEXT_COLUMN].astype(str)\ny = df[TARGET_COLUMN].astype(str)\n\
+      \nX_train, X_test, y_train, y_test = train_test_split(\n    X,\n    y,\n   \
+      \ test_size=0.25,\n    random_state=42,\n    stratify=y\n)\n\nmodel = Pipeline([\n\
+      \    (\"tfidf\", TfidfVectorizer(\n        lowercase=True,\n        ngram_range=(1,\
+      \ 2),\n        max_features=5000\n    )),\n    (\"classifier\", LogisticRegression(\n\
+      \        max_iter=1000,\n        random_state=42\n    ))\n])\n\nmodel.fit(X_train,\
+      \ y_train)\n\ny_pred = model.predict(X_test)\ny_proba = model.predict_proba(X_test)\n\
+      \nmetrics = {\n    \"accuracy\": float(accuracy_score(y_test, y_pred)),\n  \
+      \  \"f1_score\": float(f1_score(y_test, y_pred, average=\"weighted\")),\n  \
+      \  \"precision\": float(precision_score(y_test, y_pred, average=\"weighted\"\
+      , zero_division=0)),\n    \"recall\": float(recall_score(y_test, y_pred, average=\"\
+      weighted\", zero_division=0)),\n    \"log_loss\": float(log_loss(y_test, y_proba,\
+      \ labels=model.classes_))\n}\n\nprint(\"NLP standard model trained successfully\"\
+      )\nfor key, value in metrics.items():\n    print(f\"{key}={value}\")\n\njoblib.dump(model,\
+      \ \"model.joblib\")\n\nwith open(\"metrics.json\", \"w\", encoding=\"utf-8\"\
+      ) as f:\n    json.dump(metrics, f, indent=2)\n\nsample = [\"le service est rapide\
+      \ et excellent\"]\nprint(\"sample_prediction=\", model.predict(sample)[0])\n"
+data:
+  source_type: inline
+  dataset_name: 907e2aeb-33b6-4916-9968-dc304b8b537a.csv
+  filename: 907e2aeb-33b6-4916-9968-dc304b8b537a.csv
+  content: "\uFEFFtext,label\nles prédictions sont pertinentes,positive\nje recommande\
+    \ cette solution à mon équipe,positive\nje suis content du résultat obtenu,positive\n\
+    je suis satisfait du service proposé,positive\nbonne application pour débuter,positive\n\
+    je ne recommande pas ce service,negative\noutil imprécis et difficile,negative\n\
+    résultat imprécis et inutilisable,negative\nles prédictions sont incohérentes,negative\n\
+    service utile efficace et sérieux,positive\ninterface confuse difficile à utiliser,negative\n\
+    service client médiocre,negative\nbonne performance et bonne précision,positive\n\
+    l'expérience est simple et agréable,positive\nla réponse du modèle est pertinente,positive\n\
+    mauvaise expérience utilisateur,negative\nle traitement est rapide et fiable,positive\n\
+    le support client ne répond pas,negative\ntrès mauvaise qualité de service,negative\n\
+    le résultat ne correspond pas à mes attentes,negative\nservice lent et réponse\
+    \ non pertinente,negative\ntrès mauvais outil d'analyse,negative\nle modèle comprend\
+    \ bien le texte,positive\napplication compliquée avec beaucoup de bugs,negative\n\
+    le résultat n'est pas logique,negative\nje suis en colère contre ce résultat,negative\n\
+    la solution est bien adaptée,positive\ntrès mauvaise expérience avec cet outil,negative\n\
+    application lente et instable,negative\nexpérience très positive,positive\napplication\
+    \ mal conçue et instable,negative\ntrès bonne précision du modèle,positive\nla\
+    \ plateforme est intuitive,positive\nje ne recommande pas cette solution à mon\
+    \ équipe,negative\nexpérience agréable et résultat précis,positive\nexpérience\
+    \ très négative,negative\nmerci pour ce service rapide et efficace,positive\n\
+    je suis satisfait de la qualité,positive\nréponse lente et résultat peu fiable,negative\n\
+    tout est clair et rapide,positive\nla prédiction est fausse et inutile,negative\n\
+    solution fiable claire et pratique,positive\noutil instable compliqué et inutile,negative\n\
+    le résultat est logique et correct,positive\nbonne solution pour un projet NLP,positive\n\
+    application inefficace et désagréable,negative\nle résultat est propre et professionnel,positive\n\
+    outil précis et facile,positive\nrésultat parfait je recommande fortement,positive\n\
+    solution peu pratique pour les utilisateurs,negative\nle service est mauvais et\
+    \ lent,negative\nbonne qualité de prédiction,positive\noutil très pratique et\
+    \ facile à utiliser,positive\nle modèle donne de mauvais résultats,negative\n\
+    service efficace et agréable,positive\nle support client est vraiment professionnel,positive\n\
+    je recommande cette plateforme,positive\nles résultats sont rapides et exacts,positive\n\
+    je ne suis pas satisfait de cette expérience,negative\noutil peu performant et\
+    \ difficile,negative\nje suis insatisfait de la qualité,negative\nla plateforme\
+    \ n'est pas intuitive,negative\nbonne expérience avec cette plateforme,positive\n\
+    modèle inutile pour classer les avis,negative\napplication simple utile et efficace,positive\n\
+    l'utilisation est pénible et lente,negative\nmauvaise application pour débuter,negative\n\
+    réponse rapide et résultat fiable,positive\noutil fiable simple et utile,positive\n\
+    faible performance et mauvaise précision,negative\nle service ne répond pas à\
+    \ mes besoins,negative\nj'ai eu une expérience positive,positive\noutil agréable\
+    \ pour les utilisateurs,positive\ntrès mauvais résultat final,negative\nje recommande\
+    \ sans hésiter,positive\noutil performant et facile à utiliser,positive\ntrès\
+    \ bon service client et réponse rapide,positive\noutil clair et bien structuré,positive\n\
+    la solution est floue et mal expliquée,negative\nj'apprécie la rapidité du système,positive\n\
+    l'utilisation est simple et rapide,positive\nle service est excellent et rapide,positive\n\
+    analyse incorrecte et lente,negative\ntrès mauvais fonctionnement général,negative\n\
+    la performance est décevante,negative\nsolution intelligente et efficace,positive\n\
+    mauvaise solution pour un projet NLP,negative\napplication inutile et mal organisée,negative\n\
+    application performante et stable,positive\nle produit est fiable et agréable,positive\n\
+    mauvais service je ne recommande pas,negative\nl'analyse est confuse et incorrecte,negative\n\
+    les prédictions positives sont cohérentes,positive\nle système est instable et\
+    \ lent,negative\nla solution est claire et bien expliquée,positive\nla solution\
+    \ est mal adaptée,negative\nla réponse du modèle n'est pas pertinente,negative\n\
+    excellent rapport qualité performance,positive\napplication instable et difficile,negative\n\
+    le fonctionnement est lent,negative\ntrès satisfait du support,positive\nfonctionnalité\
+    \ pratique et bien faite,positive\ntout est lent et confus,negative\nl'interface\
+    \ est lourde et confuse,negative\nla performance est satisfaisante,positive\n\
+    résultat incorrect je ne recommande pas,negative\noutil confus et mal structuré,negative\n\
+    service lent et réponse peu claire,negative\nfonctionnalité inutile et mal faite,negative\n\
+    le produit est instable et désagréable,negative\nle système fonctionne très bien,positive\n\
+    la plateforme est confuse et lente,negative\nla plateforme est fiable,positive\n\
+    le système répond mal,negative\nplateforme difficile à utiliser,negative\nmauvaise\
+    \ qualité de prédiction,negative\ntrès mauvaise performance sur mes données,negative\n\
+    expérience fluide et positive,positive\nla réponse est fausse et imprécise,negative\n\
+    ça ne marche pas bien,negative\ntrès bon résultat final,positive\noutil simple\
+    \ clair et puissant,positive\noutil instable peu fiable et inutile,negative\n\
+    mauvaise interface et mauvaise expérience,negative\nje déconseille cette plateforme,negative\n\
+    la solution ne marche pas correctement,negative\nanalyse correcte et rapide,positive\n\
+    mauvaise expérience je ne recommande pas,negative\nsolution pratique pour les\
+    \ utilisateurs,positive\noutil désagréable pour les utilisateurs,negative\nla\
+    \ prédiction me semble incorrecte,negative\nservice rapide et réponse pertinente,positive\n\
+    expérience lente et négative,negative\ncette application m'aide beaucoup,positive\n\
+    la qualité est faible et la réponse est lente,negative\nrésultat très négatif,negative\n\
+    mauvaise solution pour analyser les commentaires,negative\nje trouve ce service\
+    \ très utile,positive\nle modèle donne de bons résultats,positive\nsolution confuse\
+    \ et inefficace,negative\nje suis ravi du résultat,positive\ntrès bon fonctionnement\
+    \ général,positive\nle résultat est mauvais et non professionnel,negative\noutil\
+    \ compliqué faible et instable,negative\napplication stable fluide et performante,positive\n\
+    modèle utile pour classer les avis,positive\nservice lent et inutile,negative\n\
+    les résultats sont très décevants,negative\noutil fiable pour l'analyse de sentiment,positive\n\
+    les prédictions ne sont pas pertinentes,negative\nça marche très bien,positive\n\
+    résultat mauvais et très flou,negative\nmauvais résultat pour mon test,negative\n\
+    le système fonctionne mal,negative\napplication bien conçue et stable,positive\n\
+    la prédiction est cohérente et utile,positive\napplication utile et bien organisée,positive\n\
+    la réponse est correcte et précise,positive\nexcellent service je recommande,positive\n\
+    application efficace et agréable,positive\nle modèle classe bien le texte,positive\n\
+    résultat très positif,positive\nservice correct et rapide,positive\nl'expérience\
+    \ est difficile et désagréable,negative\nles résultats sont lents et faux,negative\n\
+    la plateforme est moderne et claire,positive\nmauvaise expérience avec cette plateforme,negative\n\
+    très faible précision du modèle,negative\nservice client excellent,positive\n\
+    résultat excellent et très clair,positive\nsupport lent et peu compétent,negative\n\
+    le modèle ne comprend pas bien le texte,negative\noutil efficace pour gagner du\
+    \ temps,positive\nla solution marche parfaitement,positive\nl'application est\
+    \ difficile à comprendre,negative\nle fonctionnement est fluide,positive\nje suis\
+    \ vraiment déçu,negative\nle modèle classe mal le texte,negative\nsolution efficace\
+    \ pour mon besoin,positive\nje n'aime pas cette solution,negative\nbonne expérience\
+    \ utilisateur,positive\nle système répond bien,positive\nsystème utile pour mon\
+    \ travail,positive\noutil inefficace et trop compliqué,negative\noutil simple\
+    \ pour analyser les avis,positive\nexcellent outil pour analyser mes données,positive\n\
+    la prédiction me semble correcte,positive\nje suis très déçu de cette solution,negative\n\
+    service rapide et très utile,positive\nbonne solution pour analyser les commentaires,positive\n\
+    tout fonctionne comme prévu,positive\nje suis très content de cette solution,positive\n\
+    cette application ne m'aide pas,negative\nla plateforme n'est pas fiable,negative\n\
+    le résultat correspond à mes attentes,positive\nje regrette d'avoir utilisé ce\
+    \ service,negative\nje suis vraiment satisfait,positive\nje suis insatisfait du\
+    \ service proposé,negative\nbonne interface et bonne expérience,positive\ntrès\
+    \ insatisfait du support,negative\nje suis mécontent de cette application,negative\n\
+    l'analyse est claire et correcte,positive\nsolution inefficace pour mon besoin,negative\n\
+    je suis très satisfait de cette expérience,positive\ntrès bonne qualité de service,positive\n\
+    système inutile pour mon travail,negative\nexcellent résultat pour mon test,positive\n\
+    le système est stable et fiable,positive\nle service est top,positive\nle service\
+    \ est nul,negative\nservice inefficace et désagréable,negative\nj'ai eu une expérience\
+    \ négative,negative\nje n'apprécie pas la lenteur du système,negative\nsupport\
+    \ rapide et très compétent,positive\nrien ne fonctionne correctement,negative\n\
+    outil compliqué pour analyser les avis,negative\ntrès mauvaise expérience globale,negative\n\
+    je suis déçu par cette solution,negative\nje suis content de cette application,positive\n\
+    l'interface est propre et moderne,positive\nles résultats sont très satisfaisants,positive\n\
+    la qualité est bonne et le résultat est précis,positive\ntrès bonne solution pour\
+    \ analyser les textes,positive\nsuper expérience avec cet outil,positive\nmauvais\
+    \ rapport qualité performance,negative\nj'aime beaucoup cette solution,positive\n\
+    le traitement est lent et peu fiable,negative\nservice incorrect et lent,negative\n\
+    je trouve ce service inutile,negative\nle service répond bien à mes besoins,positive\n\
+    outil peu fiable pour l'analyse de sentiment,negative\ntrès bonne expérience globale,positive\n\
+    très bon outil d'analyse,positive\nplateforme facile à utiliser,positive\nje suis\
+    \ pleinement satisfait,positive\nje suis totalement insatisfait,negative\ninterface\
+    \ claire agréable et intuitive,positive\nl'application est facile à comprendre,positive\n\
+    service inutile lent et peu sérieux,negative\n"
+registry:
+  model_name: plm_model
+  alias: production
+algorithm_replacements: []
+validation:
+  enabled: false
+  strict: false
+  input_example: null

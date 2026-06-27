@@ -1,0 +1,205 @@
+project_name: customer_churn
+project_type: classification
+task:
+  type: classification
+run:
+  name: customer-churn_run_20260524_183623
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+  experiment_name: customer_churn
+model:
+  name: customer-churn_model
+  primary_metric: accuracy
+  direction: max
+  project_type: classification
+  task_type: classification
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: 6e5656ef-4cdf-4369-88fe-6599050e4b81.py
+  files:
+    6e5656ef-4cdf-4369-88fe-6599050e4b81.py: "from sklearn.compose import ColumnTransformer\n\
+      from sklearn.ensemble import GradientBoostingClassifier\nfrom sklearn.impute\
+      \ import SimpleImputer\nfrom sklearn.pipeline import Pipeline\nfrom sklearn.preprocessing\
+      \ import OneHotEncoder, StandardScaler\n\n\ndef build_model():\n    numeric_features\
+      \ = [\n        \"age\",\n        \"tenure_months\",\n        \"monthly_charges\"\
+      ,\n        \"support_tickets\",\n        \"late_payments\",\n        \"avg_monthly_gb\"\
+      \n    ]\n\n    categorical_features = [\n        \"contract_type\",\n      \
+      \  \"internet_service\",\n        \"payment_method\",\n        \"paperless_billing\"\
+      \n    ]\n\n    numeric_transformer = Pipeline(\n        steps=[\n          \
+      \  (\"imputer\", SimpleImputer(strategy=\"median\")),\n            (\"scaler\"\
+      , StandardScaler())\n        ]\n    )\n\n    categorical_transformer = Pipeline(\n\
+      \        steps=[\n            (\"imputer\", SimpleImputer(strategy=\"most_frequent\"\
+      )),\n            (\"encoder\", OneHotEncoder(handle_unknown=\"ignore\", sparse_output=False))\n\
+      \        ]\n    )\n\n    preprocessor = ColumnTransformer(\n        transformers=[\n\
+      \            (\"numeric\", numeric_transformer, numeric_features),\n       \
+      \     (\"categorical\", categorical_transformer, categorical_features)\n   \
+      \     ],\n        sparse_threshold=0.0\n    )\n\n    model = GradientBoostingClassifier(\n\
+      \        n_estimators=120,\n        learning_rate=0.07,\n        max_depth=3,\n\
+      \        random_state=42\n    )\n\n    pipeline = Pipeline(\n        steps=[\n\
+      \            (\"preprocessor\", preprocessor),\n            (\"model\", model)\n\
+      \        ]\n    )\n\n    return pipeline\n"
+data:
+  source_type: inline
+  dataset_name: 7cbc774d-8661-40e2-846d-e92b0e3ea29c.csv
+  filename: 7cbc774d-8661-40e2-846d-e92b0e3ea29c.csv
+  content: "age,tenure_months,monthly_charges,support_tickets,contract_type,internet_service,payment_method,paperless_billing,late_payments,avg_monthly_gb,churn\r\
+    \n58,15,22.75,4,one-year,dsl,electronic_check,yes,1,115.49,0\r\n19,12,44.05,8,month-to-month,dsl,bank_transfer,yes,4,18.14,1\r\
+    \n69,1,103.47,2,month-to-month,fiber,electronic_check,yes,5,214.19,1\r\n40,45,86.41,0,month-to-month,none,credit_card,yes,5,232.42,0\r\
+    \n74,47,83.51,1,one-year,none,electronic_check,no,0,332.33,0\r\n47,47,37.89,5,one-year,dsl,credit_card,yes,1,336.74,0\r\
+    \n33,21,70.85,4,month-to-month,fiber,electronic_check,yes,5,345.64,0\r\n69,41,64.13,1,one-year,dsl,credit_card,yes,1,457.0,0\r\
+    \n59,59,35.72,2,month-to-month,dsl,bank_transfer,yes,1,373.77,0\r\n26,66,74.29,0,one-year,dsl,bank_transfer,yes,6,59.28,0\r\
+    \n47,68,47.66,8,one-year,fiber,electronic_check,no,6,471.5,0\r\n39,15,52.29,2,one-year,dsl,cash,no,3,6.61,0\r\
+    \n24,39,112.58,8,month-to-month,fiber,cash,no,4,103.46,0\r\n56,42,73.75,1,one-year,fiber,credit_card,no,2,439.97,0\r\
+    \n23,63,109.76,8,one-year,none,credit_card,yes,6,67.25,0\r\n31,70,103.08,3,two-year,dsl,bank_transfer,yes,5,159.3,1\r\
+    \n32,9,57.19,8,month-to-month,dsl,credit_card,yes,1,296.28,1\r\n39,10,76.56,4,month-to-month,dsl,electronic_check,yes,5,245.28,1\r\
+    \n48,53,40.95,1,month-to-month,fiber,electronic_check,no,5,218.37,0\r\n24,8,64.29,5,month-to-month,fiber,bank_transfer,yes,6,431.53,1\r\
+    \n33,10,68.74,8,two-year,dsl,cash,no,0,30.04,0\r\n28,53,73.42,3,month-to-month,fiber,cash,yes,6,203.51,0\r\
+    \n47,37,66.53,8,month-to-month,fiber,cash,yes,5,360.61,1\r\n65,41,26.29,7,month-to-month,fiber,bank_transfer,no,4,460.1,1\r\
+    \n22,31,64.42,3,one-year,fiber,electronic_check,yes,4,299.29,0\r\n31,41,46.26,6,month-to-month,fiber,electronic_check,yes,1,337.49,1\r\
+    \n54,13,28.06,3,two-year,none,electronic_check,yes,4,136.27,1\r\n71,70,97.39,8,one-year,none,credit_card,no,0,335.59,1\r\
+    \n74,14,101.67,2,month-to-month,fiber,electronic_check,no,2,144.47,1\r\n34,7,30.15,6,month-to-month,dsl,electronic_check,yes,6,141.96,1\r\
+    \n53,55,81.7,1,one-year,fiber,credit_card,yes,0,472.8,0\r\n45,17,24.6,5,month-to-month,fiber,electronic_check,no,6,486.24,1\r\
+    \n53,53,127.12,2,two-year,dsl,electronic_check,yes,1,432.98,0\r\n39,53,108.25,3,one-year,fiber,credit_card,yes,2,83.8,1\r\
+    \n47,45,53.57,3,month-to-month,fiber,electronic_check,no,1,16.71,1\r\n59,66,63.96,8,month-to-month,none,credit_card,no,2,469.92,1\r\
+    \n24,56,58.03,5,month-to-month,fiber,electronic_check,yes,3,305.07,1\r\n18,67,121.81,8,one-year,dsl,bank_transfer,yes,5,361.12,0\r\
+    \n39,41,92.97,1,month-to-month,dsl,bank_transfer,no,5,450.52,1\r\n30,54,93.14,6,month-to-month,dsl,bank_transfer,no,5,375.33,1\r\
+    \n31,56,106.43,5,one-year,dsl,electronic_check,no,3,223.68,0\r\n60,11,51.22,5,one-year,dsl,credit_card,yes,0,410.12,1\r\
+    \n33,61,87.24,1,one-year,fiber,electronic_check,yes,3,210.15,1\r\n59,1,118.19,1,month-to-month,none,bank_transfer,yes,6,215.45,1\r\
+    \n72,16,70.21,7,one-year,fiber,electronic_check,yes,5,267.91,0\r\n75,65,66.94,8,one-year,fiber,credit_card,yes,3,449.12,0\r\
+    \n67,67,73.31,3,one-year,fiber,bank_transfer,no,2,222.74,1\r\n27,30,62.13,2,month-to-month,fiber,bank_transfer,yes,5,110.91,0\r\
+    \n42,3,114.24,6,month-to-month,dsl,electronic_check,no,3,7.92,1\r\n65,70,107.99,3,month-to-month,fiber,bank_transfer,no,3,113.61,1\r\
+    \n28,60,121.15,8,one-year,dsl,credit_card,yes,0,453.93,0\r\n29,7,48.62,5,month-to-month,none,credit_card,no,1,230.08,1\r\
+    \n71,11,71.73,8,month-to-month,dsl,electronic_check,no,0,499.95,0\r\n33,26,112.32,2,one-year,dsl,credit_card,no,1,67.48,0\r\
+    \n28,15,105.56,2,month-to-month,fiber,electronic_check,no,2,58.51,1\r\n63,26,28.36,3,month-to-month,dsl,electronic_check,no,0,350.11,0\r\
+    \n20,45,78.6,5,month-to-month,dsl,electronic_check,yes,0,255.45,0\r\n58,59,97.8,6,two-year,fiber,electronic_check,yes,1,368.23,1\r\
+    \n45,35,55.45,3,month-to-month,fiber,electronic_check,yes,6,467.64,0\r\n39,4,74.37,5,month-to-month,fiber,credit_card,yes,1,246.34,0\r\
+    \n53,2,76.83,3,month-to-month,dsl,credit_card,yes,0,124.47,0\r\n46,3,30.24,3,month-to-month,dsl,bank_transfer,yes,3,347.43,1\r\
+    \n65,71,56.39,7,month-to-month,dsl,bank_transfer,no,2,156.78,0\r\n62,24,41.07,7,two-year,dsl,credit_card,yes,2,363.67,1\r\
+    \n32,47,39.74,0,month-to-month,none,electronic_check,no,5,269.4,1\r\n73,63,31.28,0,month-to-month,fiber,cash,yes,4,145.75,0\r\
+    \n25,9,64.08,1,month-to-month,fiber,electronic_check,yes,4,316.58,0\r\n25,72,104.09,3,month-to-month,fiber,electronic_check,no,6,263.67,1\r\
+    \n57,8,87.06,1,month-to-month,dsl,credit_card,yes,6,107.86,1\r\n18,53,69.56,7,month-to-month,fiber,electronic_check,yes,2,21.16,1\r\
+    \n34,26,66.77,8,two-year,dsl,credit_card,yes,1,325.58,0\r\n65,37,68.31,7,month-to-month,fiber,bank_transfer,yes,5,155.53,1\r\
+    \n74,56,100.8,4,two-year,dsl,electronic_check,no,0,50.21,0\r\n61,35,83.39,2,month-to-month,fiber,cash,yes,3,261.89,0\r\
+    \n23,61,58.28,5,two-year,fiber,electronic_check,yes,2,336.72,0\r\n70,71,24.04,1,month-to-month,dsl,electronic_check,no,2,129.94,1\r\
+    \n73,70,70.82,0,one-year,fiber,bank_transfer,yes,1,261.63,0\r\n26,37,68.19,7,one-year,dsl,electronic_check,yes,0,19.29,1\r\
+    \n44,12,44.72,1,one-year,fiber,cash,yes,3,473.8,0\r\n44,62,127.83,3,month-to-month,none,bank_transfer,no,3,277.88,0\r\
+    \n35,54,57.39,8,month-to-month,fiber,electronic_check,no,2,411.17,1\r\n27,58,79.24,5,month-to-month,fiber,bank_transfer,yes,2,278.2,0\r\
+    \n54,50,45.69,6,month-to-month,none,bank_transfer,no,0,162.5,0\r\n59,20,74.49,0,one-year,none,electronic_check,yes,1,253.63,0\r\
+    \n47,2,99.47,6,month-to-month,fiber,cash,yes,6,329.12,1\r\n59,11,113.69,8,one-year,none,bank_transfer,yes,3,477.3,0\r\
+    \n33,37,129.72,1,one-year,dsl,credit_card,yes,3,489.28,1\r\n19,6,55.68,0,month-to-month,fiber,bank_transfer,no,2,182.44,1\r\
+    \n29,11,87.04,6,month-to-month,dsl,credit_card,yes,4,343.15,1\r\n60,2,118.88,7,month-to-month,fiber,bank_transfer,yes,2,340.42,1\r\
+    \n45,33,70.25,4,two-year,fiber,bank_transfer,yes,1,499.69,0\r\n62,38,22.41,6,two-year,dsl,cash,no,2,9.01,0\r\
+    \n71,37,105.33,3,month-to-month,fiber,credit_card,no,4,401.96,0\r\n61,18,89.11,0,month-to-month,fiber,credit_card,no,2,395.36,1\r\
+    \n44,23,42.09,8,two-year,dsl,credit_card,no,2,267.77,0\r\n69,38,102.12,5,two-year,fiber,cash,no,6,62.01,0\r\
+    \n43,72,60.24,6,month-to-month,fiber,electronic_check,yes,0,135.91,1\r\n58,48,31.92,3,two-year,dsl,cash,yes,3,17.39,1\r\
+    \n70,60,120.03,4,month-to-month,none,bank_transfer,yes,5,207.11,1\r\n74,69,34.92,7,one-year,none,bank_transfer,no,2,336.89,1\r\
+    \n44,13,111.71,6,month-to-month,fiber,cash,no,2,21.19,1\r\n61,48,79.89,5,month-to-month,fiber,electronic_check,yes,0,202.08,0\r\
+    \n59,3,25.56,5,one-year,fiber,electronic_check,yes,1,494.47,0\r\n70,30,56.14,2,month-to-month,none,credit_card,yes,6,450.76,1\r\
+    \n29,15,92.72,0,one-year,fiber,bank_transfer,yes,1,12.36,1\r\n65,54,77.87,1,month-to-month,dsl,bank_transfer,yes,3,226.9,0\r\
+    \n64,67,53.18,0,one-year,fiber,credit_card,no,0,499.3,0\r\n75,11,55.43,2,one-year,dsl,electronic_check,yes,0,67.46,0\r\
+    \n36,59,75.61,6,month-to-month,dsl,electronic_check,yes,0,397.58,0\r\n45,58,117.69,6,month-to-month,dsl,bank_transfer,yes,2,414.57,1\r\
+    \n27,61,27.38,1,one-year,fiber,credit_card,yes,0,218.78,0\r\n53,43,93.7,6,two-year,fiber,cash,yes,2,437.44,1\r\
+    \n37,46,31.4,8,month-to-month,dsl,bank_transfer,yes,1,81.59,1\r\n35,29,108.79,8,one-year,dsl,credit_card,no,6,410.12,0\r\
+    \n35,4,39.85,4,month-to-month,fiber,electronic_check,yes,2,178.76,0\r\n19,12,102.07,3,month-to-month,fiber,electronic_check,no,3,212.82,1\r\
+    \n23,7,37.11,0,month-to-month,fiber,electronic_check,yes,5,45.38,1\r\n50,15,57.97,1,one-year,dsl,bank_transfer,yes,2,340.72,0\r\
+    \n21,1,42.49,3,month-to-month,fiber,credit_card,no,6,72.93,1\r\n42,69,97.4,8,one-year,fiber,electronic_check,yes,4,417.51,1\r\
+    \n22,41,83.33,6,month-to-month,fiber,cash,yes,5,321.87,0\r\n47,47,29.69,1,month-to-month,fiber,electronic_check,no,1,220.66,1\r\
+    \n67,22,28.4,1,two-year,fiber,electronic_check,no,4,257.43,0\r\n33,14,36.11,3,one-year,dsl,credit_card,no,1,303.19,0\r\
+    \n66,58,94.92,5,month-to-month,fiber,bank_transfer,yes,6,485.63,0\r\n55,8,58.71,1,month-to-month,fiber,credit_card,yes,2,233.56,0\r\
+    \n23,65,62.29,8,month-to-month,none,electronic_check,yes,6,370.77,1\r\n50,20,125.35,7,one-year,none,credit_card,yes,0,406.43,1\r\
+    \n63,57,129.01,8,month-to-month,none,bank_transfer,no,4,306.85,1\r\n21,43,27.25,1,month-to-month,dsl,electronic_check,no,4,340.8,0\r\
+    \n39,11,84.1,2,one-year,dsl,credit_card,no,2,158.56,1\r\n53,49,90.78,5,one-year,none,cash,no,6,68.26,1\r\
+    \n60,55,75.93,0,two-year,fiber,electronic_check,yes,2,157.89,0\r\n27,10,52.54,1,one-year,none,credit_card,yes,4,386.58,0\r\
+    \n26,49,36.97,2,one-year,none,electronic_check,yes,6,347.96,0\r\n64,31,126.65,4,month-to-month,dsl,bank_transfer,no,6,375.53,1\r\
+    \n71,25,60.46,7,one-year,dsl,bank_transfer,yes,3,385.87,1\r\n56,18,116.03,0,month-to-month,none,electronic_check,yes,5,242.89,1\r\
+    \n23,21,50.01,8,month-to-month,none,electronic_check,no,1,416.37,0\r\n44,7,63.61,5,month-to-month,fiber,bank_transfer,yes,1,196.15,0\r\
+    \n39,19,35.14,4,one-year,dsl,bank_transfer,yes,6,238.87,0\r\n19,33,43.72,2,one-year,fiber,electronic_check,yes,4,470.41,1\r\
+    \n33,54,90.28,7,two-year,dsl,credit_card,yes,0,59.87,1\r\n27,38,67.22,5,month-to-month,dsl,bank_transfer,yes,1,287.48,0\r\
+    \n52,65,106.51,8,two-year,fiber,bank_transfer,yes,4,15.07,0\r\n40,9,57.93,1,one-year,fiber,bank_transfer,yes,6,293.04,0\r\
+    \n71,60,127.89,7,month-to-month,dsl,cash,yes,5,95.23,1\r\n68,26,117.44,5,two-year,dsl,credit_card,no,2,260.11,1\r\
+    \n40,7,115.24,5,month-to-month,none,electronic_check,no,2,66.62,1\r\n29,64,96.13,5,one-year,dsl,credit_card,yes,6,262.04,0\r\
+    \n52,38,55.33,1,month-to-month,dsl,bank_transfer,no,2,332.16,1\r\n20,46,87.63,6,one-year,fiber,electronic_check,yes,2,321.54,1\r\
+    \n65,21,124.81,2,one-year,fiber,credit_card,no,6,305.75,1\r\n42,5,86.56,7,one-year,dsl,bank_transfer,yes,2,189.15,0\r\
+    \n33,15,22.85,2,two-year,fiber,electronic_check,no,3,261.28,1\r\n57,37,96.34,7,two-year,fiber,electronic_check,yes,1,65.71,1\r\
+    \n61,41,93.46,1,two-year,none,electronic_check,no,4,273.37,0\r\n68,47,75.96,1,month-to-month,fiber,bank_transfer,yes,1,397.07,0\r\
+    \n53,17,87.31,1,two-year,dsl,bank_transfer,no,0,158.1,0\r\n22,17,126.96,1,month-to-month,fiber,electronic_check,yes,3,235.59,1\r\
+    \n67,17,67.59,0,month-to-month,fiber,bank_transfer,no,6,66.46,1\r\n51,37,113.05,4,one-year,fiber,bank_transfer,yes,1,319.35,0\r\
+    \n28,20,38.83,5,month-to-month,none,credit_card,no,6,462.35,0\r\n34,27,104.37,6,month-to-month,dsl,credit_card,no,4,321.3,1\r\
+    \n69,52,52.72,1,month-to-month,fiber,credit_card,yes,5,34.66,1\r\n63,41,100.76,5,month-to-month,dsl,bank_transfer,yes,3,69.73,1\r\
+    \n33,19,30.65,4,month-to-month,none,cash,no,3,432.76,0\r\n64,41,40.88,2,month-to-month,none,bank_transfer,yes,3,498.0,1\r\
+    \n47,31,43.67,5,month-to-month,none,electronic_check,yes,0,30.02,1\r\n72,14,67.4,4,month-to-month,fiber,credit_card,yes,5,186.06,1\r\
+    \n36,10,62.5,7,one-year,dsl,electronic_check,yes,6,277.18,1\r\n41,44,81.36,5,one-year,fiber,credit_card,yes,6,76.41,0\r\
+    \n69,61,77.13,2,month-to-month,none,bank_transfer,yes,4,447.1,0\r\n71,39,85.31,8,month-to-month,dsl,bank_transfer,yes,6,257.31,1\r\
+    \n25,54,84.21,0,two-year,dsl,electronic_check,yes,4,239.92,0\r\n55,62,38.76,6,month-to-month,dsl,electronic_check,yes,1,411.72,1\r\
+    \n44,20,65.43,3,one-year,fiber,electronic_check,no,3,253.4,0\r\n51,27,81.7,7,two-year,fiber,bank_transfer,yes,4,191.53,0\r\
+    \n73,34,87.11,3,month-to-month,none,cash,no,1,143.11,0\r\n62,63,54.87,5,one-year,fiber,credit_card,no,4,467.18,0\r\
+    \n43,45,125.01,2,two-year,fiber,cash,no,2,25.82,0\r\n31,26,111.07,4,month-to-month,dsl,electronic_check,yes,4,349.6,1\r\
+    \n51,29,90.17,0,one-year,fiber,electronic_check,yes,0,209.58,0\r\n28,53,91.82,7,one-year,fiber,credit_card,yes,3,327.02,0\r\
+    \n59,30,78.87,0,one-year,none,credit_card,no,1,211.85,0\r\n29,38,116.44,0,month-to-month,none,credit_card,no,2,286.14,0\r\
+    \n49,18,113.62,7,month-to-month,fiber,bank_transfer,yes,2,100.44,1\r\n65,44,106.98,3,one-year,fiber,bank_transfer,yes,1,307.42,0\r\
+    \n24,24,127.99,7,month-to-month,fiber,bank_transfer,yes,2,468.23,1\r\n55,2,48.77,5,one-year,fiber,credit_card,no,5,121.97,0\r\
+    \n74,40,95.93,4,month-to-month,fiber,credit_card,no,2,309.24,1\r\n44,71,120.41,8,month-to-month,fiber,electronic_check,no,6,333.73,1\r\
+    \n46,68,97.41,1,one-year,none,credit_card,yes,4,60.54,1\r\n72,67,68.6,3,month-to-month,dsl,electronic_check,yes,5,293.66,1\r\
+    \n47,8,81.47,4,month-to-month,fiber,credit_card,yes,5,15.78,1\r\n62,9,79.53,0,month-to-month,fiber,credit_card,yes,0,493.14,0\r\
+    \n64,54,61.19,6,two-year,fiber,electronic_check,no,3,435.46,0\r\n59,45,33.05,8,one-year,fiber,credit_card,yes,3,266.78,1\r\
+    \n61,70,66.65,6,month-to-month,fiber,credit_card,no,6,118.68,0\r\n20,54,87.64,0,month-to-month,fiber,electronic_check,no,1,107.01,1\r\
+    \n65,6,64.25,3,two-year,fiber,bank_transfer,yes,4,112.55,0\r\n64,41,83.52,5,month-to-month,dsl,credit_card,yes,1,154.37,1\r\
+    \n55,23,88.86,6,two-year,none,electronic_check,no,4,250.33,1\r\n44,53,36.41,6,month-to-month,dsl,bank_transfer,no,1,378.44,0\r\
+    \n21,72,65.39,6,month-to-month,fiber,bank_transfer,yes,4,267.35,1\r\n41,12,78.92,3,one-year,dsl,electronic_check,yes,0,137.89,0\r\
+    \n64,72,43.87,3,month-to-month,none,credit_card,yes,6,453.98,0\r\n65,62,120.59,3,one-year,dsl,bank_transfer,yes,3,457.99,1\r\
+    \n34,47,76.41,7,two-year,fiber,electronic_check,no,3,53.81,1\r\n44,6,81.88,3,month-to-month,none,electronic_check,yes,5,77.23,1\r\
+    \n39,30,61.78,3,two-year,fiber,electronic_check,yes,3,277.57,0\r\n65,63,70.69,5,month-to-month,fiber,electronic_check,no,1,74.28,0\r\
+    \n51,5,112.3,1,one-year,fiber,electronic_check,yes,6,335.77,1\r\n18,28,75.63,5,one-year,dsl,bank_transfer,yes,0,310.83,1\r\
+    \n53,53,21.3,8,two-year,fiber,electronic_check,no,5,141.0,0\r\n29,14,120.99,8,one-year,fiber,bank_transfer,no,1,124.28,1\r\
+    \n43,59,82.15,3,one-year,dsl,electronic_check,no,2,343.6,1\r\n42,49,80.8,0,month-to-month,fiber,bank_transfer,no,5,9.68,0\r\
+    \n72,13,118.43,0,two-year,none,bank_transfer,yes,1,109.65,1\r\n35,70,81.99,0,month-to-month,none,electronic_check,no,1,464.74,0\r\
+    \n43,10,52.92,3,month-to-month,none,bank_transfer,no,4,418.15,1\r\n62,11,75.09,5,month-to-month,fiber,electronic_check,yes,0,53.35,1\r\
+    \n67,42,23.26,4,month-to-month,fiber,cash,yes,6,496.33,0\r\n60,49,29.43,4,month-to-month,fiber,bank_transfer,no,6,126.99,1\r\
+    \n42,41,59.68,1,month-to-month,dsl,credit_card,yes,0,471.77,0\r\n53,72,76.37,1,one-year,dsl,electronic_check,no,0,49.36,1\r\
+    \n44,50,105.71,8,month-to-month,fiber,credit_card,yes,1,288.12,1\r\n22,22,67.81,6,month-to-month,fiber,credit_card,yes,2,244.69,0\r\
+    \n30,59,31.77,4,month-to-month,dsl,electronic_check,yes,0,474.67,1\r\n70,18,53.05,3,two-year,none,credit_card,no,3,160.52,0\r\
+    \n54,32,55.85,4,month-to-month,none,credit_card,no,6,394.0,1\r\n67,71,22.96,7,one-year,dsl,credit_card,no,5,108.78,0\r\
+    \n61,64,35.31,4,month-to-month,fiber,bank_transfer,yes,1,130.08,0\r\n55,52,78.78,6,two-year,dsl,electronic_check,yes,4,23.2,0\r\
+    \n24,32,92.34,5,month-to-month,none,electronic_check,yes,1,325.26,1\r\n68,56,31.65,1,one-year,dsl,electronic_check,yes,2,114.89,0\r\
+    \n47,65,36.58,0,month-to-month,none,credit_card,no,3,56.75,1\r\n37,44,70.09,3,month-to-month,fiber,electronic_check,yes,4,244.05,1\r\
+    \n69,15,22.48,5,one-year,none,electronic_check,yes,5,59.13,0\r\n39,72,66.9,7,one-year,fiber,electronic_check,yes,1,399.89,0\r\
+    \n74,26,69.45,6,month-to-month,fiber,electronic_check,no,3,7.2,1\r\n69,69,40.57,5,month-to-month,none,bank_transfer,yes,1,231.49,0\r\
+    \n57,51,84.57,5,one-year,dsl,electronic_check,yes,2,423.53,0\r\n23,18,54.45,3,month-to-month,fiber,bank_transfer,yes,2,62.89,0\r\
+    \n45,24,73.53,8,two-year,fiber,credit_card,yes,5,459.98,1\r\n71,58,88.14,5,month-to-month,fiber,electronic_check,no,0,244.88,1\r\
+    \n49,54,98.12,7,one-year,dsl,credit_card,yes,3,87.79,1\r\n36,22,105.88,7,one-year,fiber,bank_transfer,no,4,257.85,1\r\
+    \n66,6,103.6,7,month-to-month,dsl,electronic_check,yes,4,113.18,0\r\n20,58,48.91,1,month-to-month,dsl,credit_card,no,3,433.32,0\r\
+    \n73,55,38.26,2,month-to-month,fiber,bank_transfer,yes,6,107.28,0\r\n38,38,51.83,4,two-year,dsl,credit_card,no,6,259.64,0\r\
+    \n21,36,115.38,2,month-to-month,dsl,electronic_check,no,5,433.71,1\r\n49,19,83.52,4,month-to-month,dsl,electronic_check,yes,5,210.04,1\r\
+    \n35,48,70.02,7,two-year,dsl,credit_card,no,2,293.07,0\r\n62,46,113.51,8,month-to-month,fiber,credit_card,no,3,112.83,1\r\
+    \n54,17,82.28,7,one-year,fiber,credit_card,no,6,175.15,0\r\n25,21,68.54,0,one-year,fiber,electronic_check,yes,3,105.15,0\r\
+    \n35,12,92.0,4,two-year,fiber,bank_transfer,yes,0,189.06,0\r\n32,55,92.1,1,month-to-month,dsl,bank_transfer,yes,0,110.64,1\r\
+    \n39,16,128.7,6,month-to-month,fiber,electronic_check,yes,5,70.43,1\r\n74,39,35.08,2,month-to-month,dsl,credit_card,no,5,496.51,1\r\
+    \n64,28,89.09,2,month-to-month,fiber,electronic_check,yes,3,309.96,1\r\n64,50,58.67,6,month-to-month,dsl,credit_card,yes,2,396.58,0\r\
+    \n36,4,113.27,4,month-to-month,dsl,credit_card,yes,1,261.29,0\r\n33,64,62.45,3,month-to-month,none,credit_card,yes,3,320.85,1\r\
+    \n42,54,60.2,2,two-year,fiber,electronic_check,yes,6,238.15,1\r\n21,51,75.73,8,one-year,fiber,bank_transfer,yes,6,210.64,1\r\
+    \n37,11,76.24,3,month-to-month,dsl,electronic_check,yes,6,81.91,1\r\n37,56,100.3,3,two-year,fiber,electronic_check,yes,0,126.02,0\r\
+    \n60,23,33.14,2,month-to-month,fiber,bank_transfer,no,5,10.62,1\r\n41,17,102.48,4,one-year,fiber,electronic_check,yes,5,443.78,1\r\
+    \n63,10,74.58,8,two-year,fiber,credit_card,no,2,32.44,0\r\n61,15,45.12,8,two-year,fiber,bank_transfer,yes,0,26.8,1\r\
+    \n72,5,80.82,6,month-to-month,dsl,credit_card,yes,1,164.29,1\r\n50,7,39.73,8,month-to-month,fiber,credit_card,no,0,477.27,1\r\
+    \n53,59,20.88,3,month-to-month,dsl,bank_transfer,yes,2,284.08,0\r\n67,26,100.57,8,month-to-month,none,credit_card,yes,6,399.01,1\r\
+    \n62,2,124.61,0,one-year,dsl,credit_card,yes,6,330.37,1\r\n49,8,126.98,2,month-to-month,fiber,electronic_check,yes,5,143.51,0\r\
+    \n47,11,83.88,8,month-to-month,dsl,credit_card,no,1,320.42,1\r\n36,34,113.6,6,month-to-month,fiber,credit_card,no,5,416.79,1\r\
+    \n67,14,37.1,2,month-to-month,dsl,cash,yes,3,235.7,1\r\n34,16,29.95,4,one-year,fiber,electronic_check,yes,6,353.83,0\r\
+    \n40,51,76.48,4,month-to-month,none,electronic_check,yes,2,410.94,1\r\n24,60,31.21,2,one-year,none,credit_card,no,0,10.92,0\r\
+    \n58,11,84.06,4,two-year,fiber,electronic_check,no,6,42.12,1\r\n72,43,33.48,7,one-year,dsl,bank_transfer,yes,0,88.15,0\r\
+    \n29,46,43.62,2,two-year,fiber,electronic_check,yes,2,143.53,0\r\n44,71,72.69,1,month-to-month,dsl,electronic_check,yes,2,194.59,0\r\
+    \n52,3,128.83,5,month-to-month,none,bank_transfer,yes,3,274.54,1\r\n38,29,23.22,4,month-to-month,fiber,electronic_check,yes,0,405.28,1\r\
+    \n33,31,49.32,0,month-to-month,dsl,electronic_check,yes,6,498.21,0\r\n72,23,39.37,5,month-to-month,dsl,electronic_check,yes,6,370.36,1\r\
+    \n27,25,112.04,7,month-to-month,fiber,credit_card,yes,4,157.98,1\r\n18,43,120.97,3,one-year,none,electronic_check,yes,6,69.59,1\r\
+    \n55,19,105.18,8,month-to-month,dsl,electronic_check,yes,6,185.62,1\r\n38,18,127.34,6,month-to-month,fiber,electronic_check,yes,6,321.44,0\r\
+    \n57,46,44.56,2,one-year,fiber,electronic_check,no,3,156.88,0\r\n43,5,40.03,5,month-to-month,dsl,cash,yes,6,483.93,0\r\
+    \n"
+registry:
+  model_name: customer-churn
+  alias: production
+algorithm_replacements: []
+validation:
+  enabled: false
+  strict: false
+  input_example: null

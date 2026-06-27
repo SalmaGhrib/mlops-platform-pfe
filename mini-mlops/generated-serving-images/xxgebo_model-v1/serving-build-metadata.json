@@ -1,0 +1,10 @@
+{
+  "registeredModelName": "xxgebo_model",
+  "modelVersion": "1",
+  "modelUri": "models:/xxgebo_model/1",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-xxgebo-model-v1:latest",
+  "requirementsHash": "9c6980a80418de8d3e3a4d3979020da0fa040033089f1f4c9f9384f0ced19766",
+  "createdAt": "2026-06-11T00:30:40.590272500",
+  "requirementsCount": 12
+}

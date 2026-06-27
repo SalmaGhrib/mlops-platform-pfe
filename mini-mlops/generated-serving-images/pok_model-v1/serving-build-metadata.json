@@ -1,0 +1,10 @@
+{
+  "registeredModelName": "pok_model",
+  "modelVersion": "1",
+  "modelUri": "models:/pok_model/1",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-pok-model-v1:latest",
+  "requirementsHash": "f46f7f68b4f61db2141fd317b245a69f3b3d36597e63006d98864c1d34bf46dc",
+  "createdAt": "2026-06-11T00:01:42.196101900",
+  "requirementsCount": 12
+}

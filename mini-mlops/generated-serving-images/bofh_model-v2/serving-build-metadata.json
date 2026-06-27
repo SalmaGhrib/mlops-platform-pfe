@@ -1,0 +1,12 @@
+{
+  "registeredModelName": "bofh_model",
+  "modelVersion": "2",
+  "modelUri": "models:/bofh_model/2",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-bofh-model-v2:latest",
+  "requirementsHash": "a7a6f0b981e5533f056dfd2e54e4d136994e8649cb802fec5ae0a50f665f6507",
+  "servingTemplateVersion": "2026-06-11-fastapi-mlflow-loader-v2",
+  "entrypoint": "uvicorn main:app --host 0.0.0.0 --port 8000",
+  "createdAt": "2026-06-25T13:44:36.150605200",
+  "requirementsCount": 13
+}

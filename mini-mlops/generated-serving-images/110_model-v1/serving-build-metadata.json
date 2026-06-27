@@ -1,0 +1,10 @@
+{
+  "registeredModelName": "110_model",
+  "modelVersion": "1",
+  "modelUri": "models:/110_model/1",
+  "dataType": "TEXT",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-110-model-v1:latest",
+  "requirementsHash": "bc5f0aafc8f4169f589f319447de948711943052111088f39af21908192d9ab1",
+  "createdAt": "2026-06-07T05:20:56.146085500",
+  "requirementsCount": 11
+}

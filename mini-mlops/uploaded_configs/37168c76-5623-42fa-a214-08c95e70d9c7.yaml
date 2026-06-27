@@ -1,0 +1,84 @@
+project_name: test-injection
+run:
+  name: test-xgb-run
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+model:
+  name: test-xgb
+  primary_metric: accuracy
+  direction: max
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: model_file.py
+  files:
+    model_file.py: "from sklearn.ensemble import RandomForestClassifier\r\nfrom sklearn.metrics\
+      \ import accuracy_score\r\nfrom sklearn.model_selection import train_test_split\r\
+      \nimport pandas as pd\r\nimport joblib\r\nfrom pathlib import Path\r\nimport\
+      \ os\r\n\r\ndf = pd.read_csv(os.environ[\"DATA_PATH\"])\r\n\r\nX = df.drop(\"\
+      target\", axis=1)\r\ny = df[\"target\"]\r\n\r\nX_train, X_test, y_train, y_test\
+      \ = train_test_split(\r\n    X, y, test_size=0.2, random_state=42\r\n)\r\n\r\
+      \nmodel = RandomForestClassifier(n_estimators=100, random_state=42)\r\nmodel.fit(X_train,\
+      \ y_train)\r\n\r\npreds = model.predict(X_test)\r\naccuracy = accuracy_score(y_test,\
+      \ preds)\r\n\r\noutput_dir = Path(os.environ[\"OUTPUT_DIR\"])\r\noutput_dir.mkdir(parents=True,\
+      \ exist_ok=True)\r\njoblib.dump(model, output_dir / \"model.pkl\")\r\n\r\nprint(f\"\
+      accuracy={accuracy}\")\r\nprint(\"MODEL_CLASS=\", model.__class__.__name__)"
+data:
+  source_type: inline
+  dataset_name: data.csv
+  filename: data.csv
+  content: 'feature1,feature2,feature3,target
+
+    1.0,2.0,3.0,0
+
+    1.2,2.1,3.3,0
+
+    1.4,2.2,3.4,0
+
+    2.0,1.0,0.5,1
+
+    2.2,1.1,0.7,1
+
+    2.4,1.2,0.9,1
+
+    3.0,3.5,1.0,0
+
+    3.2,3.6,1.1,0
+
+    4.0,0.5,2.0,1
+
+    4.2,0.6,2.2,1
+
+    5.0,2.5,1.5,0
+
+    5.2,2.7,1.7,0
+
+    6.0,1.0,3.0,1
+
+    6.2,1.2,3.2,1
+
+    7.0,3.0,2.0,0
+
+    7.2,3.2,2.2,0
+
+    8.0,1.5,4.0,1
+
+    8.2,1.7,4.2,1
+
+    9.0,3.5,2.5,0
+
+    9.2,3.7,2.7,0
+
+    '
+registry:
+  model_name: string
+  alias: production
+algorithm_replacements:
+- var_name: model
+  original_class: RandomForestClassifier
+  new_class: XGBClassifier
+  new_lib: xgboost
+validation:
+  enabled: false
+  strict: false
+  input_example: null

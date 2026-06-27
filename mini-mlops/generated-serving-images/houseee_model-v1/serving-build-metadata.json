@@ -1,0 +1,12 @@
+{
+  "registeredModelName": "houseee_model",
+  "modelVersion": "1",
+  "modelUri": "models:/houseee_model/1",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-houseee-model-v1:latest",
+  "requirementsHash": "3de958ee39e94341aae423646b8f1f0a0459a9ae476a475346cdeac6f88102fa",
+  "servingTemplateVersion": "2026-06-11-fastapi-mlflow-loader-v2",
+  "entrypoint": "uvicorn main:app --host 0.0.0.0 --port 8000",
+  "createdAt": "2026-06-14T21:03:20.993508200",
+  "requirementsCount": 15
+}

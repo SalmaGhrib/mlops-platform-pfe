@@ -1,0 +1,54 @@
+project_name: mdeo
+project_type: classification
+task:
+  type: classification
+run:
+  name: mdeo_run_20260531_225311_20260531_230129_973_dfa82048
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+  experiment_name: mdeo
+model:
+  name: mdeo_model
+  primary_metric: loss
+  direction: min
+  project_type: classification
+  task_type: classification
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: d19e705a-3155-4ee9-9e2a-8c6d862accae.py
+  files:
+    d19e705a-3155-4ee9-9e2a-8c6d862accae.py: "import torch\nimport torch.nn as nn\n\
+      import torch.optim as optim\nfrom torchvision import datasets, transforms\n\n\
+      # MNIST is downloaded automatically by torchvision.\ntransform = transforms.Compose([\n\
+      \    transforms.ToTensor(),\n    transforms.Normalize((0.1307,), (0.3081,))\n\
+      ])\n\ntrain_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)\n\
+      train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True)\n\
+      \nclass SimpleNet(nn.Module):\n    def __init__(self):\n        super(SimpleNet,\
+      \ self).__init__()\n        self.fc1 = nn.Linear(28 * 28, 128)\n        self.fc2\
+      \ = nn.Linear(128, 10)\n\n    def forward(self, x):\n        x = x.view(-1,\
+      \ 28 * 28)\n        x = torch.relu(self.fc1(x))\n        x = self.fc2(x)\n \
+      \       return x\n\nmodel = SimpleNet()\ncriterion = nn.CrossEntropyLoss()\n\
+      optimizer = optim.SGD(model.parameters(), lr=0.01)\n\nprint(\"Début de l'entraînement\
+      \ du réseau de neurones...\", flush=True)\n\nfor epoch in range(1, 4):\n   \
+      \ model.train()\n    for batch_idx, (data, target) in enumerate(train_loader):\n\
+      \        optimizer.zero_grad()\n        output = model(data)\n        loss =\
+      \ criterion(output, target)\n        loss.backward()\n        optimizer.step()\n\
+      \n    # Format volontairement simple pour que la plateforme détecte la métrique.\n\
+      \    print(f\"loss={loss.item():.4f}\", flush=True)\n    print(f\"Époque {epoch}\
+      \ terminée. Loss: {loss.item():.4f}\", flush=True)\n\ntorch.save(model.state_dict(),\
+      \ \"model_vision.pt\")\nprint(\"Modèle de vision sauvegardé sous 'model_vision.pt'\"\
+      , flush=True)\n"
+data:
+  source_type: none
+  dataset_name: internal-data
+  filename: null
+  content: null
+registry:
+  model_name: mdeo
+  alias: production
+algorithm_replacements: []
+validation:
+  enabled: false
+  strict: false
+  input_example: null

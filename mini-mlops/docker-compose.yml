@@ -1,0 +1,35 @@
+services:
+  mlflow:
+    image: python:3.10-slim
+    container_name: mlflow-server
+    working_dir: /app
+    restart: unless-stopped
+    volumes:
+      - .:/app
+      - ./shared/mlruns:/app/shared/mlruns
+      - ./shared/mlartifacts:/app/shared/mlartifacts
+    command: >
+      sh -c "pip install --no-cache-dir mlflow &&
+      mlflow server
+      --backend-store-uri sqlite:////app/shared/mlruns/mlflow.db
+      --artifacts-destination /app/shared/mlartifacts
+      --serve-artifacts
+      --host 0.0.0.0
+      --port 5000
+      --allowed-hosts mlflow,mlflow:5000,localhost,localhost:5000,127.0.0.1,127.0.0.1:5000"
+    ports:
+      - "5000:5000"
+
+  fastapi:
+    build: .
+    container_name: fastapi-api
+    working_dir: /app
+    restart: unless-stopped
+    depends_on:
+      - mlflow
+    volumes:
+      - .:/app
+      - ./shared/mlruns:/app/shared/mlruns
+      - ./shared/mlartifacts:/app/shared/mlartifacts
+    ports:
+      - "8000:8000"

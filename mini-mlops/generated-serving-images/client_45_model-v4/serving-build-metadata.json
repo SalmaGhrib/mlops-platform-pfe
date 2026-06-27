@@ -1,0 +1,12 @@
+{
+  "registeredModelName": "client_45_model",
+  "modelVersion": "4",
+  "modelUri": "models:/client_45_model/4",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-client-45-model-v4:latest",
+  "requirementsHash": "63be3673dc2595164c6a302b246cdfc294129a5d64574d2dac1a4832bbeb00ee",
+  "servingTemplateVersion": "2026-06-11-fastapi-mlflow-loader-v2",
+  "entrypoint": "uvicorn main:app --host 0.0.0.0 --port 8000",
+  "createdAt": "2026-06-17T15:30:43.232394800",
+  "requirementsCount": 13
+}

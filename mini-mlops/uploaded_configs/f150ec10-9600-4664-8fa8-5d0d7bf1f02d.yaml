@@ -1,0 +1,163 @@
+project_name: nour
+run:
+  name: nour_run_20260522_2256
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+model:
+  name: nour_model
+  primary_metric: accuracy
+  direction: max
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: 46ae8b80-4955-431b-9268-feef5c6dc439.py
+  files:
+    46ae8b80-4955-431b-9268-feef5c6dc439.py: "import numpy as np\r\nimport joblib\r\
+      \nfrom imblearn.ensemble import EasyEnsembleClassifier\r\nfrom sklearn.calibration\
+      \ import CalibratedClassifierCV\r\nfrom sklearn.metrics import (\r\n    roc_auc_score,\r\
+      \n    average_precision_score,\r\n    precision_recall_curve,\r\n    precision_recall_fscore_support,\r\
+      \n)\r\n\r\n\r\nSEED = 42\r\n\r\n\r\nclass EasyEnsemblePDModel:\r\n    \"\"\"\
+      \r\n    Probability of Default (PD) model using EasyEnsembleClassifier.\r\n\r\
+      \n    Features:\r\n    - Handles highly imbalanced datasets\r\n    - Threshold\
+      \ tuning using validation data\r\n    - Probability calibration with Platt Scaling\r\
+      \n    - Save/load pipeline for production deployment\r\n    \"\"\"\r\n\r\n \
+      \   def __init__(self):\r\n        self.model = EasyEnsembleClassifier(\r\n\
+      \            n_estimators=20,\r\n            sampling_strategy='auto',\r\n \
+      \           random_state=SEED,\r\n            n_jobs=-1,\r\n        )\r\n\r\n\
+      \        self.calibrated_model = None\r\n        self.best_threshold = 0.5\r\
+      \n\r\n    # ------------------------------------------------------------------\r\
+      \n    # TRAINING\r\n    # ------------------------------------------------------------------\r\
+      \n    def train(self, X_train, y_train):\r\n        \"\"\"Train EasyEnsemble\
+      \ model.\"\"\"\r\n        print('Training EasyEnsembleClassifier...')\r\n  \
+      \      self.model.fit(X_train, y_train)\r\n        print('Training completed.')\r\
+      \n\r\n    # ------------------------------------------------------------------\r\
+      \n    # THRESHOLD TUNING\r\n    # ------------------------------------------------------------------\r\
+      \n    def tune_threshold(self, X_val, y_val):\r\n        \"\"\"\r\n        Tune\
+      \ classification threshold using validation set.\r\n        Optimizes F1-score.\r\
+      \n        \"\"\"\r\n\r\n        y_prob = self.model.predict_proba(X_val)[:,\
+      \ 1]\r\n\r\n        precision, recall, thresholds = precision_recall_curve(y_val,\
+      \ y_prob)\r\n\r\n        best_f1 = 0\r\n        best_threshold = 0.5\r\n\r\n\
+      \        for thr in thresholds:\r\n            y_pred = (y_prob >= thr).astype(int)\r\
+      \n\r\n            p, r, f1, _ = precision_recall_fscore_support(\r\n       \
+      \         y_val,\r\n                y_pred,\r\n                average='binary',\r\
+      \n                zero_division=0,\r\n            )\r\n\r\n            if f1\
+      \ > best_f1:\r\n                best_f1 = f1\r\n                best_threshold\
+      \ = thr\r\n\r\n        self.best_threshold = float(best_threshold)\r\n\r\n \
+      \       print(f'Best threshold found: {self.best_threshold:.4f}')\r\n      \
+      \  print(f'Best F1-score        : {best_f1:.4f}')\r\n\r\n        return self.best_threshold\r\
+      \n\r\n    # ------------------------------------------------------------------\r\
+      \n    # CALIBRATION\r\n    # ------------------------------------------------------------------\r\
+      \n    def calibrate(self, X_val, y_val):\r\n        \"\"\"\r\n        Apply\
+      \ Platt Scaling (sigmoid calibration).\r\n        Helps produce realistic PD\
+      \ probabilities.\r\n        \"\"\"\r\n\r\n        print('Calibrating probabilities\
+      \ using Platt Scaling...')\r\n\r\n        self.calibrated_model = CalibratedClassifierCV(\r\
+      \n            self.model,\r\n            method='sigmoid',\r\n            cv='prefit',\r\
+      \n        )\r\n\r\n        self.calibrated_model.fit(X_val, y_val)\r\n\r\n \
+      \       print('Calibration completed.')\r\n\r\n    # ------------------------------------------------------------------\r\
+      \n    # PREDICTION\r\n    # ------------------------------------------------------------------\r\
+      \n    def predict_proba(self, X, calibrated=True):\r\n        \"\"\"Return predicted\
+      \ probabilities.\"\"\"\r\n\r\n        if calibrated and self.calibrated_model\
+      \ is not None:\r\n            return self.calibrated_model.predict_proba(X)[:,\
+      \ 1]\r\n\r\n        return self.model.predict_proba(X)[:, 1]\r\n\r\n    def\
+      \ predict(self, X, threshold=None, calibrated=True):\r\n        \"\"\"Return\
+      \ binary predictions using tuned threshold.\"\"\"\r\n\r\n        if threshold\
+      \ is None:\r\n            threshold = self.best_threshold\r\n\r\n        probs\
+      \ = self.predict_proba(X, calibrated=calibrated)\r\n\r\n        return (probs\
+      \ >= threshold).astype(int)\r\n\r\n    # ------------------------------------------------------------------\r\
+      \n    # EVALUATION\r\n    # ------------------------------------------------------------------\r\
+      \n    def evaluate(self, X_test, y_test, calibrated=True):\r\n        \"\"\"\
+      Evaluate model performance.\"\"\"\r\n\r\n        y_prob = self.predict_proba(X_test,\
+      \ calibrated=calibrated)\r\n        y_pred = self.predict(\r\n            X_test,\r\
+      \n            threshold=self.best_threshold,\r\n            calibrated=calibrated,\r\
+      \n        )\r\n\r\n        precision, recall, f1, _ = precision_recall_fscore_support(\r\
+      \n            y_test,\r\n            y_pred,\r\n            average='binary',\r\
+      \n            zero_division=0,\r\n        )\r\n\r\n        auc = roc_auc_score(y_test,\
+      \ y_prob)\r\n        pr_auc = average_precision_score(y_test, y_prob)\r\n  \
+      \      gini = 2 * auc - 1\r\n\r\n        results = {\r\n            'AUC': round(auc,\
+      \ 4),\r\n            'Gini': round(gini, 4),\r\n            'PR-AUC': round(pr_auc,\
+      \ 4),\r\n            'Recall': round(recall, 4),\r\n            'Precision':\
+      \ round(precision, 4),\r\n            'F1': round(f1, 4),\r\n            'Threshold':\
+      \ round(self.best_threshold, 4),\r\n        }\r\n\r\n        print('\\n=== Model\
+      \ Evaluation ===')\r\n        for k, v in results.items():\r\n            print(f'{k:<12}:\
+      \ {v}')\r\n\r\n        return results\r\n\r\n    # ------------------------------------------------------------------\r\
+      \n    # SAVE / LOAD\r\n    # ------------------------------------------------------------------\r\
+      \n    def save(self, path='easy_ensemble_model.joblib'):\r\n        \"\"\"Save\
+      \ trained model.\"\"\"\r\n\r\n        payload = {\r\n            'model': self.model,\r\
+      \n            'calibrated_model': self.calibrated_model,\r\n            'best_threshold':\
+      \ self.best_threshold,\r\n        }\r\n\r\n        joblib.dump(payload, path)\r\
+      \n        print(f'Model saved to: {path}')\r\n\r\n    def load(self, path='easy_ensemble_model.joblib'):\r\
+      \n        \"\"\"Load trained model.\"\"\"\r\n\r\n        payload = joblib.load(path)\r\
+      \n\r\n        self.model = payload['model']\r\n        self.calibrated_model\
+      \ = payload['calibrated_model']\r\n        self.best_threshold = payload['best_threshold']\r\
+      \n\r\n        print(f'Model loaded from: {path}')\r\n\r\n\r\n# ----------------------------------------------------------------------\r\
+      \n# EXAMPLE USAGE\r\n# ----------------------------------------------------------------------\r\
+      \nif __name__ == '__main__':\r\n    \"\"\"\r\n    Example workflow:\r\n\r\n\
+      \    model = EasyEnsemblePDModel()\r\n\r\n    model.train(X_train, y_train)\r\
+      \n\r\n    model.tune_threshold(X_val, y_val)\r\n\r\n    model.calibrate(X_val,\
+      \ y_val)\r\n\r\n    model.evaluate(X_test, y_test)\r\n\r\n    model.save('easy_ensemble_credit_model.joblib')\r\
+      \n    \"\"\"\r\n\r\n    print('EasyEnsemble PD model module ready.')\r\n"
+data:
+  source_type: inline
+  dataset_name: b782c754-0b1d-4630-b426-edda50fa1bfc.py
+  filename: b782c754-0b1d-4630-b426-edda50fa1bfc.py
+  content: "import os\nimport sys\nfrom pathlib import Path\n\nimport joblib\nimport\
+    \ mlflow\nimport pandas as pd\n\nfrom imblearn.ensemble import EasyEnsembleClassifier\n\
+    from sklearn.calibration import CalibratedClassifierCV\nfrom sklearn.metrics import\
+    \ (\n    roc_auc_score,\n    average_precision_score,\n    precision_recall_curve,\n\
+    \    precision_recall_fscore_support,\n    accuracy_score,\n)\nfrom sklearn.model_selection\
+    \ import train_test_split\n\n\nTARGET_COLUMN = \"default\"\nSEED = 42\n\n\ndef\
+    \ find_dataset_path() -> Path:\n    args = sys.argv[1:]\n\n    if \"--data\" in\
+    \ args:\n        index = args.index(\"--data\")\n        if index + 1 < len(args):\n\
+    \            candidate = Path(args[index + 1])\n            if candidate.exists():\n\
+    \                return candidate\n\n    env_path = os.getenv(\"DATASET_PATH\"\
+    )\n    if env_path and Path(env_path).exists():\n        return Path(env_path)\n\
+    \n    for directory in [Path.cwd(), Path(\"/tmp\"), Path(\"/shared\"), Path(\"\
+    /app\")]:\n        if directory.exists():\n            csv_files = sorted(directory.rglob(\"\
+    *.csv\"))\n            if csv_files:\n                return csv_files[0]\n\n\
+    \    raise FileNotFoundError(\"No CSV dataset found. Please upload credit_default_easyensemble_dataset.csv.\"\
+    )\n\n\ndef main():\n    dataset_path = find_dataset_path()\n    print(f\"dataset_path={dataset_path}\"\
+    )\n\n    df = pd.read_csv(dataset_path)\n\n    if TARGET_COLUMN not in df.columns:\n\
+    \        raise ValueError(\n            f\"Target column '{TARGET_COLUMN}' not\
+    \ found. Available columns: {list(df.columns)}\"\n        )\n\n    X = df.drop(columns=[TARGET_COLUMN])\n\
+    \    y = df[TARGET_COLUMN]\n\n    X_train, X_temp, y_train, y_temp = train_test_split(\n\
+    \        X, y, test_size=0.35, random_state=SEED, stratify=y\n    )\n\n    X_val,\
+    \ X_test, y_val, y_test = train_test_split(\n        X_temp, y_temp, test_size=0.50,\
+    \ random_state=SEED, stratify=y_temp\n    )\n\n    model = EasyEnsembleClassifier(\n\
+    \        n_estimators=20,\n        sampling_strategy=\"auto\",\n        random_state=SEED,\n\
+    \        n_jobs=-1,\n    )\n\n    model.fit(X_train, y_train)\n\n    y_val_prob\
+    \ = model.predict_proba(X_val)[:, 1]\n    precision_curve, recall_curve, thresholds\
+    \ = precision_recall_curve(y_val, y_val_prob)\n\n    best_f1 = 0.0\n    best_threshold\
+    \ = 0.5\n\n    for threshold in thresholds:\n        y_val_pred = (y_val_prob\
+    \ >= threshold).astype(int)\n        p, r, f1, _ = precision_recall_fscore_support(\n\
+    \            y_val, y_val_pred, average=\"binary\", zero_division=0\n        )\n\
+    \        if f1 > best_f1:\n            best_f1 = float(f1)\n            best_threshold\
+    \ = float(threshold)\n\n    calibrated_model = CalibratedClassifierCV(model, method=\"\
+    sigmoid\", cv=\"prefit\")\n    calibrated_model.fit(X_val, y_val)\n\n    y_prob\
+    \ = calibrated_model.predict_proba(X_test)[:, 1]\n    y_pred = (y_prob >= best_threshold).astype(int)\n\
+    \n    accuracy = float(accuracy_score(y_test, y_pred))\n    precision, recall,\
+    \ f1_score_value, _ = precision_recall_fscore_support(\n        y_test, y_pred,\
+    \ average=\"binary\", zero_division=0\n    )\n\n    auc = float(roc_auc_score(y_test,\
+    \ y_prob))\n    pr_auc = float(average_precision_score(y_test, y_prob))\n    gini\
+    \ = float(2 * auc - 1)\n\n    output_dir = Path(\"outputs\")\n    output_dir.mkdir(parents=True,\
+    \ exist_ok=True)\n\n    model_path = output_dir / \"easy_ensemble_credit_model.joblib\"\
+    \n    payload = {\n        \"model\": model,\n        \"calibrated_model\": calibrated_model,\n\
+    \        \"best_threshold\": best_threshold,\n    }\n    joblib.dump(payload,\
+    \ model_path)\n\n    if mlflow.active_run() is not None:\n        mlflow.log_metric(\"\
+    accuracy\", accuracy)\n        mlflow.log_metric(\"precision\", float(precision))\n\
+    \        mlflow.log_metric(\"recall\", float(recall))\n        mlflow.log_metric(\"\
+    f1_score\", float(f1_score_value))\n        mlflow.log_metric(\"auc\", auc)\n\
+    \        mlflow.log_metric(\"pr_auc\", pr_auc)\n        mlflow.log_metric(\"gini\"\
+    , gini)\n        mlflow.log_metric(\"threshold\", best_threshold)\n        mlflow.log_artifact(str(model_path))\n\
+    \n    print(f\"accuracy={accuracy}\")\n    print(f\"precision={float(precision)}\"\
+    )\n    print(f\"recall={float(recall)}\")\n    print(f\"f1_score={float(f1_score_value)}\"\
+    )\n    print(f\"auc={auc}\")\n    print(f\"pr_auc={pr_auc}\")\n    print(f\"gini={gini}\"\
+    )\n    print(f\"threshold={best_threshold}\")\n\n    prediction_example = int(y_pred[0])\n\
+    \    print(f\"prediction_example={prediction_example}\")\n    print(\"return_code=0\"\
+    )\n\n\nif __name__ == \"__main__\":\n    main()\n"
+registry:
+  model_name: nour
+  alias: production
+validation:
+  enabled: false
+  strict: false
+  input_example: null

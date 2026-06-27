@@ -1,0 +1,11 @@
+mlruns/
+artifacts/
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+__pycache__/
+.venv/
+venv/
+.env

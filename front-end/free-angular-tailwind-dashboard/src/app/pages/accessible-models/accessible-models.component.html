@@ -1,0 +1,142 @@
+<div class="accessible-models-page">
+  <div class="page-container">
+    <div class="page-header">
+      <div>
+        <span class="header-pill">Serving & API Access</span>
+        <h1>Accessible Models</h1>
+        <p>
+          Consultez les modèles que vous êtes autorisé à utiliser :
+          modèles publics, partagés avec vous, ou vos modèles privés.
+        </p>
+      </div>
+
+      <button type="button" class="refresh-btn" (click)="loadAccessibleModels()">
+        Actualiser
+      </button>
+    </div>
+
+    <div *ngIf="successMessage" class="success-message">
+      {{ successMessage }}
+    </div>
+
+    <div *ngIf="errorMessage" class="error-message">
+      {{ errorMessage }}
+    </div>
+
+    <div *ngIf="loading" class="state-box">
+      Chargement des modèles accessibles...
+    </div>
+
+    <div *ngIf="!loading && models.length === 0 && !errorMessage" class="empty-box">
+      <h3>Aucun modèle accessible</h3>
+      <p>
+        Aucun modèle public ou partagé avec vous n’est disponible pour le moment.
+      </p>
+    </div>
+
+    <div *ngIf="!loading && models.length > 0" class="models-list">
+      <div class="model-card" *ngFor="let model of models">
+        <div class="model-card-header">
+          <div>
+            <h2>{{ model.registeredModelName }}</h2>
+            <p>
+              Projet :
+              <strong>{{ getProjectLabel(model) }}</strong>
+              —
+              Version :
+              <strong>v{{ model.modelVersion }}</strong>
+            </p>
+          </div>
+
+          <div class="badges">
+            <span class="badge badge-deployed">
+              {{ model.deploymentStatus }}
+            </span>
+
+            <span class="badge" [ngClass]="getVisibilityClass(model)">
+              {{ getVisibilityLabel(model) }}
+            </span>
+          </div>
+        </div>
+
+        <div class="info-grid">
+          <div class="info-box">
+            <span>Statut</span>
+            <strong>{{ model.deploymentStatus }}</strong>
+          </div>
+
+          <div class="info-box">
+            <span>Version</span>
+            <strong>v{{ model.modelVersion }}</strong>
+          </div>
+
+          <div class="info-box">
+            <span>Accès</span>
+            <strong>{{ getVisibilityLabel(model) }}</strong>
+          </div>
+
+          <div class="info-box">
+            <span>API</span>
+            <strong>{{ model.apiEnabled ? 'Activée' : 'Non activée' }}</strong>
+          </div>
+        </div>
+
+        <div class="description-box">
+          {{ getAccessDescription(model) }}
+        </div>
+
+        <div class="endpoint-section">
+          <label>Endpoint externe</label>
+
+          <div class="copy-row">
+            <code>POST {{ getExternalEndpoint(model) }}</code>
+
+            <button
+              type="button"
+              (click)="copyToClipboard(getExternalEndpoint(model), 'Endpoint externe')"
+            >
+              Copier
+            </button>
+          </div>
+        </div>
+
+        <div class="endpoint-section">
+          <label>Clé API</label>
+
+          <div class="copy-row">
+            <code>X-API-KEY: {{ maskApiKey(model.apiKey) }}</code>
+
+            <button
+              type="button"
+              [disabled]="!model.apiKey"
+              (click)="copyToClipboard(model.apiKey, 'Clé API')"
+            >
+              Copier
+            </button>
+          </div>
+        </div>
+
+        <div class="endpoint-section">
+          <label>Endpoint interne Kubernetes</label>
+
+          <div class="copy-row">
+            <code>{{ model.predictionEndpoint }}</code>
+
+            <button
+              type="button"
+              (click)="copyToClipboard(model.predictionEndpoint, 'Endpoint interne')"
+            >
+              Copier
+            </button>
+          </div>
+        </div>
+
+        <details class="curl-box">
+          <summary>Voir exemple curl</summary>
+
+          <pre>{{ buildCurlExample(model) }}</pre>
+        </details>
+      </div>
+    </div>
+  </div>
+</div>

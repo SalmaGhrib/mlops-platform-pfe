@@ -1,0 +1,89 @@
+project_name: 8520fghj
+project_type: classification
+task:
+  type: classification
+run:
+  name: 8520fghj_run_20260602_001130_20260602_001143_843_56484102
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+  experiment_name: 8520fghj
+model:
+  name: 8520fghj_model
+  primary_metric: loss
+  direction: min
+  project_type: classification
+  task_type: classification
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: e427fc8b-8fd6-48de-aacd-1cb1839dc3a0.py
+  files:
+    e427fc8b-8fd6-48de-aacd-1cb1839dc3a0.py: "import os\r\nimport json\r\nimport torch\r\
+      \nimport torch.nn as nn\r\nimport torch.optim as optim\r\nfrom torchvision import\
+      \ datasets, transforms\r\n\r\n\r\n# =========================\r\n# Configuration\r\
+      \n# =========================\r\n\r\nOUTPUT_DIR = os.getenv(\"OUTPUT_DIR\",\
+      \ \"outputs\")\r\nos.makedirs(OUTPUT_DIR, exist_ok=True)\r\n\r\nMODEL_PATH =\
+      \ os.path.join(OUTPUT_DIR, \"model.pt\")\r\nMETRICS_PATH = os.path.join(OUTPUT_DIR,\
+      \ \"metrics.json\")\r\n\r\ntorch.manual_seed(42)\r\n\r\n\r\n# =========================\r\
+      \n# Dataset MNIST\r\n# =========================\r\n\r\ntransform = transforms.Compose([\r\
+      \n    transforms.ToTensor(),\r\n    transforms.Normalize((0.1307,), (0.3081,))\r\
+      \n])\r\n\r\ntrain_dataset = datasets.MNIST(\r\n    \"./data\",\r\n    train=True,\r\
+      \n    download=True,\r\n    transform=transform\r\n)\r\n\r\ntest_dataset = datasets.MNIST(\r\
+      \n    \"./data\",\r\n    train=False,\r\n    download=True,\r\n    transform=transform\r\
+      \n)\r\n\r\ntrain_loader = torch.utils.data.DataLoader(\r\n    train_dataset,\r\
+      \n    batch_size=64,\r\n    shuffle=True\r\n)\r\n\r\ntest_loader = torch.utils.data.DataLoader(\r\
+      \n    test_dataset,\r\n    batch_size=1000,\r\n    shuffle=False\r\n)\r\n\r\n\
+      \r\n# =========================\r\n# Modèle PyTorch\r\n# =========================\r\
+      \n\r\nclass SimpleNet(nn.Module):\r\n    def __init__(self):\r\n        super(SimpleNet,\
+      \ self).__init__()\r\n        self.fc1 = nn.Linear(28 * 28, 128)\r\n       \
+      \ self.fc2 = nn.Linear(128, 10)\r\n\r\n    def forward(self, x):\r\n       \
+      \ x = x.view(-1, 28 * 28)\r\n        x = torch.relu(self.fc1(x))\r\n       \
+      \ x = self.fc2(x)\r\n        return x\r\n\r\n\r\nmodel = SimpleNet()\r\ncriterion\
+      \ = nn.CrossEntropyLoss()\r\noptimizer = optim.SGD(model.parameters(), lr=0.01)\r\
+      \n\r\n\r\n# =========================\r\n# Entraînement\r\n# =========================\r\
+      \n\r\nprint(\"Début de l'entraînement du réseau de neurones...\", flush=True)\r\
+      \n\r\nlast_train_loss = 0.0\r\n\r\nfor epoch in range(1, 4):\r\n    model.train()\r\
+      \n    total_loss = 0.0\r\n    batch_count = 0\r\n\r\n    for batch_idx, (data,\
+      \ target) in enumerate(train_loader):\r\n        optimizer.zero_grad()\r\n\r\
+      \n        output = model(data)\r\n        loss = criterion(output, target)\r\
+      \n\r\n        loss.backward()\r\n        optimizer.step()\r\n\r\n        total_loss\
+      \ += loss.item()\r\n        batch_count += 1\r\n        last_train_loss = loss.item()\r\
+      \n\r\n    avg_train_loss = total_loss / max(batch_count, 1)\r\n\r\n    print(f\"\
+      epoch={epoch}\", flush=True)\r\n    print(f\"loss={avg_train_loss:.6f}\", flush=True)\r\
+      \n    print(f\"train_loss={avg_train_loss:.6f}\", flush=True)\r\n    print(f\"\
+      Époque {epoch} terminée. Loss: {avg_train_loss:.6f}\", flush=True)\r\n\r\n\r\
+      \n# =========================\r\n# Évaluation\r\n# =========================\r\
+      \n\r\nmodel.eval()\r\n\r\ncorrect = 0\r\ntotal = 0\r\ntest_loss = 0.0\r\n\r\n\
+      with torch.no_grad():\r\n    for data, target in test_loader:\r\n        output\
+      \ = model(data)\r\n        loss = criterion(output, target)\r\n\r\n        test_loss\
+      \ += loss.item()\r\n\r\n        predictions = output.argmax(dim=1)\r\n     \
+      \   correct += (predictions == target).sum().item()\r\n        total += target.size(0)\r\
+      \n\r\naccuracy = correct / total if total > 0 else 0.0\r\navg_test_loss = test_loss\
+      \ / max(len(test_loader), 1)\r\n\r\nprint(f\"accuracy={accuracy:.6f}\", flush=True)\r\
+      \nprint(f\"val_accuracy={accuracy:.6f}\", flush=True)\r\nprint(f\"val_loss={avg_test_loss:.6f}\"\
+      , flush=True)\r\n\r\n\r\n# =========================\r\n# Sauvegarde TorchScript\r\
+      \n# =========================\r\n# IMPORTANT :\r\n# On ne sauvegarde pas model.state_dict().\r\
+      \n# On sauvegarde un modèle exécutable avec torch.jit.trace().\r\n# Comme ça,\
+      \ MLflow/FastAPI peut faire : model(input_tensor)\r\n\r\nmodel.eval()\r\n\r\n\
+      example_input = torch.randn(1, 1, 28, 28)\r\n\r\ntraced_model = torch.jit.trace(model,\
+      \ example_input)\r\n\r\ntraced_model.save(MODEL_PATH)\r\n\r\nprint(f\"model_saved={MODEL_PATH}\"\
+      , flush=True)\r\nprint(f\"Modèle TorchScript sauvegardé sous : {MODEL_PATH}\"\
+      , flush=True)\r\n\r\n\r\n# =========================\r\n# Fichier metrics.json\r\
+      \n# =========================\r\n\r\nmetrics = {\r\n    \"accuracy\": float(accuracy),\r\
+      \n    \"val_accuracy\": float(accuracy),\r\n    \"loss\": float(avg_test_loss),\r\
+      \n    \"val_loss\": float(avg_test_loss),\r\n    \"train_loss\": float(last_train_loss),\r\
+      \n}\r\n\r\nwith open(METRICS_PATH, \"w\", encoding=\"utf-8\") as f:\r\n    json.dump(metrics,\
+      \ f, indent=2)\r\n\r\nprint(f\"metrics_saved={METRICS_PATH}\", flush=True)"
+data:
+  source_type: none
+  dataset_name: internal-data
+  filename: null
+  content: null
+registry:
+  model_name: 8520fghj_model
+  alias: production
+algorithm_replacements: []
+validation:
+  enabled: false
+  strict: false
+  input_example: null

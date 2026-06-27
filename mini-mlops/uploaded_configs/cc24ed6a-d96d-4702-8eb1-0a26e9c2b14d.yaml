@@ -1,0 +1,111 @@
+project_name: anoe
+project_type: classification
+task:
+  type: classification
+run:
+  name: anoe_run_20260601_190638_20260601_190645_521_30f65295
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+  experiment_name: anoe
+model:
+  name: anoe_model
+  primary_metric: loss
+  direction: min
+  project_type: classification
+  task_type: classification
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: 36e36466-a79d-475a-a175-32de48d16fa9.py
+  files:
+    36e36466-a79d-475a-a175-32de48d16fa9.py: "\"\"\"\ntrain_mnist_pixels_fixed.py\n\
+      \nScript de test pour Mini-MLOps.\nObjectif :\n- entraîner un petit modèle PyTorch\
+      \ compatible MNIST\n- sauvegarder un modèle TorchScript dans outputs/model.pt\n\
+      - utiliser une convention de prédiction simple :\n    {\"pixels\": [784 valeurs\
+      \ numériques]}\n\nImportant :\n- Le modèle attend un vecteur de 784 pixels.\n\
+      - Le runner / wrapper MLflow doit convertir \"pixels\" vers un tensor shape\
+      \ (1, 784) ou (1, 1, 28, 28).\n\"\"\"\n\nfrom pathlib import Path\nimport json\n\
+      import time\n\nimport numpy as np\nimport torch\nimport torch.nn as nn\nimport\
+      \ torch.optim as optim\nfrom torch.utils.data import Subset\nfrom torchvision\
+      \ import datasets, transforms\n\n\nOUTPUT_DIR = Path(\"outputs\")\nOUTPUT_DIR.mkdir(parents=True,\
+      \ exist_ok=True)\n\nMODEL_PATH = OUTPUT_DIR / \"model.pt\"\nMETADATA_PATH =\
+      \ OUTPUT_DIR / \"model_metadata.json\"\n\n\nclass SimpleNet(nn.Module):\n  \
+      \  def __init__(self):\n        super().__init__()\n        self.net = nn.Sequential(\n\
+      \            nn.Flatten(),\n            nn.Linear(28 * 28, 128),\n         \
+      \   nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(128, 10),\n\
+      \        )\n\n    def forward(self, x):\n        return self.net(x)\n\n\ndef\
+      \ load_data():\n    transform = transforms.Compose([\n        transforms.ToTensor(),\n\
+      \    ])\n\n    try:\n        train_dataset = datasets.MNIST(\n            root=\"\
+      ./data\",\n            train=True,\n            download=True,\n           \
+      \ transform=transform,\n        )\n\n        test_dataset = datasets.MNIST(\n\
+      \            root=\"./data\",\n            train=False,\n            download=True,\n\
+      \            transform=transform,\n        )\n\n        train_dataset = Subset(train_dataset,\
+      \ list(range(min(3000, len(train_dataset)))))\n        test_dataset = Subset(test_dataset,\
+      \ list(range(min(800, len(test_dataset)))))\n\n        return train_dataset,\
+      \ test_dataset\n\n    except Exception as exc:\n        print(f\"[WARNING] MNIST\
+      \ download/load failed: {exc}\")\n        print(\"[WARNING] Falling back to\
+      \ FakeData for pipeline validation.\")\n\n        train_dataset = datasets.FakeData(\n\
+      \            size=3000,\n            image_size=(1, 28, 28),\n            num_classes=10,\n\
+      \            transform=transform,\n        )\n\n        test_dataset = datasets.FakeData(\n\
+      \            size=800,\n            image_size=(1, 28, 28),\n            num_classes=10,\n\
+      \            transform=transform,\n        )\n\n        return train_dataset,\
+      \ test_dataset\n\n\ndef evaluate(model, loader, criterion, device):\n    model.eval()\n\
+      \n    total_loss = 0.0\n    total_correct = 0\n    total_samples = 0\n\n   \
+      \ with torch.no_grad():\n        for x, y in loader:\n            x = x.to(device)\n\
+      \            y = y.to(device)\n\n            logits = model(x)\n           \
+      \ loss = criterion(logits, y)\n\n            preds = torch.argmax(logits, dim=1)\n\
+      \            total_correct += (preds == y).sum().item()\n            total_loss\
+      \ += loss.item() * x.size(0)\n            total_samples += x.size(0)\n\n   \
+      \ avg_loss = total_loss / max(total_samples, 1)\n    accuracy = total_correct\
+      \ / max(total_samples, 1)\n\n    return avg_loss, accuracy\n\n\ndef main():\n\
+      \    start = time.time()\n\n    torch.manual_seed(42)\n    np.random.seed(42)\n\
+      \n    device = torch.device(\"cpu\")\n\n    train_dataset, test_dataset = load_data()\n\
+      \n    train_loader = torch.utils.data.DataLoader(\n        train_dataset,\n\
+      \        batch_size=128,\n        shuffle=True,\n        num_workers=0,\n  \
+      \  )\n\n    test_loader = torch.utils.data.DataLoader(\n        test_dataset,\n\
+      \        batch_size=256,\n        shuffle=False,\n        num_workers=0,\n \
+      \   )\n\n    model = SimpleNet().to(device)\n    criterion = nn.CrossEntropyLoss()\n\
+      \    optimizer = optim.Adam(model.parameters(), lr=0.001)\n\n    model.train()\n\
+      \n    epochs = 2\n\n    for epoch in range(epochs):\n        running_loss =\
+      \ 0.0\n        total_batches = 0\n\n        for x, y in train_loader:\n    \
+      \        x = x.to(device)\n            y = y.to(device)\n\n            optimizer.zero_grad()\n\
+      \            logits = model(x)\n            loss = criterion(logits, y)\n  \
+      \          loss.backward()\n            optimizer.step()\n\n            running_loss\
+      \ += loss.item()\n            total_batches += 1\n\n        epoch_loss = running_loss\
+      \ / max(total_batches, 1)\n        print(f\"epoch={epoch + 1}\")\n        print(f\"\
+      train_loss={epoch_loss:.6f}\")\n\n    test_loss, test_accuracy = evaluate(model,\
+      \ test_loader, criterion, device)\n\n    print(f\"loss={test_loss:.6f}\")\n\
+      \    print(f\"accuracy={test_accuracy:.6f}\")\n    print(f\"val_loss={test_loss:.6f}\"\
+      )\n    print(f\"val_accuracy={test_accuracy:.6f}\")\n\n    model.eval()\n\n\
+      \    example_input = torch.zeros(1, 1, 28, 28, dtype=torch.float32)\n    scripted_model\
+      \ = torch.jit.trace(model, example_input)\n    scripted_model.save(str(MODEL_PATH))\n\
+      \n    metadata = {\n        \"model_file\": str(MODEL_PATH),\n        \"model_format\"\
+      : \"torchscript\",\n        \"framework\": \"pytorch\",\n        \"task\": \"\
+      mnist_digit_classification\",\n        \"input_contract\": {\n            \"\
+      json_field\": \"pixels\",\n            \"description\": \"Liste de 784 valeurs\
+      \ numériques représentant une image 28x28.\",\n            \"accepted_shape\"\
+      : [784],\n            \"tensor_shape\": [1, 1, 28, 28],\n            \"dtype\"\
+      : \"float32\",\n            \"value_range\": \"0..1 recommended\",\n       \
+      \ },\n        \"output_contract\": {\n            \"prediction_field\": \"predicted_digit\"\
+      ,\n            \"classes\": list(range(10)),\n        },\n        \"metrics\"\
+      : {\n            \"loss\": float(test_loss),\n            \"accuracy\": float(test_accuracy),\n\
+      \            \"val_loss\": float(test_loss),\n            \"val_accuracy\":\
+      \ float(test_accuracy),\n        },\n        \"prediction_example\": {\n   \
+      \         \"pixels\": [0.0] * 784\n        }\n    }\n\n    METADATA_PATH.write_text(json.dumps(metadata,\
+      \ indent=2), encoding=\"utf-8\")\n\n    duration = time.time() - start\n\n \
+      \   print(f\"model_saved={MODEL_PATH}\")\n    print(f\"metadata_saved={METADATA_PATH}\"\
+      )\n    print(f\"duration_seconds={duration:.3f}\")\n\n\nif __name__ == \"__main__\"\
+      :\n    main()\n"
+data:
+  source_type: none
+  dataset_name: internal-data
+  filename: null
+  content: null
+registry:
+  model_name: anoe
+  alias: production
+algorithm_replacements: []
+validation:
+  enabled: false
+  strict: false
+  input_example: null

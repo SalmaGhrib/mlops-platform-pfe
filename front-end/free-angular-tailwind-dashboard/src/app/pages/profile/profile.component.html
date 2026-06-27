@@ -1,0 +1,495 @@
+<app-page-breadcrumb pageTitle="Mon Profil" />
+
+@if (loading) {
+  <div class="mb-6 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300">
+    Chargement du profil...
+  </div>
+}
+
+@if (errorMessage) {
+  <div class="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+    {{ errorMessage }}
+  </div>
+}
+
+<div class="space-y-6">
+  <!-- Profile Summary -->
+  <div class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
+    <div class="mb-6 flex items-center justify-between">
+      <h3 class="text-lg font-semibold text-gray-800 dark:text-white/90">
+        Résumé du Profil
+      </h3>
+
+      <button
+        type="button"
+        (click)="editProfile()"
+        class="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03]"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+          />
+        </svg>
+        Modifier
+      </button>
+    </div>
+
+    <div class="flex flex-col items-center gap-6 lg:flex-row lg:items-start">
+      <!-- Avatar -->
+      <div class="flex-shrink-0">
+        <div class="relative">
+          <div class="h-24 w-24 overflow-hidden rounded-full border-4 border-gray-200 dark:border-gray-700">
+            <img [src]="user.avatar" alt="Avatar" class="h-full w-full object-cover" />
+          </div>
+
+          <div
+            class="absolute -bottom-1 -right-1 h-6 w-6 rounded-full border-2 border-white dark:border-gray-800"
+            [ngClass]="user.accountStatus === 'ACTIVE' ? 'bg-green-500' : 'bg-gray-400'"
+          ></div>
+        </div>
+      </div>
+
+      <!-- Profile Info -->
+      <div class="flex-1 text-center lg:text-left">
+        <h4 class="text-xl font-semibold text-gray-900 dark:text-white">
+          {{ user.firstName }} {{ user.lastName }}
+        </h4>
+
+        <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+          {{ user.role }}
+        </p>
+
+        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div class="flex flex-col items-center lg:items-start">
+            <span class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              Email
+            </span>
+            <span class="text-sm font-medium text-gray-900 dark:text-white">
+              {{ user.email }}
+            </span>
+          </div>
+
+          <div class="flex flex-col items-center lg:items-start">
+            <span class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              Statut du Compte
+            </span>
+
+            <span
+              class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
+              [ngClass]="
+                user.accountStatus === 'ACTIVE'
+                  ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                  : 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400'
+              "
+            >
+              {{ user.accountStatus }}
+            </span>
+          </div>
+
+          <div class="flex flex-col items-center lg:items-start">
+            <span class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              Email vérifié
+            </span>
+
+            <span
+              class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
+              [ngClass]="
+                user.emailVerified
+                  ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                  : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
+              "
+            >
+              {{ user.emailVerified ? 'Oui' : 'Non' }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Personal Information -->
+  <div class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
+    <h3 class="mb-6 text-lg font-semibold text-gray-800 dark:text-white/90">
+      Informations Personnelles
+    </h3>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div>
+        <p class="mb-2 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Prénom
+        </p>
+        <p class="text-sm font-medium text-gray-800 dark:text-white/90">
+          {{ user.firstName || '-' }}
+        </p>
+      </div>
+
+      <div>
+        <p class="mb-2 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Nom
+        </p>
+        <p class="text-sm font-medium text-gray-800 dark:text-white/90">
+          {{ user.lastName || '-' }}
+        </p>
+      </div>
+
+      <div>
+        <p class="mb-2 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Email
+        </p>
+        <p class="text-sm font-medium text-gray-800 dark:text-white/90">
+          {{ user.email || '-' }}
+        </p>
+      </div>
+
+      <div>
+        <p class="mb-2 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Téléphone
+        </p>
+        <p class="text-sm font-medium text-gray-800 dark:text-white/90">
+          {{ user.phone || '-' }}
+        </p>
+      </div>
+
+      <div>
+        <p class="mb-2 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Nationalité
+        </p>
+        <p class="text-sm font-medium text-gray-800 dark:text-white/90">
+          {{ user.nationality || '-' }}
+        </p>
+      </div>
+
+      <div class="lg:col-span-2">
+        <p class="mb-2 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Biographie
+        </p>
+        <p class="text-sm font-medium text-gray-800 dark:text-white/90">
+          {{ user.bio || '-' }}
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Account Information -->
+  <div class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
+    <h3 class="mb-6 text-lg font-semibold text-gray-800 dark:text-white/90">
+      Informations du Compte
+    </h3>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div>
+        <p class="mb-2 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Rôle
+        </p>
+        <p class="text-sm font-medium text-gray-800 dark:text-white/90">
+          {{ user.role || '-' }}
+        </p>
+      </div>
+
+      <div>
+        <p class="mb-2 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Statut du Compte
+        </p>
+
+        <span
+          class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
+          [ngClass]="
+            user.accountStatus === 'ACTIVE'
+              ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+              : 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400'
+          "
+        >
+          {{ user.accountStatus || '-' }}
+        </span>
+      </div>
+
+      <div>
+        <p class="mb-2 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Créé le
+        </p>
+        <p class="text-sm font-medium text-gray-800 dark:text-white/90">
+          {{ user.createdAt || '-' }}
+        </p>
+      </div>
+
+      <div class="lg:col-span-3">
+        <button
+          type="button"
+          (click)="openPasswordModal()"
+          class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-white/[0.03]"
+        >
+          Changer le mot de passe
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Profile Modal -->
+<app-modal [isOpen]="isEditModalOpen" (close)="closeEditModal()" className="max-w-2xl p-6">
+  <div class="space-y-6">
+    <div>
+      <h2 class="text-xl font-semibold text-gray-900 dark:text-white">
+        Modifier le Profil
+      </h2>
+      <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+        Modifiez vos informations personnelles. L’email, le rôle et le statut sont gérés séparément.
+      </p>
+    </div>
+
+    <form class="space-y-6">
+      <!-- Avatar Section -->
+      <div class="flex items-center space-x-4">
+        <div class="relative">
+          <div class="h-16 w-16 overflow-hidden rounded-full border-2 border-gray-200 dark:border-gray-700">
+            <img [src]="editForm.avatar" alt="Avatar" class="h-full w-full object-cover" />
+          </div>
+        </div>
+
+        <div class="flex-1">
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            URL de l'Avatar
+          </label>
+          <input
+            type="url"
+            [(ngModel)]="editForm.avatar"
+            name="avatar"
+            class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white sm:text-sm"
+            placeholder="https://example.com/avatar.jpg"
+          />
+        </div>
+      </div>
+
+      <!-- Personal Information -->
+      <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Prénom *
+          </label>
+          <input
+            type="text"
+            [(ngModel)]="editForm.firstName"
+            name="firstName"
+            required
+            class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white sm:text-sm"
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Nom *
+          </label>
+          <input
+            type="text"
+            [(ngModel)]="editForm.lastName"
+            name="lastName"
+            required
+            class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white sm:text-sm"
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Email
+          </label>
+          <input
+            type="email"
+            [(ngModel)]="editForm.email"
+            name="email"
+            readonly
+            class="mt-1 block w-full rounded-md border border-gray-300 bg-gray-100 px-3 py-2 shadow-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white sm:text-sm"
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Téléphone
+          </label>
+          <input
+            type="tel"
+            [(ngModel)]="editForm.phone"
+            name="phone"
+            class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white sm:text-sm"
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Nationalité
+          </label>
+          <input
+            type="text"
+            [(ngModel)]="editForm.nationality"
+            name="nationality"
+            class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white sm:text-sm"
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Rôle
+          </label>
+          <input
+            type="text"
+            [(ngModel)]="editForm.role"
+            name="role"
+            readonly
+            class="mt-1 block w-full rounded-md border border-gray-300 bg-gray-100 px-3 py-2 shadow-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white sm:text-sm"
+          />
+        </div>
+      </div>
+
+      <!-- Bio -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+          Biographie
+        </label>
+        <textarea
+          [(ngModel)]="editForm.bio"
+          name="bio"
+          rows="4"
+          class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white sm:text-sm"
+          placeholder="Décrivez-vous en quelques mots..."
+        ></textarea>
+      </div>
+
+      <!-- Read-only fields info -->
+      <div class="rounded-md bg-gray-50 p-4 dark:bg-gray-800">
+        <div class="flex">
+          <div class="flex-shrink-0">
+            <svg class="h-5 w-5 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
+              <path
+                fill-rule="evenodd"
+                d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </div>
+
+          <div class="ml-3">
+            <h3 class="text-sm font-medium text-gray-800 dark:text-gray-200">
+              Champs non modifiables
+            </h3>
+            <div class="mt-2 text-sm text-gray-700 dark:text-gray-300">
+              <p>
+                L’email, le rôle, le statut du compte et la date de création ne sont pas modifiables depuis cette page.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </form>
+
+    <!-- Modal Actions -->
+    <div class="flex justify-end space-x-3 border-t border-gray-200 pt-6 dark:border-gray-700">
+      <button
+        type="button"
+        (click)="closeEditModal()"
+        class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+      >
+        Annuler
+      </button>
+
+      <button
+        type="button"
+        (click)="saveProfile()"
+        class="rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
+      >
+        Sauvegarder
+      </button>
+    </div>
+  </div>
+</app-modal>
+
+<!-- Change Password Modal -->
+<app-modal [isOpen]="isPasswordModalOpen" (close)="closePasswordModal()" className="max-w-xl p-6">
+  <div class="space-y-6">
+    <div>
+      <h2 class="text-xl font-semibold text-gray-900 dark:text-white">
+        Changer le mot de passe
+      </h2>
+      <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+        Entrez votre mot de passe actuel puis choisissez un nouveau mot de passe.
+      </p>
+    </div>
+
+    <form class="space-y-5">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+          Mot de passe actuel
+        </label>
+        <input
+          type="password"
+          [(ngModel)]="passwordForm.currentPassword"
+          name="currentPassword"
+          class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white sm:text-sm"
+          placeholder="Entrez votre mot de passe actuel"
+        />
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+          Nouveau mot de passe
+        </label>
+        <input
+          type="password"
+          [(ngModel)]="passwordForm.newPassword"
+          name="newPassword"
+          class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white sm:text-sm"
+          placeholder="Entrez le nouveau mot de passe"
+        />
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+          Confirmer le nouveau mot de passe
+        </label>
+        <input
+          type="password"
+          [(ngModel)]="passwordForm.confirmPassword"
+          name="confirmPassword"
+          class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white sm:text-sm"
+          placeholder="Confirmez le nouveau mot de passe"
+        />
+      </div>
+
+      @if (passwordErrorMessage) {
+        <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-400">
+          {{ passwordErrorMessage }}
+        </div>
+      }
+
+      @if (passwordSuccessMessage) {
+        <div class="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-600 dark:border-green-900/50 dark:bg-green-900/20 dark:text-green-400">
+          {{ passwordSuccessMessage }}
+        </div>
+      }
+    </form>
+
+    <div class="flex justify-end space-x-3 border-t border-gray-200 pt-6 dark:border-gray-700">
+      <button
+        type="button"
+        (click)="closePasswordModal()"
+        class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+      >
+        Annuler
+      </button>
+
+      <button
+        type="button"
+        (click)="changePassword()"
+        [disabled]="passwordLoading"
+        class="rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        @if (passwordLoading) {
+          Modification...
+        } @else {
+          Modifier le mot de passe
+        }
+      </button>
+    </div>
+  </div>
+</app-modal>

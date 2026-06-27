@@ -1,0 +1,283 @@
+<div class="prediction-page">
+  <div class="page-header">
+    <div>
+      <span class="badge">ML Model Serving</span>
+      <h1>Prediction Test</h1>
+      <p>
+        Sélectionne un modèle réellement déployé, puis lance une prédiction via Spring Boot et FastAPI.
+        Le mode d’entrée est verrouillé automatiquement selon le type de données du modèle.
+      </p>
+    </div>
+
+    <button
+      class="btn-secondary"
+      type="button"
+      (click)="refreshModels()"
+      [disabled]="loadingModels || loadingPrediction"
+    >
+      Actualiser
+    </button>
+  </div>
+
+  <div class="content-grid">
+    <section class="card">
+      <div class="card-header">
+        <h2>Tester un modèle déployé</h2>
+        <p>
+          Seuls les modèles avec le statut <strong>DEPLOYED</strong> dans
+          <strong>model_deployments</strong> sont affichés ici.
+        </p>
+      </div>
+
+      <div *ngIf="loadingModels" class="loading-box">
+        Chargement des modèles déployés...
+      </div>
+
+      <div
+        *ngIf="!loadingModels && productionModels.length === 0"
+        class="alert alert-error"
+      >
+        Aucun modèle déployé trouvé. Va dans Model Registry et clique d’abord sur
+        <strong>Deploy to Production</strong>.
+      </div>
+
+      <div *ngIf="productionModels.length > 0" class="form-group">
+        <label>Modèle déployé</label>
+
+        <select [(ngModel)]="selectedModelName" (ngModelChange)="onModelChange()">
+          <option
+            *ngFor="let model of productionModels"
+            [value]="model.registeredModelName"
+          >
+            {{ model.registeredModelName }} — {{ model.projectName || 'Projet sans nom' }}
+            <ng-container *ngIf="model.productionVersion">
+              — v{{ model.productionVersion }}
+            </ng-container>
+            — DEPLOYED
+          </option>
+        </select>
+      </div>
+
+      <div *ngIf="selectedModel as model" class="model-summary">
+        <div>
+          <span>Projet</span>
+          <strong>{{ model.projectName || '-' }}</strong>
+        </div>
+
+        <div>
+          <span>Version production</span>
+          <strong>v{{ model.productionVersion || '-' }}</strong>
+        </div>
+
+        <div>
+          <span>Score global</span>
+          <strong>{{ formatScore(model.scoreGlobal) }}</strong>
+        </div>
+
+        <div>
+          <span>Type de données</span>
+          <strong>{{ formatDataType(model.dataType || model.inputType) }}</strong>
+        </div>
+
+        <div>
+          <span>Statut déploiement</span>
+          <strong>{{ model.deploymentStatus || 'DEPLOYED' }}</strong>
+        </div>
+
+        <div>
+          <span>Endpoint</span>
+          <strong>{{ model.predictionEndpoint || '-' }}</strong>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Mode de prédiction</label>
+
+        <div class="mode-switcher">
+          <button
+            type="button"
+            class="btn-secondary"
+            [class.active]="selectedMode === 'TABULAR'"
+            [disabled]="!canUseMode('TABULAR')"
+            [class.disabled]="!canUseMode('TABULAR')"
+            (click)="onModeChange('TABULAR')"
+            title="Disponible uniquement pour les modèles tabulaires"
+          >
+            JSON tabulaire
+          </button>
+
+          <button
+            type="button"
+            class="btn-secondary"
+            [class.active]="selectedMode === 'IMAGE'"
+            [disabled]="!canUseMode('IMAGE')"
+            [class.disabled]="!canUseMode('IMAGE')"
+            (click)="onModeChange('IMAGE')"
+            title="Disponible uniquement pour les modèles image"
+          >
+            Image
+          </button>
+
+          <button
+            type="button"
+            class="btn-secondary"
+            [class.active]="selectedMode === 'TEXT'"
+            [disabled]="!canUseMode('TEXT')"
+            [class.disabled]="!canUseMode('TEXT')"
+            (click)="onModeChange('TEXT')"
+            title="Disponible uniquement pour les modèles texte/NLP"
+          >
+            Texte / NLP
+          </button>
+        </div>
+
+        <small>
+          Type de données du modèle :
+          <strong>{{ formatDataType(selectedModelDataType) }}</strong>
+          —
+          Mode autorisé :
+          <strong>{{ expectedModeLabel }}</strong>
+        </small>
+      </div>
+
+      <div *ngIf="selectedMode === 'TABULAR'" class="form-group">
+        <label>Données d’entrée JSON</label>
+
+        <textarea
+          [(ngModel)]="inputJson"
+          rows="14"
+          spellcheck="false"
+        ></textarea>
+
+        <small>
+          Mets uniquement les features d’une seule ligne.
+          Ne mets pas <strong>rows</strong>, <strong>modelName</strong>,
+          <strong>modelAlias</strong> ni la colonne cible.
+        </small>
+      </div>
+
+      <div *ngIf="selectedMode === 'IMAGE'" class="form-group">
+        <label>Image à prédire</label>
+
+        <input
+          id="imageFileInput"
+          type="file"
+          accept=".jpg,.jpeg,.png,.bmp,.gif,.tiff,.tif,.webp,image/*"
+          (change)="onImageFileSelected($event)"
+        />
+
+        <small>
+          Formats acceptés : .jpg, .jpeg, .png, .bmp, .gif, .tiff, .webp.
+          Pour MNIST, l’image sera convertie en pixels 28x28 côté API.
+        </small>
+
+        <div *ngIf="selectedImageFile" class="model-summary">
+          <div>
+            <span>Fichier</span>
+            <strong>{{ selectedImageFile.name }}</strong>
+          </div>
+
+          <div>
+            <span>Taille</span>
+            <strong>{{ selectedImageFile.size }} octets</strong>
+          </div>
+        </div>
+
+        <div *ngIf="imagePreviewUrl" class="image-preview">
+          <img [src]="imagePreviewUrl" alt="Aperçu de l’image sélectionnée" />
+        </div>
+      </div>
+
+      <div *ngIf="selectedMode === 'TEXT'" class="form-group">
+        <label>Texte à prédire</label>
+
+        <textarea
+          [(ngModel)]="inputText"
+          rows="10"
+          spellcheck="true"
+        ></textarea>
+
+        <small>
+          Utilise ce mode pour les modèles NLP : analyse de sentiment,
+          classification de texte, traduction, question/réponse, etc.
+        </small>
+      </div>
+
+      <div class="actions">
+        <button class="btn-secondary" type="button" (click)="resetForm()">
+          Réinitialiser
+        </button>
+
+        <button
+          class="btn-primary"
+          type="button"
+          (click)="predict()"
+          [disabled]="
+            loadingPrediction ||
+            productionModels.length === 0 ||
+            !selectedModel ||
+            selectedMode !== expectedMode
+          "
+        >
+          <span *ngIf="!loadingPrediction">Lancer la prédiction</span>
+          <span *ngIf="loadingPrediction">Prédiction...</span>
+        </button>
+      </div>
+
+      <div *ngIf="errorMessage" class="alert alert-error">
+        {{ errorMessage }}
+      </div>
+
+      <div *ngIf="successMessage" class="alert alert-success">
+        {{ successMessage }}
+      </div>
+    </section>
+
+    <section class="card result-card">
+      <div class="card-header">
+        <h2>Résultat</h2>
+        <p>Réponse retournée par le modèle déployé.</p>
+      </div>
+
+      <div *ngIf="!predictionResponse" class="empty-state">
+        <div class="empty-icon">↗</div>
+        <h3>Aucune prédiction</h3>
+        <p>Lance une prédiction pour afficher le résultat ici.</p>
+      </div>
+
+      <div *ngIf="predictionResponse" class="result-content">
+        <div class="prediction-highlight">
+          <span>Prédiction</span>
+          <strong>{{ firstPrediction }}</strong>
+        </div>
+
+        <div class="info-grid">
+          <div class="info-box">
+            <span>Modèle</span>
+            <strong>{{ predictionResponse.modelName }}</strong>
+          </div>
+
+          <div class="info-box">
+            <span>Alias</span>
+            <strong>{{ predictionResponse.modelAlias }}</strong>
+          </div>
+
+          <div class="info-box">
+            <span>Mode</span>
+            <strong>{{ predictionResponse.predictionMode || selectedModeLabel }}</strong>
+          </div>
+
+          <div class="info-box wide">
+            <span>URI MLflow</span>
+            <strong>{{ predictionResponse.modelUri }}</strong>
+          </div>
+        </div>
+
+        <div class="json-response">
+          <h3>Réponse complète</h3>
+          <pre>{{ formatJson(predictionResponse) }}</pre>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>

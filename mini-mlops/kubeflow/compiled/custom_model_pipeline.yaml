@@ -1,0 +1,52 @@
+# PIPELINE DEFINITION
+# Name: custom-model-training-registry-pipeline
+# Description: Train custom uploaded model, support TABULAR/IMAGE/TEXT data types, track metrics in MLflow, register model, version it, and promote production alias.
+# Inputs:
+#    config_yaml: str
+components:
+  comp-run-custom-model-component:
+    executorLabel: exec-run-custom-model-component
+    inputDefinitions:
+      parameters:
+        config_yaml:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-run-custom-model-component:
+      container:
+        args:
+        - "\nfrom pathlib import Path\nimport subprocess\nimport sys\n\nconfig_yaml\
+          \ = sys.argv[1]\n\nconfig_path = Path(\"/tmp/custom_config.yaml\")\nconfig_path.write_text(config_yaml,\
+          \ encoding=\"utf-8\")\n\nprint(\"[KFP CUSTOM PIPELINE] config written to:\"\
+          , config_path)\nprint(\"[KFP CUSTOM PIPELINE] launching src.custom_models.custom_main\"\
+          )\n\nsubprocess.run(\n    [\n        sys.executable,\n        \"-m\",\n\
+          \        \"src.custom_models.custom_main\",\n        \"--config\",\n   \
+          \     str(config_path),\n    ],\n    check=True,\n)\n            "
+        - '{{$.inputs.parameters[''config_yaml'']}}'
+        command:
+        - python
+        - -c
+        image: docker.io/salmaghrib2003/mini-mlops-runtime:v1
+pipelineInfo:
+  description: Train custom uploaded model, support TABULAR/IMAGE/TEXT data types,
+    track metrics in MLflow, register model, version it, and promote production alias.
+  name: custom-model-training-registry-pipeline
+root:
+  dag:
+    tasks:
+      run-custom-model-component:
+        cachingOptions: {}
+        componentRef:
+          name: comp-run-custom-model-component
+        inputs:
+          parameters:
+            config_yaml:
+              componentInputParameter: config_yaml
+        taskInfo:
+          name: run-custom-model-component
+  inputDefinitions:
+    parameters:
+      config_yaml:
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.0

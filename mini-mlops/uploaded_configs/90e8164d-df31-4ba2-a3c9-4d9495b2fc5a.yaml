@@ -1,0 +1,53 @@
+project_name: achat-clients
+project_type: classification
+task:
+  type: classification
+run:
+  name: achat-clients_run_20260526_170835_20260526_171540_210_5f056397
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+  experiment_name: achat-clients
+model:
+  name: achat-clients_model
+  primary_metric: accuracy
+  direction: max
+  project_type: classification
+  task_type: classification
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: 840a0afd-a64a-47f0-9a22-a197784e8710.py
+  files:
+    840a0afd-a64a-47f0-9a22-a197784e8710.py: "import pandas as pd\r\nfrom sklearn.model_selection\
+      \ import train_test_split\r\nfrom sklearn.ensemble import RandomForestClassifier\r\
+      \nfrom sklearn.metrics import accuracy_score\r\n\r\n# 1. Chargement des modules\
+      \ et du fichier CSV\r\nprint(\"Chargement des données depuis dataset.csv...\"\
+      )\r\ndf = pd.read_csv('dataset.csv')\r\n\r\n# 2. Séparation des caractéristiques\
+      \ (X) et de la cible à prédire (y)\r\nX = df[['Age', 'Salaire', 'TempsSurSite']]\r\
+      \ny = df['Achete']\r\n\r\n# Découpage du dataset (80% entraînement / 20% test)\r\
+      \nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)\r\
+      \n\r\n# 3. Utilisation de l'algorithme RandomForest (Forêt Aléatoire)\r\nprint(\"\
+      Initialisation de l'algorithme RandomForestClassifier...\")\r\nmodel = RandomForestClassifier(n_estimators=100,\
+      \ random_state=42)\r\n\r\n# 4. Entraînement du modèle\r\nprint(\"Début de l'entraînement\
+      \ de l'IA...\")\r\nmodel.fit(X_train, y_train)\r\n\r\n# 5. Évaluation et score\
+      \ de performance\r\npredictions = model.predict(X_test)\r\naccuracy = accuracy_score(y_test,\
+      \ predictions)\r\n\r\nprint(\"--- Entraînement terminé avec succès ! ---\")\r\
+      \nprint(f\"Précision du modèle (Accuracy) : {accuracy * 100:.2f}%\")\r\n"
+data:
+  source_type: none
+  dataset_name: internal-data
+  filename: null
+  content: null
+registry:
+  model_name: achat-clients
+  alias: production
+algorithm_replacements:
+- occurrence_id: model:RandomForestClassifier:19:8
+  var_name: model
+  original_class: RandomForestClassifier
+  new_class: SVC
+  new_lib: sklearn.svm
+validation:
+  enabled: false
+  strict: false
+  input_example: null

@@ -1,0 +1,449 @@
+package com.mlops.platform.service;
+
+import com.mlops.platform.entity.MlExperiment;
+import com.mlops.platform.entity.MlProject;
+import io.fabric8.kubernetes.api.model.EnvVar;
+import io.fabric8.kubernetes.api.model.EnvVarBuilder;
+import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.batch.v1.Job;
+import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
+import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
+import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.KubernetesClientBuilder;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+@Service
+public class KubernetesJobService {
+
+    @Value("${app.kubernetes.namespace:mlops}")
+    private String namespace;
+
+    @Value("${app.kubernetes.custom-job.service-account:default}")
+    private String serviceAccountName;
+
+    @Value("${app.kubernetes.custom-job.ttl-seconds:3600}")
+    private Integer ttlSecondsAfterFinished;
+
+    @Value("${app.kubernetes.custom-job.backoff-limit:0}")
+    private Integer backoffLimit;
+
+    @Value("${app.mlflow.tracking-uri:http://mlflow-service.mlops.svc.cluster.local:5000}")
+    private String mlflowTrackingUri;
+
+    @Value("${app.docker.image-pull-secret:dockerhub-secret}")
+    private String imagePullSecret;
+
+    public String launchCustomImageTrainingJob(
+            MlProject project,
+            MlExperiment experiment,
+            String customImageUri
+    ) {
+        if (project == null || project.getId() == null) {
+            throw new RuntimeException("Project is required to launch Kubernetes Job.");
+        }
+
+        if (experiment == null || experiment.getId() == null) {
+            throw new RuntimeException("Experiment is required to launch Kubernetes Job.");
+        }
+
+        if (customImageUri == null || customImageUri.isBlank()) {
+            throw new RuntimeException("customImageUri is required to launch Kubernetes Job.");
+        }
+
+        String jobName = buildJobName(project.getName(), experiment.getId());
+
+        try (KubernetesClient client = new KubernetesClientBuilder().build()) {
+
+            deleteExistingJobIfExists(client, jobName);
+
+            Job job = buildJob(
+                    jobName,
+                    project,
+                    experiment,
+                    customImageUri.trim()
+            );
+
+            client.batch()
+                    .v1()
+                    .jobs()
+                    .inNamespace(namespace)
+                    .resource(job)
+                    .create();
+
+            return jobName;
+
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to launch Kubernetes custom image Job: " + e.getMessage(), e);
+        }
+    }
+
+    public String getCustomJobStatus(String jobName) {
+        if (jobName == null || jobName.isBlank()) {
+            return "UNKNOWN";
+        }
+
+        try (KubernetesClient client = new KubernetesClientBuilder().build()) {
+            Job job = client.batch()
+                    .v1()
+                    .jobs()
+                    .inNamespace(namespace)
+                    .withName(jobName)
+                    .get();
+
+            if (job == null) {
+                return "NOT_FOUND";
+            }
+
+            if (job.getStatus() != null && job.getStatus().getConditions() != null) {
+                for (JobCondition condition : job.getStatus().getConditions()) {
+                    if (!"True".equalsIgnoreCase(condition.getStatus())) {
+                        continue;
+                    }
+
+                    if ("Complete".equalsIgnoreCase(condition.getType())) {
+                        return "COMPLETED";
+                    }
+
+                    if ("Failed".equalsIgnoreCase(condition.getType())) {
+                        return "FAILED";
+                    }
+                }
+            }
+
+            Integer succeeded = job.getStatus() != null ? job.getStatus().getSucceeded() : null;
+            Integer failed = job.getStatus() != null ? job.getStatus().getFailed() : null;
+            Integer active = job.getStatus() != null ? job.getStatus().getActive() : null;
+
+            if (succeeded != null && succeeded > 0) {
+                return "COMPLETED";
+            }
+
+            if (failed != null && failed > 0) {
+                return "FAILED";
+            }
+
+            if (active != null && active > 0) {
+                return "RUNNING";
+            }
+
+            return "PENDING";
+
+        } catch (Exception e) {
+            return "UNKNOWN";
+        }
+    }
+
+    public boolean isCustomJobCompleted(String jobName) {
+        return "COMPLETED".equalsIgnoreCase(getCustomJobStatus(jobName));
+    }
+
+    public boolean isCustomJobFailed(String jobName) {
+        return "FAILED".equalsIgnoreCase(getCustomJobStatus(jobName));
+    }
+
+    public String getCustomJobLogs(String jobName) {
+        if (jobName == null || jobName.isBlank()) {
+            return "";
+        }
+
+        try (KubernetesClient client = new KubernetesClientBuilder().build()) {
+            List<Pod> pods = client.pods()
+                    .inNamespace(namespace)
+                    .withLabel("job-name", jobName)
+                    .list()
+                    .getItems();
+
+            if (pods == null || pods.isEmpty()) {
+                return "";
+            }
+
+            StringBuilder logs = new StringBuilder();
+
+            for (Pod pod : pods) {
+                if (pod == null || pod.getMetadata() == null || pod.getMetadata().getName() == null) {
+                    continue;
+                }
+
+                String podName = pod.getMetadata().getName();
+
+                logs.append("===== POD: ")
+                        .append(podName)
+                        .append(" =====\n");
+
+                try {
+                    String podLogs = client.pods()
+                            .inNamespace(namespace)
+                            .withName(podName)
+                            .getLog();
+
+                    logs.append(podLogs != null ? podLogs : "");
+                } catch (Exception e) {
+                    logs.append("Failed to read logs for pod ")
+                            .append(podName)
+                            .append(": ")
+                            .append(e.getMessage())
+                            .append("\n");
+                }
+
+                logs.append("\n");
+            }
+
+            return logs.toString();
+
+        } catch (Exception e) {
+            return "Failed to read custom training job logs: " + e.getMessage();
+        }
+    }
+
+    private Job buildJob(
+            String jobName,
+            MlProject project,
+            MlExperiment experiment,
+            String imageUri
+    ) {
+        List<EnvVar> envVars = buildEnvironmentVariables(project, experiment);
+
+        return new JobBuilder()
+                .withNewMetadata()
+                    .withName(jobName)
+                    .withNamespace(namespace)
+                    .addToLabels("app", "mlops-custom-training")
+                    .addToLabels("mlops.project.id", String.valueOf(project.getId()))
+                    .addToLabels("mlops.experiment.id", String.valueOf(experiment.getId()))
+                    .addToLabels("mlops.runtime", "custom-image")
+                    .addToLabels("mlops.phase", "training")
+                .endMetadata()
+                .withNewSpec()
+                    .withBackoffLimit(backoffLimit)
+                    .withTtlSecondsAfterFinished(ttlSecondsAfterFinished)
+                    .withNewTemplate()
+                        .withNewMetadata()
+                            .addToLabels("app", "mlops-custom-training")
+                            .addToLabels("job-name", jobName)
+                            .addToLabels("mlops.project.id", String.valueOf(project.getId()))
+                            .addToLabels("mlops.experiment.id", String.valueOf(experiment.getId()))
+                            .addToLabels("mlops.runtime", "custom-image")
+                            .addToLabels("mlops.phase", "training")
+                        .endMetadata()
+                        .withNewSpec()
+                            .withRestartPolicy("Never")
+                            .withServiceAccountName(serviceAccountName)
+                            .addNewImagePullSecret()
+                                .withName(imagePullSecret)
+                            .endImagePullSecret()
+                            .addNewContainer()
+                                .withName("custom-training")
+                                .withImage(imageUri)
+                                .withImagePullPolicy(resolveImagePullPolicy(imageUri))
+                                .withEnv(envVars)
+                            .endContainer()
+                        .endSpec()
+                    .endTemplate()
+                .endSpec()
+                .build();
+    }
+
+    private String resolveImagePullPolicy(String imageUri) {
+        if (imageUri == null || imageUri.isBlank()) {
+            return "IfNotPresent";
+        }
+
+        String clean = imageUri.trim();
+
+        boolean looksLikeLocalImage =
+                !clean.contains("/")
+                        && (clean.endsWith(":latest") || clean.contains(":"));
+
+        if (looksLikeLocalImage) {
+            return "Never";
+        }
+
+        return "IfNotPresent";
+    }
+
+    private List<EnvVar> buildEnvironmentVariables(MlProject project, MlExperiment experiment) {
+    List<EnvVar> envVars = new ArrayList<>();
+
+    /*
+     * MLflow / Registry
+     */
+    addEnv(envVars, "MLFLOW_TRACKING_URI", mlflowTrackingUri);
+
+    addEnv(envVars, "MLFLOW_EXPERIMENT_NAME", safe(experiment.getRegisteredModelName()));
+    addEnv(envVars, "REGISTERED_MODEL_NAME", safe(experiment.getRegisteredModelName()));
+
+    /*
+     * Identité du run
+     */
+    addEnv(envVars, "RUN_NAME", safe(experiment.getExperimentName()));
+    addEnv(envVars, "PROJECT_NAME", safe(project.getName()));
+    addEnv(envVars, "PROJECT_ID", String.valueOf(project.getId()));
+    addEnv(envVars, "SPRING_EXPERIMENT_ID", String.valueOf(experiment.getId()));
+
+    /*
+     * Métriques / scoring
+     */
+    addEnv(envVars, "PRIMARY_METRIC", safe(experiment.getPrimaryMetric()));
+    addEnv(envVars, "PRIMARY_METRIC_1", safe(project.getPrimaryMetric1()));
+    addEnv(envVars, "PRIMARY_METRIC_2", safe(project.getPrimaryMetric2()));
+    addEnv(envVars, "PRIMARY_METRIC_3", safe(project.getPrimaryMetric3()));
+    addEnv(envVars, "DIRECTION", safe(experiment.getDirection()));
+
+    /*
+     * Type de projet
+     */
+    addEnv(envVars, "PROJECT_TYPE", safe(project.getProjectType()));
+    addEnv(envVars, "PROBLEM_TYPE", safe(project.getProjectType()));
+
+    String targetColumn = firstNonBlank(
+            safe(experiment.getTargetColumn()),
+            safe(project.getTargetColumn())
+    );
+
+    addEnv(envVars, "TARGET_COLUMN", targetColumn);
+    addEnv(envVars, "ML_TARGET_COLUMN", targetColumn);
+
+    /*
+     * Script utilisateur / workspace
+     */
+    addEnv(envVars, "USER_SCRIPT", "train.py");
+    addEnv(envVars, "WORKSPACE_DIR", "/workspace");
+
+    /*
+     * Runtime
+     */
+    addEnv(envVars, "RUNTIME_MODE", safe(experiment.getRuntimeMode()));
+    addEnv(envVars, "MLOPS_CUSTOM_IMAGE_URI", safe(experiment.getCustomImageUri()));
+    addEnv(envVars, "MLOPS_EXPERIMENT_NAME", safe(experiment.getExperimentName()));
+
+    /*
+     * Nouvelle logique intelligente de sauvegarde modèle.
+     *
+     * Ces variables ne cassent rien :
+     * - si le script utilisateur les ignore, le run continue normalement.
+     * - plus tard, notre service de packaging les utilisera.
+     */
+    addEnv(envVars, "MLOPS_AUTO_MODEL_DISCOVERY", "true");
+
+    /*
+     * Dossier standard recommandé par la plateforme.
+     */
+    addEnv(envVars, "MLOPS_DEFAULT_OUTPUT_DIR", "/workspace/outputs");
+
+    /*
+     * Dossiers acceptés.
+     * Si l'utilisateur sauvegarde dans l'un de ces dossiers,
+     * la plateforme pourra détecter le modèle automatiquement.
+     */
+    addEnv(envVars, "MLOPS_ACCEPTED_MODEL_DIRS",
+            "/workspace/outputs,"
+                    + "/workspace/output,"
+                    + "/workspace/artifacts,"
+                    + "/workspace/artifact,"
+                    + "/workspace/model,"
+                    + "/workspace/models,"
+                    + "/workspace/saved_model,"
+                    + "/workspace/checkpoints,"
+                    + "/workspace"
+    );
+
+    /*
+     * Extensions acceptées pour les modèles.
+     */
+    addEnv(envVars, "MLOPS_ACCEPTED_MODEL_EXTENSIONS",
+            ".pkl,.joblib,.sav,.cbm,.pt,.pth,.h5,.keras,.onnx"
+    );
+
+    /*
+     * Noms prioritaires.
+     * Si plusieurs fichiers existent, la plateforme choisira d'abord ceux-ci.
+     */
+    addEnv(envVars, "MLOPS_PREFERRED_MODEL_FILENAMES",
+            "MLmodel,best_model.pkl,final_model.pkl,model.pkl,"
+                    + "best_model.joblib,final_model.joblib,model.joblib,"
+                    + "best_model.cbm,final_model.cbm,model.cbm"
+    );
+
+    return envVars;
+}
+    private void addEnv(List<EnvVar> envVars, String name, String value) {
+        envVars.add(
+                new EnvVarBuilder()
+                        .withName(name)
+                        .withValue(value != null ? value : "")
+                        .build()
+        );
+    }
+
+    private void deleteExistingJobIfExists(KubernetesClient client, String jobName) {
+        try {
+            client.batch()
+                    .v1()
+                    .jobs()
+                    .inNamespace(namespace)
+                    .withName(jobName)
+                    .delete();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String buildJobName(String projectName, Long experimentId) {
+        String projectSlug = slugify(projectName);
+
+        String base = "mlops-custom-" + projectSlug + "-" + experimentId;
+
+        if (base.length() > 63) {
+            base = base.substring(0, 63);
+        }
+
+        base = base.replaceAll("-+$", "");
+
+        if (base.isBlank()) {
+            return "mlops-custom-" + experimentId;
+        }
+
+        return base;
+    }
+
+    private String slugify(String value) {
+        if (value == null || value.isBlank()) {
+            return "project";
+        }
+
+        String slug = value
+                .trim()
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("^-+", "")
+                .replaceAll("-+$", "");
+
+        if (slug.isBlank()) {
+            return "project";
+        }
+
+        return slug;
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+
+        return "";
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
+    }
+}

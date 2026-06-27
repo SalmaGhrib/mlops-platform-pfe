@@ -1,0 +1,1089 @@
+project_name: '159'
+project_type: classification
+task:
+  type: classification
+run:
+  name: 159_run_20260524_205038
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+  experiment_name: '159'
+model:
+  name: 159_model
+  primary_metric: accuracy
+  direction: max
+  project_type: classification
+  task_type: classification
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: b1f331f8-495f-4dab-9e84-78fe2bf33f7c.py
+  files:
+    b1f331f8-495f-4dab-9e84-78fe2bf33f7c.py: "import os\nimport argparse\nimport joblib\n\
+      import pandas as pd\n\nfrom sklearn.compose import ColumnTransformer\nfrom sklearn.ensemble\
+      \ import RandomForestClassifier\nfrom sklearn.metrics import (\n    accuracy_score,\n\
+      \    precision_score,\n    recall_score,\n    f1_score,\n    classification_report,\n\
+      )\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.pipeline\
+      \ import Pipeline\nfrom sklearn.preprocessing import OneHotEncoder, StandardScaler\n\
+      \n\ndef build_one_hot_encoder():\n    \"\"\"\n    Compatible avec plusieurs\
+      \ versions de scikit-learn.\n    \"\"\"\n    try:\n        return OneHotEncoder(handle_unknown=\"\
+      ignore\", sparse_output=False)\n    except TypeError:\n        return OneHotEncoder(handle_unknown=\"\
+      ignore\", sparse=False)\n\n\ndef main():\n    parser = argparse.ArgumentParser()\n\
+      \    parser.add_argument(\"--data_path\", required=True, help=\"Chemin du dataset\
+      \ CSV\")\n    parser.add_argument(\"--output_dir\", default=\"outputs\", help=\"\
+      Dossier de sortie\")\n    args = parser.parse_args()\n\n    print(\"Starting\
+      \ student success classification training...\")\n\n    df = pd.read_csv(args.data_path)\n\
+      \n    target_column = \"success\"\n\n    numeric_features = [\n        \"study_hours_per_week\"\
+      ,\n        \"attendance_rate\",\n        \"previous_grade\",\n        \"assignments_completed\"\
+      ,\n        \"sleep_hours\",\n        \"internet_access\",\n        \"extracurricular_hours\"\
+      ,\n    ]\n\n    categorical_features = [\n        \"major\",\n        \"scholarship\"\
+      ,\n    ]\n\n    required_columns = numeric_features + categorical_features +\
+      \ [target_column]\n\n    missing_columns = [col for col in required_columns\
+      \ if col not in df.columns]\n    if missing_columns:\n        raise ValueError(f\"\
+      Missing columns in dataset: {missing_columns}\")\n\n    X = df[numeric_features\
+      \ + categorical_features]\n    y = df[target_column]\n\n    X_train, X_test,\
+      \ y_train, y_test = train_test_split(\n        X,\n        y,\n        test_size=0.2,\n\
+      \        random_state=42,\n        stratify=y\n    )\n\n    preprocessor = ColumnTransformer(\n\
+      \        transformers=[\n            (\"num\", StandardScaler(), numeric_features),\n\
+      \            (\"cat\", build_one_hot_encoder(), categorical_features),\n   \
+      \     ]\n    )\n\n    model = RandomForestClassifier(\n        n_estimators=120,\n\
+      \        max_depth=8,\n        random_state=42,\n        class_weight=\"balanced\"\
+      \n    )\n\n    pipeline = Pipeline(\n        steps=[\n            (\"preprocessor\"\
+      , preprocessor),\n            (\"model\", model),\n        ]\n    )\n\n    pipeline.fit(X_train,\
+      \ y_train)\n\n    preds = pipeline.predict(X_test)\n\n    accuracy = accuracy_score(y_test,\
+      \ preds)\n    precision = precision_score(y_test, preds, average=\"weighted\"\
+      , zero_division=0)\n    recall = recall_score(y_test, preds, average=\"weighted\"\
+      , zero_division=0)\n    f1 = f1_score(y_test, preds, average=\"weighted\", zero_division=0)\n\
+      \n    print(f\"accuracy={accuracy}\")\n    print(f\"precision={precision}\"\
+      )\n    print(f\"recall={recall}\")\n    print(f\"f1_score={f1}\")\n\n    print(\"\
+      classification_report:\")\n    print(classification_report(y_test, preds, zero_division=0))\n\
+      \n    example = pd.DataFrame([\n        {\n            \"major\": \"Computer\
+      \ Science\",\n            \"scholarship\": \"yes\",\n            \"study_hours_per_week\"\
+      : 18,\n            \"attendance_rate\": 0.92,\n            \"previous_grade\"\
+      : 15.5,\n            \"assignments_completed\": 0.9,\n            \"sleep_hours\"\
+      : 7,\n            \"internet_access\": 1,\n            \"extracurricular_hours\"\
+      : 3\n        }\n    ])\n\n    prediction_example = int(pipeline.predict(example)[0])\n\
+      \    print(f\"prediction_example={prediction_example}\")\n\n    os.makedirs(args.output_dir,\
+      \ exist_ok=True)\n\n    model_path = os.path.join(args.output_dir, \"model.pkl\"\
+      )\n    joblib.dump(pipeline, model_path)\n\n    print(f\"Model saved to {model_path}\"\
+      )\n    print(\"Training completed successfully.\")\n\n\nif __name__ == \"__main__\"\
+      :\n    main()\n"
+data:
+  source_type: inline
+  dataset_name: 3ddf8a3b-f818-40e2-b69d-41d9a4bec685.csv
+  filename: 3ddf8a3b-f818-40e2-b69d-41d9a4bec685.csv
+  content: 'major,scholarship,study_hours_per_week,attendance_rate,previous_grade,assignments_completed,sleep_hours,internet_access,extracurricular_hours,success
+
+    Computer Science,yes,14.4,0.57,11.4,0.47,5.0,0,3.3,0
+
+    Computer Science,yes,17.8,0.83,15.6,0.87,6.4,1,2.8,1
+
+    Computer Science,no,3.4,0.6,10.9,0.57,8.1,1,7.7,0
+
+    Mathematics,yes,22.1,0.9,14.4,0.87,8.0,1,4.0,1
+
+    Mathematics,yes,12.9,0.94,14.4,0.78,7.3,1,3.2,1
+
+    Engineering,no,6.0,0.78,9.0,0.68,8.0,0,5.9,0
+
+    Engineering,no,6.5,0.73,10.6,0.59,6.2,1,8.1,0
+
+    Computer Science,yes,19.9,0.92,14.7,0.9,7.4,1,3.4,1
+
+    Medicine,yes,18.8,0.86,15.2,0.89,7.4,1,4.0,1
+
+    Mathematics,yes,7.4,0.78,9.3,0.52,7.4,1,7.1,0
+
+    Medicine,yes,18.7,0.89,13.5,0.99,8.2,1,2.7,1
+
+    Business,no,20.3,0.86,15.6,0.85,6.1,1,3.6,1
+
+    Computer Science,no,9.2,0.65,8.2,0.51,4.8,1,4.5,0
+
+    Engineering,yes,27.7,0.8,14.5,0.93,6.0,1,2.7,1
+
+    Mathematics,no,2.1,0.66,8.6,0.74,6.4,1,6.5,0
+
+    Computer Science,no,7.8,0.74,9.6,0.64,3.5,0,9.7,0
+
+    Mathematics,yes,6.0,0.78,8.9,0.55,6.1,0,6.8,0
+
+    Medicine,yes,10.0,0.83,15.0,0.88,7.3,1,4.2,1
+
+    Business,yes,6.3,0.61,11.3,0.69,4.0,1,4.6,0
+
+    Computer Science,no,7.3,0.66,9.9,0.72,5.9,1,5.7,0
+
+    Computer Science,yes,7.1,0.58,10.8,0.64,7.3,0,10.3,0
+
+    Business,no,7.1,0.55,9.2,0.68,5.6,1,3.7,0
+
+    Mathematics,yes,9.9,0.49,10.8,0.53,6.1,1,6.2,0
+
+    Business,yes,9.2,0.66,10.5,0.46,7.0,1,5.6,0
+
+    Medicine,yes,18.8,0.85,16.9,0.89,7.9,1,4.1,1
+
+    Engineering,no,11.7,0.76,9.7,0.64,5.9,1,3.8,0
+
+    Computer Science,no,9.4,0.74,7.5,0.64,5.7,0,9.0,0
+
+    Business,yes,17.3,0.9,14.1,0.98,7.0,1,3.0,1
+
+    Engineering,yes,18.9,0.91,15.4,0.83,7.9,1,3.7,1
+
+    Business,no,6.5,0.63,7.6,0.52,6.8,0,5.7,0
+
+    Business,no,8.6,0.72,9.3,0.39,4.6,1,9.2,0
+
+    Computer Science,no,3.6,0.62,10.3,0.78,5.8,1,6.3,0
+
+    Medicine,no,10.9,0.71,9.4,0.62,4.9,0,5.9,0
+
+    Mathematics,yes,17.0,0.91,14.6,0.8,8.6,1,0.7,1
+
+    Computer Science,no,24.5,0.83,13.6,0.86,8.4,1,3.6,1
+
+    Mathematics,no,1.7,0.78,8.7,0.51,5.3,1,3.0,0
+
+    Computer Science,no,9.6,0.71,10.7,0.49,6.3,0,6.8,0
+
+    Engineering,yes,24.1,1.0,14.8,1.0,8.6,1,3.2,1
+
+    Computer Science,yes,16.9,0.93,15.2,0.88,7.0,0,3.4,1
+
+    Medicine,yes,22.8,0.91,15.9,0.98,7.9,1,3.8,1
+
+    Medicine,no,6.1,0.51,6.7,0.59,3.5,1,6.6,0
+
+    Computer Science,yes,26.0,0.91,14.1,0.97,7.3,1,2.3,1
+
+    Business,yes,9.6,0.64,10.8,0.56,5.3,1,5.2,0
+
+    Engineering,yes,22.2,0.85,14.5,0.92,7.9,1,2.8,1
+
+    Engineering,yes,23.3,0.89,17.7,0.83,7.1,1,4.0,1
+
+    Engineering,no,22.3,0.97,16.8,0.95,7.9,1,2.0,1
+
+    Engineering,yes,20.9,0.92,14.7,0.87,5.2,1,4.8,1
+
+    Engineering,yes,24.3,0.98,14.3,0.84,6.5,1,2.2,1
+
+    Engineering,yes,8.0,0.64,12.3,0.41,4.8,1,5.8,0
+
+    Business,yes,20.5,0.9,16.9,0.93,7.8,1,3.9,1
+
+    Engineering,yes,20.4,0.88,15.9,0.87,7.4,1,4.0,1
+
+    Engineering,yes,22.5,0.82,17.1,0.92,6.3,1,1.3,1
+
+    Mathematics,no,14.9,0.86,14.4,0.87,8.0,0,4.9,1
+
+    Medicine,no,6.3,0.63,8.1,0.69,5.2,0,3.7,0
+
+    Business,no,26.2,0.87,13.7,0.93,7.9,1,3.8,1
+
+    Engineering,yes,21.7,0.95,12.3,0.83,7.9,1,2.6,1
+
+    Computer Science,no,22.3,0.83,15.4,0.93,6.3,1,5.0,1
+
+    Medicine,no,22.2,0.92,14.2,1.0,6.5,1,1.7,1
+
+    Mathematics,yes,19.3,0.87,16.4,0.91,8.5,1,3.2,1
+
+    Business,no,19.8,0.86,17.8,0.9,7.0,1,4.3,1
+
+    Medicine,no,9.5,0.59,10.4,0.51,5.7,1,5.1,0
+
+    Computer Science,yes,8.1,0.59,11.0,0.54,5.7,0,8.4,0
+
+    Business,yes,5.2,0.68,6.0,0.62,5.7,1,8.1,0
+
+    Engineering,no,12.1,0.49,7.3,0.66,5.9,1,7.5,0
+
+    Engineering,yes,17.3,0.93,13.7,0.84,7.2,1,1.7,1
+
+    Computer Science,no,22.6,0.98,12.5,0.91,7.0,1,2.9,1
+
+    Engineering,yes,3.3,0.66,7.0,0.67,5.0,0,5.9,0
+
+    Medicine,no,20.2,0.95,16.6,0.93,7.8,1,2.9,1
+
+    Medicine,yes,20.9,0.86,16.0,0.87,7.1,1,3.5,1
+
+    Medicine,no,10.7,0.73,9.0,0.41,5.1,1,9.3,0
+
+    Business,no,9.2,0.66,8.6,0.68,5.7,1,3.5,0
+
+    Medicine,no,5.5,0.56,11.5,0.56,5.7,1,5.0,0
+
+    Engineering,yes,6.5,0.64,5.8,0.62,6.0,1,4.2,0
+
+    Medicine,no,5.4,0.6,9.5,0.71,4.4,1,5.9,0
+
+    Medicine,yes,9.7,0.66,8.0,0.49,6.8,1,8.4,0
+
+    Business,yes,11.5,0.69,8.6,0.6,6.2,1,4.2,0
+
+    Medicine,no,9.3,0.64,12.4,0.62,7.5,0,5.5,0
+
+    Business,yes,21.9,0.99,15.8,0.9,6.8,1,3.6,1
+
+    Business,no,12.1,0.68,8.5,0.48,5.1,0,5.8,0
+
+    Medicine,yes,3.1,0.56,13.2,0.61,4.1,1,4.4,0
+
+    Computer Science,yes,25.1,0.97,14.5,0.93,6.8,1,1.7,1
+
+    Computer Science,no,23.5,0.89,16.3,0.87,5.0,0,1.1,1
+
+    Mathematics,no,6.6,0.78,8.3,0.62,5.7,0,8.4,0
+
+    Computer Science,yes,10.0,0.94,17.3,0.89,7.3,0,4.3,1
+
+    Engineering,yes,8.7,0.52,8.4,0.46,4.7,1,2.5,0
+
+    Mathematics,no,22.1,0.81,16.8,0.88,8.0,1,3.3,1
+
+    Computer Science,no,12.2,0.93,14.7,0.86,6.4,1,5.7,1
+
+    Mathematics,no,10.1,0.68,8.8,0.52,6.1,1,9.1,0
+
+    Medicine,yes,12.7,0.68,9.8,0.61,7.1,0,5.9,0
+
+    Mathematics,no,5.0,0.64,7.3,0.59,6.7,1,9.9,0
+
+    Mathematics,yes,8.9,0.56,9.1,0.66,5.6,1,5.3,0
+
+    Mathematics,no,8.7,0.72,8.1,0.62,4.9,1,4.1,0
+
+    Computer Science,yes,5.9,0.66,9.9,0.48,7.4,1,2.5,0
+
+    Medicine,no,5.8,0.64,9.1,0.62,3.8,1,7.1,0
+
+    Mathematics,no,7.0,0.62,8.4,0.48,6.3,0,4.9,0
+
+    Medicine,yes,9.4,0.55,7.7,0.53,5.0,1,4.6,0
+
+    Mathematics,yes,11.0,0.89,14.6,0.86,7.3,1,5.1,1
+
+    Engineering,yes,24.7,0.87,13.3,0.86,7.9,1,0.7,1
+
+    Computer Science,no,8.3,0.52,7.4,0.57,4.7,1,5.8,0
+
+    Computer Science,no,20.3,0.92,13.0,0.93,7.3,1,2.0,1
+
+    Engineering,yes,21.8,0.88,17.8,1.0,6.6,1,2.2,1
+
+    Mathematics,yes,7.4,0.66,6.2,0.69,5.1,0,4.1,0
+
+    Computer Science,yes,23.1,0.88,18.6,0.95,7.5,1,4.5,1
+
+    Business,yes,3.2,0.72,10.8,0.49,6.4,1,2.3,0
+
+    Engineering,yes,6.0,0.78,10.7,0.67,6.3,0,8.3,0
+
+    Business,yes,12.2,0.93,17.4,0.9,7.9,1,6.1,1
+
+    Medicine,no,9.1,0.62,11.2,0.37,7.1,1,6.7,0
+
+    Business,no,24.5,0.94,16.2,0.88,6.3,1,2.7,1
+
+    Mathematics,no,11.5,0.64,5.7,0.45,6.7,0,7.5,0
+
+    Medicine,yes,22.2,0.97,17.2,0.85,6.2,1,3.1,1
+
+    Engineering,no,21.9,0.92,15.3,0.76,8.2,0,4.1,1
+
+    Medicine,no,3.4,0.78,11.4,0.47,4.9,1,5.8,0
+
+    Engineering,no,9.6,0.67,9.4,0.51,7.2,1,6.8,0
+
+    Mathematics,yes,18.1,0.95,16.5,1.0,6.7,1,3.5,1
+
+    Medicine,yes,5.0,0.65,8.9,0.59,6.0,0,9.3,0
+
+    Business,no,8.6,0.65,10.9,0.78,7.8,1,7.7,0
+
+    Medicine,yes,15.2,0.86,16.0,0.88,6.8,1,2.8,1
+
+    Engineering,no,20.9,0.84,14.9,0.79,7.8,1,4.2,1
+
+    Business,yes,22.9,0.93,13.8,0.9,7.8,1,2.1,1
+
+    Computer Science,no,17.6,0.96,16.2,0.9,8.7,1,2.8,1
+
+    Business,yes,27.8,0.78,14.3,0.74,7.2,0,3.7,1
+
+    Computer Science,yes,14.3,0.9,13.9,0.9,5.9,1,2.5,1
+
+    Medicine,yes,12.0,0.66,10.0,0.63,5.2,0,5.6,0
+
+    Business,yes,10.4,0.88,13.6,0.86,7.3,1,1.9,1
+
+    Business,yes,19.6,0.91,12.6,0.93,5.7,1,3.3,1
+
+    Mathematics,no,23.1,0.9,15.2,0.86,6.4,1,1.6,1
+
+    Engineering,no,11.7,0.58,7.9,0.54,5.5,0,4.6,0
+
+    Engineering,no,16.8,0.88,17.0,0.92,7.8,1,1.9,1
+
+    Engineering,no,22.8,0.9,15.8,0.85,6.5,1,3.3,1
+
+    Computer Science,yes,8.2,0.59,6.6,0.24,6.0,1,7.6,0
+
+    Mathematics,no,13.8,0.88,15.7,0.87,7.5,1,1.5,1
+
+    Business,yes,20.5,0.84,13.8,0.9,7.0,1,4.6,1
+
+    Medicine,no,8.4,0.5,10.3,0.45,6.4,1,4.5,0
+
+    Computer Science,yes,9.0,0.68,5.9,0.34,5.6,0,8.2,0
+
+    Medicine,no,18.1,0.93,14.8,0.87,6.9,1,1.1,1
+
+    Computer Science,no,17.2,0.94,16.4,0.98,7.3,1,4.4,1
+
+    Medicine,yes,25.6,0.92,16.8,0.98,7.5,1,4.2,1
+
+    Mathematics,no,24.1,0.91,15.0,0.93,5.6,1,4.2,1
+
+    Mathematics,yes,18.1,0.92,15.1,0.94,7.0,1,5.0,1
+
+    Business,no,10.2,0.62,10.3,0.45,5.3,1,5.3,0
+
+    Mathematics,yes,21.3,0.81,17.0,0.89,6.9,1,1.2,1
+
+    Engineering,no,24.5,0.91,15.4,0.89,7.6,1,4.3,1
+
+    Engineering,no,10.9,0.77,12.6,0.55,5.1,1,5.7,0
+
+    Computer Science,no,20.7,0.89,14.0,0.86,6.9,0,3.1,1
+
+    Computer Science,no,11.7,0.76,8.3,0.64,5.6,1,3.3,0
+
+    Engineering,no,9.0,0.73,10.0,0.54,6.9,0,6.6,0
+
+    Engineering,no,21.7,0.91,15.4,0.79,8.3,1,2.8,1
+
+    Computer Science,yes,11.6,0.87,13.1,0.94,7.0,1,3.1,1
+
+    Computer Science,no,5.5,0.63,9.2,0.54,4.8,1,8.2,0
+
+    Medicine,yes,7.8,0.61,7.6,0.47,5.0,0,5.6,0
+
+    Medicine,yes,19.3,0.88,14.7,0.84,8.2,1,0.9,1
+
+    Computer Science,yes,19.3,0.94,15.4,0.89,7.2,1,4.6,1
+
+    Medicine,no,20.5,0.9,18.0,0.91,7.1,1,3.9,1
+
+    Engineering,yes,30.3,0.86,18.2,0.82,6.6,1,5.4,1
+
+    Engineering,yes,10.1,0.78,11.8,0.57,4.8,1,7.5,0
+
+    Computer Science,no,12.1,0.52,10.7,0.39,6.3,1,1.8,0
+
+    Mathematics,yes,27.1,0.85,16.3,0.86,6.7,1,3.7,1
+
+    Mathematics,yes,17.7,0.78,14.9,0.98,7.5,1,3.5,1
+
+    Computer Science,yes,12.3,0.76,8.1,0.6,4.5,1,6.1,0
+
+    Mathematics,yes,22.7,0.95,18.5,0.81,6.6,1,2.2,1
+
+    Computer Science,yes,14.0,0.9,16.9,0.92,5.8,1,2.2,1
+
+    Medicine,yes,5.8,0.52,8.6,0.78,5.9,1,4.5,0
+
+    Medicine,yes,9.9,0.59,7.6,0.49,4.1,0,9.8,0
+
+    Computer Science,no,12.1,0.87,15.8,0.86,6.1,1,2.5,1
+
+    Computer Science,yes,8.2,0.73,7.1,0.35,5.3,1,3.1,0
+
+    Engineering,no,14.5,0.66,10.2,0.45,4.8,1,6.7,0
+
+    Engineering,yes,28.5,0.93,16.4,0.93,5.4,1,4.0,1
+
+    Mathematics,yes,21.6,0.92,14.8,0.86,6.6,1,3.2,1
+
+    Medicine,no,7.6,0.65,6.6,0.54,6.6,1,3.5,0
+
+    Engineering,yes,19.9,0.94,14.9,0.85,5.0,1,2.3,1
+
+    Business,yes,13.4,0.87,16.2,0.88,7.2,1,3.6,1
+
+    Medicine,no,21.9,0.91,13.6,0.92,6.2,1,7.2,1
+
+    Engineering,no,1.0,0.65,9.3,0.48,5.0,1,8.8,0
+
+    Medicine,no,19.7,0.8,15.1,0.9,7.2,0,0.9,1
+
+    Medicine,no,23.3,0.87,16.5,0.91,6.5,1,1.9,1
+
+    Medicine,yes,17.6,0.9,15.1,0.99,6.1,1,2.1,1
+
+    Engineering,no,11.8,0.65,7.2,0.65,7.7,1,6.8,0
+
+    Business,no,24.3,0.86,14.7,0.89,6.6,1,0.6,1
+
+    Mathematics,no,19.9,0.86,16.1,0.83,6.1,1,1.9,1
+
+    Business,yes,8.8,0.53,8.8,0.66,5.2,1,3.5,0
+
+    Business,yes,6.4,0.67,9.0,0.51,7.3,1,4.7,0
+
+    Medicine,no,17.4,0.83,16.2,0.88,7.3,1,3.4,1
+
+    Business,no,6.9,0.53,10.8,0.72,5.4,1,7.4,0
+
+    Computer Science,no,9.2,0.63,12.5,0.48,5.2,1,8.2,0
+
+    Medicine,no,5.1,0.74,10.7,0.56,6.5,1,6.5,0
+
+    Computer Science,yes,19.0,0.84,16.3,0.9,8.0,1,2.5,1
+
+    Engineering,no,8.4,0.59,6.2,0.58,5.4,1,6.1,0
+
+    Medicine,yes,19.8,0.94,15.1,1.0,6.0,1,2.3,1
+
+    Mathematics,yes,16.4,0.91,16.2,0.88,8.0,1,4.1,1
+
+    Computer Science,yes,15.7,0.9,14.6,0.86,6.9,1,5.3,1
+
+    Mathematics,no,6.9,0.52,11.8,0.57,5.2,1,5.1,0
+
+    Mathematics,yes,9.9,0.53,10.3,0.61,6.8,1,5.7,0
+
+    Medicine,no,14.9,0.63,8.0,0.58,5.1,0,7.0,0
+
+    Engineering,no,10.8,0.54,8.8,0.67,5.5,1,6.4,0
+
+    Computer Science,no,25.8,0.92,15.3,0.94,7.5,0,4.3,1
+
+    Business,yes,22.7,0.93,18.3,0.94,7.7,1,3.6,1
+
+    Medicine,yes,21.3,0.99,14.6,0.96,6.5,1,3.2,1
+
+    Mathematics,yes,20.2,0.93,15.4,0.93,8.6,1,2.3,1
+
+    Engineering,yes,17.5,0.98,16.6,0.89,5.8,1,3.3,1
+
+    Mathematics,no,9.7,0.58,6.4,0.65,4.6,0,7.1,0
+
+    Computer Science,no,10.8,0.56,10.1,0.56,5.9,1,8.2,0
+
+    Medicine,no,18.7,0.83,17.2,0.96,5.6,1,3.4,1
+
+    Mathematics,yes,22.6,0.9,15.2,0.78,6.1,1,2.0,1
+
+    Medicine,no,19.6,0.92,16.1,0.88,6.2,1,5.9,1
+
+    Mathematics,yes,24.8,0.83,18.4,0.84,6.3,1,4.1,1
+
+    Engineering,no,27.9,0.87,14.7,0.83,6.7,1,5.1,1
+
+    Computer Science,no,17.0,0.88,15.7,0.95,6.0,1,1.6,1
+
+    Medicine,yes,20.0,0.94,15.8,0.9,7.0,1,2.1,1
+
+    Medicine,yes,9.0,0.53,11.4,0.5,5.8,0,8.5,0
+
+    Engineering,no,10.4,0.66,13.0,0.71,5.3,1,2.8,0
+
+    Medicine,no,9.5,0.58,6.6,0.35,7.8,0,7.4,0
+
+    Business,yes,18.8,0.89,14.8,0.89,7.4,1,1.6,1
+
+    Computer Science,no,8.8,0.63,9.6,0.32,4.0,1,6.8,0
+
+    Computer Science,yes,6.2,0.53,8.9,0.57,5.8,1,6.4,0
+
+    Computer Science,no,13.4,0.68,8.1,0.29,6.1,1,3.0,0
+
+    Medicine,no,10.6,0.52,9.1,0.45,6.0,1,3.7,0
+
+    Engineering,yes,14.1,0.53,8.4,0.54,7.0,1,4.0,0
+
+    Medicine,yes,17.1,0.97,17.2,0.98,5.8,1,2.8,1
+
+    Mathematics,yes,7.1,0.61,11.4,0.68,5.8,0,8.6,0
+
+    Computer Science,yes,18.4,0.89,17.5,0.89,6.5,1,2.7,1
+
+    Business,no,7.5,0.61,8.5,0.59,5.1,1,2.9,0
+
+    Computer Science,yes,7.9,0.56,9.0,0.44,7.1,1,6.0,0
+
+    Medicine,no,26.7,0.82,16.7,0.84,7.2,1,2.6,1
+
+    Engineering,no,22.2,0.92,16.5,0.85,6.7,0,2.5,1
+
+    Computer Science,yes,26.7,0.82,15.5,0.86,6.7,0,3.4,1
+
+    Medicine,no,9.6,0.65,13.2,0.44,6.1,1,4.6,0
+
+    Business,no,16.5,0.86,13.3,0.88,6.8,1,3.8,1
+
+    Business,no,12.2,0.65,12.7,0.4,5.5,1,4.3,0
+
+    Medicine,yes,5.0,0.62,9.2,0.63,7.0,1,6.3,0
+
+    Engineering,no,21.1,0.9,15.9,0.95,7.5,1,2.9,1
+
+    Computer Science,yes,21.2,0.89,14.4,0.97,7.9,0,3.7,1
+
+    Computer Science,yes,22.1,0.97,14.1,0.87,7.0,1,1.6,1
+
+    Engineering,no,9.4,0.65,8.2,0.42,5.1,0,7.7,0
+
+    Mathematics,no,14.3,0.9,15.9,0.88,8.1,1,3.0,1
+
+    Medicine,yes,8.7,0.6,10.9,0.52,4.9,1,6.1,0
+
+    Business,no,8.4,0.71,5.1,0.48,5.5,1,6.6,0
+
+    Medicine,no,9.3,0.49,11.8,0.47,5.8,1,3.9,0
+
+    Medicine,no,18.9,0.82,15.6,0.89,5.5,1,4.4,1
+
+    Medicine,yes,22.2,0.94,15.3,0.96,8.0,1,1.3,1
+
+    Engineering,yes,23.3,0.88,15.7,0.88,7.7,1,3.1,1
+
+    Business,yes,5.0,0.72,10.4,0.66,6.8,1,7.6,0
+
+    Mathematics,yes,17.5,0.9,14.8,0.91,8.5,1,3.2,1
+
+    Mathematics,yes,5.8,0.35,8.2,0.59,5.9,1,5.7,0
+
+    Computer Science,no,24.0,1.0,13.6,0.85,6.7,1,2.4,1
+
+    Business,yes,7.2,0.74,11.0,0.62,6.5,1,5.7,0
+
+    Business,yes,23.4,0.84,17.3,0.98,5.6,1,1.6,1
+
+    Medicine,yes,18.4,1.0,15.0,0.95,6.7,1,2.2,1
+
+    Medicine,no,18.0,0.91,17.4,0.88,6.3,1,1.8,1
+
+    Mathematics,no,7.8,0.6,10.8,0.46,6.8,1,7.7,0
+
+    Engineering,no,20.1,0.89,16.4,0.91,6.7,1,3.4,1
+
+    Mathematics,yes,10.2,0.69,9.7,0.62,5.3,0,6.4,0
+
+    Business,no,8.6,0.69,7.6,0.6,6.5,1,4.6,0
+
+    Computer Science,no,9.1,0.61,9.4,0.7,6.4,1,6.2,0
+
+    Medicine,yes,20.5,0.95,16.4,0.79,6.0,1,4.2,1
+
+    Computer Science,no,7.8,0.65,8.0,0.72,3.9,1,3.5,0
+
+    Medicine,yes,8.5,0.72,4.3,0.62,6.0,1,6.8,0
+
+    Engineering,no,21.4,0.89,14.7,0.92,5.8,1,3.4,1
+
+    Medicine,no,7.8,0.7,8.9,0.6,6.4,1,9.6,0
+
+    Engineering,no,23.0,0.92,14.8,0.88,7.8,1,4.4,1
+
+    Engineering,yes,10.5,0.6,9.6,0.57,6.6,0,4.5,0
+
+    Engineering,no,8.6,0.48,8.1,0.44,3.7,1,9.6,0
+
+    Computer Science,yes,20.0,0.89,13.9,0.94,7.8,1,2.8,1
+
+    Mathematics,no,13.0,0.62,6.7,0.54,6.9,1,3.2,0
+
+    Medicine,yes,18.8,1.0,14.2,0.9,6.5,1,3.7,1
+
+    Mathematics,yes,22.8,0.9,17.6,1.0,6.0,1,2.6,1
+
+    Business,yes,20.3,0.92,14.6,0.85,7.7,1,4.8,1
+
+    Business,no,9.1,0.63,6.5,0.6,6.3,1,7.8,0
+
+    Engineering,yes,14.5,0.95,13.3,0.83,6.2,1,1.6,1
+
+    Mathematics,yes,8.4,0.53,11.1,0.56,6.3,1,4.6,0
+
+    Mathematics,yes,24.4,0.9,14.7,0.89,7.3,0,3.7,1
+
+    Mathematics,no,20.8,0.88,13.5,0.89,6.3,1,3.5,1
+
+    Engineering,yes,26.2,0.9,14.6,0.93,5.9,1,1.3,1
+
+    Computer Science,no,14.1,0.96,17.4,0.98,5.8,1,3.8,1
+
+    Business,yes,12.9,0.67,9.6,0.54,7.4,1,8.5,0
+
+    Mathematics,no,11.8,0.78,12.2,0.48,5.7,1,6.0,0
+
+    Mathematics,yes,5.4,0.54,11.5,0.46,7.8,1,4.9,0
+
+    Engineering,no,6.4,0.78,10.4,0.67,5.6,0,6.5,0
+
+    Medicine,yes,10.2,0.73,11.3,0.54,5.8,1,6.2,0
+
+    Computer Science,no,1.0,0.78,9.5,0.65,5.9,1,4.2,0
+
+    Engineering,no,18.3,0.75,18.8,0.92,7.9,1,2.2,1
+
+    Mathematics,yes,1.0,0.69,8.9,0.48,4.7,0,4.4,0
+
+    Computer Science,yes,20.6,0.96,16.9,0.89,6.6,1,2.5,1
+
+    Mathematics,yes,10.8,0.6,8.7,0.57,4.6,1,7.0,0
+
+    Medicine,yes,19.4,0.99,14.3,1.0,6.8,0,1.5,1
+
+    Mathematics,no,20.5,0.95,12.9,0.89,5.0,1,2.9,1
+
+    Medicine,yes,8.2,0.6,7.3,0.65,5.5,1,8.2,0
+
+    Computer Science,no,9.5,0.74,10.1,0.51,6.2,1,5.4,0
+
+    Engineering,no,8.7,0.45,8.2,0.6,5.3,1,3.0,0
+
+    Business,no,7.2,0.6,9.0,0.53,5.4,0,6.1,0
+
+    Computer Science,no,11.1,0.57,9.4,0.3,6.3,1,4.5,0
+
+    Mathematics,no,4.0,0.56,9.5,0.46,4.5,0,2.4,0
+
+    Computer Science,no,4.3,0.51,8.5,0.52,5.7,1,5.8,0
+
+    Business,no,7.9,0.65,7.5,0.57,6.3,1,7.6,0
+
+    Engineering,no,11.9,0.62,11.7,0.45,6.1,0,7.7,0
+
+    Computer Science,yes,16.6,0.89,15.1,0.91,6.6,0,0.9,1
+
+    Medicine,yes,25.8,0.87,15.4,0.99,7.3,1,0.0,1
+
+    Business,no,6.9,0.59,10.1,0.6,7.6,0,4.9,0
+
+    Computer Science,no,9.0,0.63,7.5,0.52,7.2,1,7.5,0
+
+    Business,no,10.2,0.51,6.3,0.41,5.3,1,6.9,0
+
+    Engineering,yes,3.3,0.56,8.0,0.63,7.2,0,3.6,0
+
+    Business,yes,9.1,0.58,9.6,0.24,7.0,0,6.7,0
+
+    Medicine,no,27.2,0.9,15.0,0.92,7.8,1,4.7,1
+
+    Computer Science,no,7.5,0.64,10.1,0.57,4.3,0,3.3,0
+
+    Engineering,yes,20.9,0.94,15.4,0.97,7.0,1,2.4,1
+
+    Engineering,yes,22.3,0.85,14.7,0.9,9.0,1,2.4,1
+
+    Business,yes,16.2,0.86,14.2,0.96,6.9,1,2.5,1
+
+    Computer Science,no,12.1,0.67,7.8,0.74,6.5,1,9.6,0
+
+    Mathematics,yes,16.6,0.84,16.4,0.91,6.6,1,5.6,1
+
+    Medicine,no,22.5,0.83,14.7,0.95,7.1,1,1.7,1
+
+    Computer Science,no,14.1,0.86,17.2,0.87,7.8,1,3.4,1
+
+    Computer Science,yes,2.5,0.62,12.9,0.54,6.6,0,4.4,0
+
+    Computer Science,yes,23.8,0.84,15.4,0.78,7.8,1,2.7,1
+
+    Mathematics,no,2.7,0.72,8.0,0.58,7.3,0,7.2,0
+
+    Business,yes,10.8,0.68,12.9,0.52,6.0,1,6.4,0
+
+    Engineering,yes,22.4,0.87,12.6,0.86,6.7,1,1.9,1
+
+    Computer Science,yes,4.0,0.78,10.5,0.65,7.6,1,8.1,0
+
+    Medicine,no,7.7,0.6,11.0,0.45,6.2,0,6.1,0
+
+    Business,yes,22.9,0.83,15.2,0.79,7.9,1,1.9,1
+
+    Medicine,no,10.3,0.68,10.6,0.41,5.8,1,6.2,0
+
+    Business,no,11.9,0.62,9.9,0.68,6.4,1,6.7,0
+
+    Mathematics,no,20.0,0.92,13.2,0.86,7.9,1,5.3,1
+
+    Computer Science,no,10.4,0.66,8.2,0.54,5.3,1,10.6,0
+
+    Computer Science,no,14.5,0.86,15.3,0.92,7.5,1,3.4,1
+
+    Mathematics,no,14.0,0.53,9.7,0.46,4.6,1,7.3,0
+
+    Mathematics,no,23.8,0.87,14.5,0.8,6.4,1,1.7,1
+
+    Medicine,yes,10.0,0.52,11.4,0.59,6.5,1,7.8,0
+
+    Mathematics,no,23.9,0.88,14.5,0.97,6.7,1,4.7,1
+
+    Business,yes,18.8,0.87,16.5,0.97,7.7,0,1.4,1
+
+    Computer Science,no,17.5,0.89,16.4,0.84,6.4,1,4.0,1
+
+    Medicine,no,9.8,0.65,12.9,0.68,8.5,1,10.8,0
+
+    Business,no,22.9,0.87,14.0,0.92,5.8,1,1.7,1
+
+    Computer Science,yes,18.8,0.89,14.5,0.95,7.1,0,3.1,1
+
+    Engineering,yes,26.1,0.93,15.0,0.96,6.4,1,1.5,1
+
+    Computer Science,yes,20.1,0.92,16.9,0.83,8.1,1,1.3,1
+
+    Computer Science,yes,22.8,0.93,16.2,0.9,6.8,1,3.2,1
+
+    Mathematics,yes,19.1,0.88,14.9,0.93,6.9,1,3.0,1
+
+    Mathematics,yes,9.1,0.62,10.1,0.66,7.0,1,6.1,0
+
+    Computer Science,no,10.9,0.55,11.0,0.52,5.5,0,6.3,0
+
+    Medicine,yes,17.6,0.9,16.8,0.87,7.2,1,4.2,1
+
+    Engineering,yes,24.0,0.9,14.9,0.93,7.9,1,0.8,1
+
+    Mathematics,yes,20.9,0.96,19.0,0.8,8.0,0,2.3,1
+
+    Computer Science,yes,23.5,0.9,15.4,0.91,7.2,1,3.4,1
+
+    Mathematics,no,12.3,0.72,8.0,0.71,5.8,1,6.4,0
+
+    Business,yes,10.8,0.65,12.3,0.47,5.5,0,6.3,0
+
+    Medicine,yes,26.6,0.98,16.8,0.84,8.5,1,3.0,1
+
+    Engineering,no,17.8,0.97,16.1,0.9,6.3,1,1.5,1
+
+    Computer Science,no,11.5,0.59,8.6,0.47,6.6,1,7.8,0
+
+    Mathematics,no,6.9,0.69,9.1,0.52,6.5,0,8.2,0
+
+    Mathematics,no,17.1,0.96,14.6,0.91,7.3,1,1.9,1
+
+    Business,no,9.3,0.65,10.8,0.54,4.2,1,6.1,0
+
+    Mathematics,no,4.9,0.76,10.3,0.7,5.3,0,6.1,0
+
+    Mathematics,yes,10.1,0.51,6.4,0.48,7.0,1,3.0,0
+
+    Mathematics,no,19.0,0.87,15.9,0.84,6.7,1,0.9,1
+
+    Mathematics,no,6.0,0.68,5.1,0.54,5.1,0,6.4,0
+
+    Engineering,no,3.3,0.57,7.9,0.33,4.1,0,7.4,0
+
+    Business,no,22.2,0.91,18.6,0.94,7.0,0,3.5,1
+
+    Computer Science,no,26.4,0.94,14.8,0.99,7.5,1,1.5,1
+
+    Business,no,10.6,0.53,9.6,0.65,5.9,1,10.9,0
+
+    Engineering,yes,24.2,0.85,14.8,0.91,5.9,0,3.7,1
+
+    Mathematics,yes,16.8,0.89,16.3,0.91,7.5,1,5.2,1
+
+    Engineering,yes,19.5,0.91,15.1,0.92,7.9,1,3.0,1
+
+    Business,yes,9.7,0.56,8.8,0.52,6.1,1,6.7,0
+
+    Engineering,yes,18.4,0.86,15.5,0.87,7.9,1,3.8,1
+
+    Computer Science,yes,16.3,0.77,19.0,0.88,7.3,1,2.0,1
+
+    Mathematics,yes,19.3,0.85,13.8,0.92,7.9,1,3.1,1
+
+    Engineering,no,18.4,0.81,14.9,1.0,8.3,1,1.5,1
+
+    Medicine,no,5.8,0.57,6.8,0.64,5.8,0,5.5,0
+
+    Computer Science,no,12.6,0.67,6.2,0.52,4.9,1,5.8,0
+
+    Engineering,yes,20.4,0.82,13.9,0.91,5.7,1,3.3,1
+
+    Engineering,no,7.5,0.71,11.8,0.57,3.7,0,8.7,0
+
+    Engineering,no,21.2,0.92,14.8,0.86,8.1,1,3.8,1
+
+    Mathematics,no,8.3,0.65,8.9,0.56,3.5,0,4.6,0
+
+    Business,yes,15.6,0.94,15.6,0.83,7.0,1,2.5,1
+
+    Business,yes,6.2,0.64,7.8,0.49,8.1,1,6.2,0
+
+    Engineering,no,10.7,0.47,6.9,0.57,6.7,0,2.6,0
+
+    Business,yes,17.2,0.8,16.2,1.0,7.4,1,3.0,1
+
+    Engineering,no,10.3,0.76,11.2,0.49,6.4,0,5.8,0
+
+    Mathematics,yes,16.6,0.88,14.2,0.91,6.0,1,3.2,1
+
+    Medicine,yes,20.0,0.93,13.8,0.91,6.9,1,4.2,1
+
+    Engineering,yes,21.0,0.96,14.2,0.89,6.6,0,1.4,1
+
+    Mathematics,no,14.8,0.91,17.7,0.91,6.8,1,0.0,1
+
+    Medicine,yes,1.9,0.55,8.3,0.53,4.3,1,7.9,0
+
+    Business,yes,17.9,0.94,19.0,0.88,7.8,1,3.5,1
+
+    Engineering,yes,12.7,0.59,9.5,0.59,6.2,1,8.3,0
+
+    Computer Science,no,12.8,0.54,8.1,0.58,5.2,1,2.4,0
+
+    Computer Science,yes,16.1,0.9,15.4,0.85,8.5,1,2.2,1
+
+    Medicine,yes,5.7,0.59,8.0,0.55,3.8,1,5.3,0
+
+    Engineering,no,19.6,0.89,15.4,0.85,5.8,1,1.4,1
+
+    Mathematics,yes,20.3,0.89,17.1,0.92,6.2,1,0.7,1
+
+    Medicine,yes,23.8,0.96,15.1,0.87,7.3,0,0.6,1
+
+    Engineering,yes,9.0,0.65,7.6,0.45,6.0,1,4.3,0
+
+    Engineering,yes,6.3,0.75,9.7,0.54,5.0,0,2.2,0
+
+    Mathematics,no,4.1,0.58,9.2,0.49,7.4,0,3.1,0
+
+    Computer Science,no,19.9,0.96,16.4,0.89,6.6,1,4.8,1
+
+    Computer Science,no,6.7,0.7,8.5,0.57,6.6,1,2.6,0
+
+    Mathematics,no,4.4,0.63,7.7,0.41,6.8,1,4.4,0
+
+    Business,yes,9.2,0.63,8.7,0.56,6.4,0,5.7,0
+
+    Mathematics,no,10.0,0.4,10.6,0.65,6.9,0,7.1,0
+
+    Computer Science,yes,28.4,0.86,12.7,0.87,7.5,1,0.0,1
+
+    Mathematics,no,15.4,0.9,14.4,0.92,5.6,1,2.0,1
+
+    Medicine,no,14.9,0.91,15.3,0.83,7.6,1,3.5,1
+
+    Engineering,no,10.8,0.57,8.1,0.57,6.1,0,3.9,0
+
+    Medicine,no,8.3,0.66,7.7,0.61,5.6,1,10.1,0
+
+    Engineering,no,6.5,0.43,9.3,0.51,5.9,1,2.2,0
+
+    Mathematics,yes,9.6,0.73,8.3,0.65,4.3,1,3.4,0
+
+    Medicine,no,12.1,0.76,9.9,0.33,5.5,0,4.9,0
+
+    Medicine,no,9.6,0.65,8.4,0.65,5.5,0,6.6,0
+
+    Business,no,7.1,0.57,8.7,0.62,4.6,1,2.5,0
+
+    Engineering,yes,5.1,0.77,7.6,0.47,8.1,1,6.2,0
+
+    Engineering,yes,16.7,0.97,16.8,0.94,5.5,1,2.7,1
+
+    Engineering,yes,18.1,0.9,17.3,0.94,5.3,1,2.7,1
+
+    Business,yes,17.2,0.94,17.9,0.94,7.7,1,2.3,1
+
+    Engineering,no,22.3,0.87,18.3,0.83,6.5,1,1.0,1
+
+    Business,yes,3.9,0.69,13.2,0.53,5.7,1,7.6,0
+
+    Mathematics,yes,21.2,0.9,14.2,0.96,8.3,1,3.0,1
+
+    Business,yes,3.1,0.59,8.0,0.75,4.5,1,7.3,0
+
+    Medicine,yes,4.3,0.68,12.4,0.72,7.3,1,4.4,0
+
+    Medicine,no,20.4,0.85,14.0,0.83,6.2,1,2.8,1
+
+    Computer Science,yes,26.2,0.91,14.8,0.79,5.6,1,4.6,1
+
+    Business,no,5.0,0.66,9.7,0.35,6.5,0,6.7,0
+
+    Business,yes,18.2,0.84,13.8,0.91,7.1,1,2.0,1
+
+    Engineering,no,10.4,0.7,10.1,0.61,6.3,0,6.2,0
+
+    Business,no,6.3,0.71,11.5,0.33,5.3,1,6.6,0
+
+    Computer Science,yes,16.1,0.89,16.4,0.79,8.2,1,4.4,1
+
+    Engineering,yes,4.0,0.56,8.3,0.7,5.1,1,7.1,0
+
+    Medicine,yes,22.3,0.89,16.7,0.93,7.0,1,2.2,1
+
+    Business,yes,18.5,0.9,17.1,0.9,7.2,1,3.2,1
+
+    Computer Science,yes,19.8,0.84,17.0,0.94,6.9,1,4.7,1
+
+    Engineering,yes,9.8,0.59,9.3,0.51,5.4,1,6.6,0
+
+    Medicine,no,8.7,0.78,8.4,0.5,5.5,1,5.0,0
+
+    Engineering,no,6.3,0.65,9.9,0.62,7.5,0,3.0,0
+
+    Computer Science,yes,12.3,0.94,16.1,0.86,6.9,1,3.1,1
+
+    Computer Science,yes,11.9,0.67,11.4,0.59,4.8,0,5.1,0
+
+    Business,yes,7.0,0.52,9.6,0.54,5.1,0,6.8,0
+
+    Mathematics,yes,19.6,0.86,15.3,0.8,7.7,1,0.8,1
+
+    Engineering,no,12.5,0.62,7.4,0.48,5.3,1,5.0,0
+
+    Computer Science,no,12.4,0.61,10.3,0.37,6.4,1,2.7,0
+
+    Business,yes,15.3,0.96,18.7,0.94,6.6,1,2.8,1
+
+    Mathematics,no,20.3,0.82,15.4,0.91,6.4,1,3.9,1
+
+    Business,no,10.1,0.63,8.2,0.62,4.9,0,4.5,0
+
+    Business,yes,16.2,0.85,16.1,0.91,7.5,1,1.1,1
+
+    Engineering,no,7.9,0.74,11.1,0.47,6.1,1,9.4,0
+
+    Computer Science,yes,8.5,0.61,7.8,0.41,6.9,0,7.0,0
+
+    Computer Science,no,22.7,0.91,14.5,0.92,5.9,1,0.6,1
+
+    Business,no,9.8,0.72,7.4,0.53,6.8,1,6.9,0
+
+    Engineering,no,1.0,0.56,8.8,0.42,6.9,1,7.8,0
+
+    Business,yes,18.0,1.0,14.7,0.86,7.3,1,2.7,1
+
+    Mathematics,no,2.5,0.76,10.7,0.4,5.7,1,7.0,0
+
+    Business,no,4.9,0.65,7.9,0.51,5.9,1,6.3,0
+
+    Engineering,no,3.9,0.71,11.0,0.47,6.0,1,5.0,0
+
+    Engineering,yes,23.2,0.88,15.5,0.93,6.7,1,0.0,1
+
+    Mathematics,no,17.7,0.88,17.5,0.88,6.2,1,2.1,1
+
+    Medicine,no,10.4,0.65,10.7,0.46,5.2,0,5.6,0
+
+    Business,yes,13.6,0.93,14.7,0.82,6.8,1,2.7,1
+
+    Medicine,no,10.3,0.59,8.8,0.67,5.4,1,5.5,0
+
+    Computer Science,yes,28.0,0.82,16.4,0.92,6.8,1,2.2,1
+
+    Medicine,yes,3.6,0.4,10.4,0.6,5.8,1,6.2,0
+
+    Medicine,yes,24.1,0.93,15.1,0.81,7.8,1,3.9,1
+
+    Mathematics,no,5.9,0.56,9.5,0.48,5.4,1,3.1,0
+
+    Computer Science,yes,21.9,0.9,13.9,0.82,6.2,1,5.4,1
+
+    Medicine,yes,20.8,0.94,15.6,0.84,7.9,1,3.0,1
+
+    Medicine,yes,19.4,0.95,15.8,0.89,7.2,1,2.0,1
+
+    Medicine,yes,20.0,0.88,16.3,0.92,6.0,1,1.8,1
+
+    Engineering,yes,6.4,0.52,9.0,0.61,5.8,1,4.1,0
+
+    Medicine,no,18.3,0.91,16.7,0.98,7.7,1,4.1,1
+
+    Computer Science,no,9.6,0.76,9.3,0.55,5.1,0,6.7,0
+
+    Engineering,yes,18.3,0.94,12.8,1.0,7.4,1,3.7,1
+
+    Medicine,yes,3.2,0.64,10.5,0.66,7.4,0,4.0,0
+
+    Business,no,5.4,0.73,10.7,0.58,6.6,0,7.7,0
+
+    Engineering,yes,19.0,0.92,17.8,0.92,7.4,1,5.7,1
+
+    Mathematics,no,7.1,0.78,7.0,0.46,4.2,1,6.2,0
+
+    Mathematics,yes,11.4,0.72,9.6,0.7,3.6,0,10.6,0
+
+    Medicine,no,27.0,0.96,15.8,0.91,6.5,1,3.8,1
+
+    Business,no,6.0,0.5,8.4,0.69,7.0,1,3.8,0
+
+    Business,no,11.8,0.66,10.9,0.38,4.9,0,1.6,0
+
+    Mathematics,no,10.2,0.66,11.2,0.39,5.6,1,1.9,0
+
+    Computer Science,no,7.0,0.62,10.1,0.54,5.8,1,5.5,0
+
+    Engineering,no,2.5,0.57,8.9,0.46,4.4,1,4.8,0
+
+    Computer Science,no,10.2,0.69,7.8,0.53,6.0,1,4.9,0
+
+    Medicine,yes,19.1,0.91,16.1,1.0,6.1,1,3.9,1
+
+    Medicine,yes,22.1,0.92,14.1,0.94,6.2,0,1.2,1
+
+    Mathematics,yes,17.5,0.92,14.8,0.97,6.3,1,3.8,1
+
+    Mathematics,yes,9.6,0.58,8.7,0.63,4.6,0,3.4,0
+
+    Mathematics,yes,16.0,0.9,17.3,0.97,7.8,1,3.3,1
+
+    Engineering,yes,9.0,0.67,8.2,0.73,6.5,1,5.8,0
+
+    Mathematics,yes,17.8,0.91,15.3,0.87,7.0,1,3.5,1
+
+    Engineering,yes,8.3,0.63,7.3,0.43,6.7,0,7.4,0
+
+    Medicine,no,10.2,0.73,7.2,0.63,5.4,1,6.7,0
+
+    Business,no,21.2,0.82,17.3,0.88,7.6,1,2.8,1
+
+    Computer Science,no,9.0,0.61,11.0,0.76,7.0,0,8.2,0
+
+    Engineering,no,13.3,0.92,14.8,0.96,7.7,1,3.2,1
+
+    Medicine,yes,8.5,0.58,11.4,0.58,6.9,1,6.2,0
+
+    Mathematics,yes,21.5,0.81,15.4,0.84,6.3,1,4.8,1
+
+    Engineering,no,19.1,0.9,12.8,0.92,7.5,1,4.2,1
+
+    Mathematics,no,18.9,0.94,13.8,0.91,7.2,1,3.6,1
+
+    Medicine,yes,19.9,0.86,12.7,0.87,6.7,1,6.2,1
+
+    Engineering,yes,9.2,0.61,10.1,0.58,7.0,0,7.3,0
+
+    Engineering,yes,8.9,0.61,10.1,0.77,5.8,0,8.3,0
+
+    Computer Science,yes,10.9,0.44,11.4,0.37,6.2,1,6.8,0
+
+    Mathematics,yes,23.0,0.84,14.6,0.9,8.0,1,2.2,1
+
+    '
+registry:
+  model_name: '159'
+  alias: production
+algorithm_replacements:
+- occurrence_id: model:RandomForestClassifier:summary
+  var_name: model
+  original_class: RandomForestClassifier
+  new_class: XGBClassifier
+  new_lib: xgboost
+validation:
+  enabled: false
+  strict: false
+  input_example: null

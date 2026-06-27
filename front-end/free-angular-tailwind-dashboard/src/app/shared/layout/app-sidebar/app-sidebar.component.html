@@ -1,0 +1,203 @@
+<aside
+  class="fixed flex flex-col top-0 px-5 left-0 bg-white dark:bg-gray-900 dark:border-gray-800 text-gray-900 h-screen transition-all duration-300 ease-in-out z-50 border-r border-gray-200"
+  [ngClass]="{
+    'w-[290px]':
+      (isExpanded$ | async) || (isMobileOpen$ | async) || (isHovered$ | async),
+    'w-[90px]': !(
+      (isExpanded$ | async) ||
+      (isMobileOpen$ | async) ||
+      (isHovered$ | async)
+    ),
+    'translate-x-0': isMobileOpen$ | async,
+    '-translate-x-full': !(isMobileOpen$ | async),
+    'xl:translate-x-0': true
+  }"
+  (mouseenter)="onSidebarMouseEnter()"
+  (mouseleave)="sidebarService.setHovered(false)"
+>
+  <!-- Logo -->
+  <div
+    class="py-8 flex"
+    [ngClass]="{
+      'xl:justify-center': !((isExpanded$ | async) || (isHovered$ | async)),
+      'justify-start': (isExpanded$ | async) || (isHovered$ | async)
+    }"
+  >
+    <a routerLink="/">
+      @if ((isExpanded$ | async) || (isHovered$ | async) || (isMobileOpen$ | async)) {
+        <img
+          class="dark:hidden"
+          src="/images/logo/logo.svg"
+          alt="Logo"
+          width="150"
+          height="40"
+        />
+
+        <img
+          class="hidden dark:block"
+          src="/images/logo/logo-dark.svg"
+          alt="Logo"
+          width="150"
+          height="40"
+        />
+      } @else {
+        <img
+          src="/images/logo/logo-icon.svg"
+          alt="Logo"
+          width="32"
+          height="32"
+        />
+      }
+    </a>
+  </div>
+
+  <!-- Navigation -->
+  <div class="flex flex-col overflow-y-auto duration-300 ease-linear no-scrollbar">
+    <nav class="mb-6">
+      <div class="flex flex-col gap-4">
+        @for (group of navGroups; track $index; let groupIndex = $index) {
+          <div>
+            <!-- Group title -->
+            @if (group.title && ((isExpanded$ | async) || (isHovered$ | async) || (isMobileOpen$ | async))) {
+              <h2
+                class="mb-4 text-xs uppercase flex leading-[20px] text-gray-400"
+                [ngClass]="{
+                  'xl:justify-center': !(
+                    (isExpanded$ | async) || (isHovered$ | async)
+                  ),
+                  'justify-start': (isExpanded$ | async) || (isHovered$ | async)
+                }"
+              >
+                {{ group.title }}
+              </h2>
+            }
+
+            <ul class="flex flex-col gap-1">
+              @for (nav of group.items; track $index; let i = $index) {
+                <li>
+                  <!-- Simple menu item -->
+                  @if (nav.path && !nav.subItems) {
+                    <a
+                      [routerLink]="nav.path"
+                      routerLinkActive="menu-item-active"
+                      class="menu-item group"
+                      [ngClass]="{
+                        'menu-item-active': isActive(nav.path),
+                        'menu-item-inactive': !isActive(nav.path)
+                      }"
+                    >
+                      <span
+                        class="menu-item-icon-size"
+                        [ngClass]="{
+                          'menu-item-icon-active': isActive(nav.path),
+                          'menu-item-icon-inactive': !isActive(nav.path)
+                        }"
+                        [innerHTML]="nav.icon | safeHtml"
+                      ></span>
+
+                      @if ((isExpanded$ | async) || (isHovered$ | async) || (isMobileOpen$ | async)) {
+                        <span class="menu-item-text">
+                          {{ nav.name }}
+                        </span>
+                      }
+                    </a>
+                  }
+
+                  <!-- Menu item with submenu -->
+                  @else if (nav.subItems) {
+                    <button
+                      type="button"
+                      (click)="toggleSubmenu(groupIndex, i)"
+                      class="menu-item group cursor-pointer"
+                      [class.menu-item-active]="openSubmenu === groupIndex + '-' + i"
+                      [class.menu-item-inactive]="openSubmenu !== groupIndex + '-' + i"
+                      [ngClass]="{
+                        'xl:justify-center': !(
+                          (isExpanded$ | async) || (isHovered$ | async)
+                        ),
+                        'xl:justify-start':
+                          (isExpanded$ | async) || (isHovered$ | async)
+                      }"
+                    >
+                      <span
+                        class="menu-item-icon-size"
+                        [class.menu-item-icon-active]="openSubmenu === groupIndex + '-' + i"
+                        [class.menu-item-icon-inactive]="openSubmenu !== groupIndex + '-' + i"
+                        [innerHTML]="nav.icon | safeHtml"
+                      ></span>
+
+                      @if ((isExpanded$ | async) || (isHovered$ | async) || (isMobileOpen$ | async)) {
+                        <span class="menu-item-text">
+                          {{ nav.name }}
+                        </span>
+
+                        <svg
+                          [ngClass]="{
+                            'rotate-180 text-brand-500': openSubmenu === groupIndex + '-' + i
+                          }"
+                          width="1em"
+                          height="1em"
+                          viewBox="0 0 20 20"
+                          fill="none"
+                          xmlns="http://www.w3.org/2000/svg"
+                          class="ml-auto w-5 h-5 transition-transform duration-200"
+                        >
+                          <path
+                            d="M4.79175 7.396L10.0001 12.6043L15.2084 7.396"
+                            stroke="currentColor"
+                            stroke-width="1.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          ></path>
+                        </svg>
+                      }
+                    </button>
+
+                    <div
+                      class="overflow-hidden transition-all duration-300"
+                      [id]="groupIndex + '-' + i"
+                      [style.display]="
+                        (isExpanded$ | async) || (isHovered$ | async) || (isMobileOpen$ | async)
+                          ? 'block'
+                          : 'none'
+                      "
+                      [ngStyle]="{
+                        height:
+                          openSubmenu === groupIndex + '-' + i
+                            ? (subMenuHeights[groupIndex + '-' + i] || 0) + 'px'
+                            : '0px'
+                      }"
+                    >
+                      <ul class="mt-2 space-y-1 ml-9">
+                        @for (subItem of nav.subItems; track $index) {
+                          <li>
+                            <a
+                              [routerLink]="subItem.path"
+                              (click)="onSubmenuClick()"
+                              class="menu-dropdown-item"
+                              [ngClass]="{
+                                'menu-dropdown-item-inactive': !isActive(subItem.path),
+                                'menu-dropdown-item-active': isActive(subItem.path)
+                              }"
+                            >
+                              {{ subItem.name }}
+                            </a>
+                          </li>
+                        }
+                      </ul>
+                    </div>
+                  }
+                </li>
+              }
+            </ul>
+          </div>
+        }
+      </div>
+    </nav>
+
+    <!-- Sidebar widget -->
+    @if ((isExpanded$ | async) || (isHovered$ | async) || (isMobileOpen$ | async)) {
+      <app-sidebar-widget />
+    }
+  </div>
+</aside>

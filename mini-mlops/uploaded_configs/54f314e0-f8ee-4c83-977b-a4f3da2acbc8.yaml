@@ -1,0 +1,426 @@
+project_name: students-success-or-failure
+run:
+  name: students_success_or_failure_run_20260520_1752
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+model:
+  name: students_success_or_failure_model
+  primary_metric: accuracy
+  direction: max
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: d19a1135-a3e5-4bb9-b839-7fef0818610b.py
+  files:
+    d19a1135-a3e5-4bb9-b839-7fef0818610b.py: "import os\nimport argparse\nimport joblib\n\
+      import pandas as pd\n\nfrom sklearn.compose import ColumnTransformer\nfrom sklearn.ensemble\
+      \ import RandomForestClassifier\nfrom sklearn.metrics import (\n    accuracy_score,\n\
+      \    precision_score,\n    recall_score,\n    f1_score,\n    classification_report,\n\
+      )\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.pipeline\
+      \ import Pipeline\nfrom sklearn.preprocessing import OneHotEncoder, StandardScaler\n\
+      \n\ndef build_one_hot_encoder():\n    \"\"\"\n    Compatible avec plusieurs\
+      \ versions de scikit-learn.\n    \"\"\"\n    try:\n        return OneHotEncoder(handle_unknown=\"\
+      ignore\", sparse_output=False)\n    except TypeError:\n        return OneHotEncoder(handle_unknown=\"\
+      ignore\", sparse=False)\n\n\ndef main():\n    parser = argparse.ArgumentParser()\n\
+      \    parser.add_argument(\"--data_path\", required=True, help=\"Chemin du dataset\
+      \ CSV\")\n    parser.add_argument(\"--output_dir\", default=\"outputs\", help=\"\
+      Dossier de sortie\")\n    args = parser.parse_args()\n\n    print(\"Starting\
+      \ student success classification training...\")\n\n    df = pd.read_csv(args.data_path)\n\
+      \n    target_column = \"success\"\n\n    numeric_features = [\n        \"study_hours_per_week\"\
+      ,\n        \"attendance_rate\",\n        \"previous_grade\",\n        \"assignments_completed\"\
+      ,\n        \"sleep_hours\",\n        \"internet_access\",\n        \"extracurricular_hours\"\
+      ,\n    ]\n\n    categorical_features = [\n        \"major\",\n        \"scholarship\"\
+      ,\n    ]\n\n    required_columns = numeric_features + categorical_features +\
+      \ [target_column]\n\n    missing_columns = [col for col in required_columns\
+      \ if col not in df.columns]\n    if missing_columns:\n        raise ValueError(f\"\
+      Missing columns in dataset: {missing_columns}\")\n\n    X = df[numeric_features\
+      \ + categorical_features]\n    y = df[target_column]\n\n    X_train, X_test,\
+      \ y_train, y_test = train_test_split(\n        X,\n        y,\n        test_size=0.2,\n\
+      \        random_state=42,\n        stratify=y\n    )\n\n    preprocessor = ColumnTransformer(\n\
+      \        transformers=[\n            (\"num\", StandardScaler(), numeric_features),\n\
+      \            (\"cat\", build_one_hot_encoder(), categorical_features),\n   \
+      \     ]\n    )\n\n    model = RandomForestClassifier(\n        n_estimators=120,\n\
+      \        max_depth=8,\n        random_state=42,\n        class_weight=\"balanced\"\
+      \n    )\n\n    pipeline = Pipeline(\n        steps=[\n            (\"preprocessor\"\
+      , preprocessor),\n            (\"model\", model),\n        ]\n    )\n\n    pipeline.fit(X_train,\
+      \ y_train)\n\n    preds = pipeline.predict(X_test)\n\n    accuracy = accuracy_score(y_test,\
+      \ preds)\n    precision = precision_score(y_test, preds, average=\"weighted\"\
+      , zero_division=0)\n    recall = recall_score(y_test, preds, average=\"weighted\"\
+      , zero_division=0)\n    f1 = f1_score(y_test, preds, average=\"weighted\", zero_division=0)\n\
+      \n    print(f\"accuracy={accuracy}\")\n    print(f\"precision={precision}\"\
+      )\n    print(f\"recall={recall}\")\n    print(f\"f1_score={f1}\")\n\n    print(\"\
+      classification_report:\")\n    print(classification_report(y_test, preds, zero_division=0))\n\
+      \n    example = pd.DataFrame([\n        {\n            \"major\": \"Computer\
+      \ Science\",\n            \"scholarship\": \"yes\",\n            \"study_hours_per_week\"\
+      : 18,\n            \"attendance_rate\": 0.92,\n            \"previous_grade\"\
+      : 15.5,\n            \"assignments_completed\": 0.9,\n            \"sleep_hours\"\
+      : 7,\n            \"internet_access\": 1,\n            \"extracurricular_hours\"\
+      : 3\n        }\n    ])\n\n    prediction_example = int(pipeline.predict(example)[0])\n\
+      \    print(f\"prediction_example={prediction_example}\")\n\n    os.makedirs(args.output_dir,\
+      \ exist_ok=True)\n\n    model_path = os.path.join(args.output_dir, \"model.pkl\"\
+      )\n    joblib.dump(pipeline, model_path)\n\n    print(f\"Model saved to {model_path}\"\
+      )\n    print(\"Training completed successfully.\")\n\n\nif __name__ == \"__main__\"\
+      :\n    main()\n"
+data:
+  source_type: inline
+  dataset_name: 32720fc0-42d4-4758-9b7f-da313ddccebf.csv
+  filename: 32720fc0-42d4-4758-9b7f-da313ddccebf.csv
+  content: "major,scholarship,study_hours_per_week,attendance_rate,previous_grade,assignments_completed,sleep_hours,internet_access,extracurricular_hours,success\r\
+    \nMedicine,no,27.2,0.95,18.7,0.96,8.8,1,3.7,1\r\nEngineering,no,12.3,0.88,15.5,0.91,7.5,1,4.6,1\r\
+    \nMedicine,no,30.0,0.88,16.8,0.86,7.5,1,6.2,1\r\nEngineering,no,8.5,0.47,8.1,0.15,5.0,1,10.8,0\r\
+    \nBusiness,no,15.0,0.67,15.2,0.84,7.1,1,8.9,0\r\nBusiness,yes,6.8,0.51,10.0,0.74,6.0,0,16.5,0\r\
+    \nMedicine,yes,18.6,0.75,18.5,0.87,6.4,1,3.2,1\r\nBusiness,yes,12.8,0.5,11.5,0.34,4.1,1,14.5,0\r\
+    \nComputer Science,yes,6.7,0.43,10.8,0.1,4.2,1,9.4,0\r\nDesign,no,19.6,0.67,15.3,0.78,4.2,1,15.8,0\r\
+    \nEngineering,no,2.7,0.74,6.5,0.48,6.5,1,15.7,0\r\nBusiness,yes,13.0,0.74,9.6,0.23,5.9,1,17.2,0\r\
+    \nDesign,no,30.1,0.99,14.2,0.99,8.8,1,1.0,1\r\nEngineering,yes,14.2,0.93,14.0,0.85,6.7,1,3.1,1\r\
+    \nEngineering,no,10.9,0.43,5.0,0.36,5.6,1,6.6,0\r\nComputer Science,no,27.8,0.93,14.4,0.85,8.4,1,3.3,1\r\
+    \nDesign,no,10.7,0.58,12.5,0.59,6.2,1,12.6,0\r\nComputer Science,no,8.4,0.36,6.8,0.74,5.5,1,17.9,0\r\
+    \nComputer Science,yes,26.1,0.96,13.7,0.93,8.6,1,2.1,1\r\nEngineering,yes,7.1,0.66,6.4,0.11,3.6,1,6.0,0\r\
+    \nEngineering,yes,12.5,0.77,9.0,0.54,6.6,1,12.1,0\r\nComputer Science,yes,22.6,0.85,15.7,0.98,7.8,1,7.5,1\r\
+    \nBusiness,no,12.2,0.86,15.4,0.68,6.6,1,15.1,0\r\nEngineering,yes,2.6,0.63,6.8,0.54,5.7,1,9.3,0\r\
+    \nMedicine,yes,8.3,0.37,11.3,0.54,3.7,1,11.5,0\r\nDesign,no,3.5,0.45,5.3,0.34,5.1,1,15.9,0\r\
+    \nBusiness,no,29.0,0.97,17.8,0.8,6.7,1,4.5,1\r\nComputer Science,yes,16.8,0.78,15.3,0.92,8.2,1,4.3,1\r\
+    \nComputer Science,yes,9.8,0.81,11.3,0.66,5.8,1,14.0,0\r\nDesign,no,10.7,0.45,7.2,0.15,6.0,1,6.2,0\r\
+    \nMedicine,no,9.6,0.77,6.4,0.52,5.9,1,17.8,0\r\nMedicine,no,26.2,0.78,14.6,0.83,8.2,1,5.3,1\r\
+    \nBusiness,no,31.9,0.86,13.5,0.85,6.1,1,3.7,1\r\nDesign,yes,16.9,0.78,15.7,0.77,7.3,1,7.0,1\r\
+    \nBusiness,no,13.4,0.8,16.5,0.8,8.0,1,8.3,1\r\nBusiness,no,18.2,0.85,15.1,0.78,7.2,1,4.8,1\r\
+    \nComputer Science,no,11.6,0.71,6.3,0.15,4.8,1,17.7,0\r\nBusiness,no,18.6,0.91,17.7,0.79,7.5,1,4.6,1\r\
+    \nMedicine,no,27.3,0.78,14.0,0.9,8.2,1,5.8,1\r\nEngineering,yes,15.6,0.9,17.1,0.77,6.3,1,2.9,1\r\
+    \nDesign,yes,8.5,0.57,14.5,0.61,5.0,1,5.1,0\r\nDesign,yes,11.4,0.46,12.6,0.36,3.6,1,7.0,0\r\
+    \nEngineering,no,12.8,0.51,8.1,0.24,4.8,1,17.0,0\r\nMedicine,yes,13.1,0.62,14.4,0.53,7.1,0,16.9,0\r\
+    \nComputer Science,no,13.9,0.54,5.8,0.64,5.3,1,7.0,0\r\nBusiness,no,22.4,0.73,17.3,0.77,6.7,1,6.9,1\r\
+    \nDesign,no,24.1,0.99,18.0,0.76,7.4,1,3.9,1\r\nBusiness,no,13.2,0.68,12.5,0.74,5.7,1,8.0,0\r\
+    \nDesign,yes,9.9,0.73,10.8,0.49,6.0,1,17.7,0\r\nBusiness,yes,9.1,0.63,7.4,0.21,5.7,0,15.1,0\r\
+    \nDesign,no,18.6,0.99,16.0,0.8,6.2,1,1.0,1\r\nDesign,no,23.5,0.82,14.1,0.79,8.5,1,7.5,1\r\
+    \nBusiness,no,10.4,0.37,9.1,0.62,4.5,1,13.5,0\r\nMedicine,yes,17.7,0.8,10.1,0.63,6.2,1,13.0,0\r\
+    \nMedicine,yes,23.4,0.98,15.6,0.93,7.2,1,7.4,1\r\nEngineering,no,30.7,0.83,17.9,0.81,6.8,1,5.2,1\r\
+    \nMedicine,yes,22.7,0.99,15.3,0.83,8.7,1,5.5,1\r\nDesign,no,11.4,0.73,13.3,0.35,3.9,1,11.3,0\r\
+    \nMedicine,yes,9.6,0.5,7.2,0.33,6.5,1,12.5,0\r\nBusiness,yes,13.2,0.85,15.4,0.5,8.0,1,1.4,1\r\
+    \nEngineering,yes,29.5,0.9,17.1,0.8,7.9,1,7.5,1\r\nEngineering,no,5.2,0.53,12.6,0.27,6.0,1,5.1,0\r\
+    \nDesign,no,3.6,0.41,10.8,0.66,6.5,1,12.9,0\r\nComputer Science,no,20.1,0.78,13.9,0.82,7.9,1,3.4,1\r\
+    \nEngineering,no,19.4,0.9,16.0,0.76,7.2,1,5.2,1\r\nBusiness,no,3.8,0.67,6.3,0.52,7.0,0,13.6,0\r\
+    \nMedicine,yes,18.1,0.73,15.3,0.7,7.6,1,8.3,1\r\nEngineering,no,31.3,0.82,14.6,0.73,6.0,1,7.6,1\r\
+    \nMedicine,no,15.9,0.64,10.2,0.68,6.3,1,9.5,0\r\nDesign,yes,10.5,0.71,16.0,0.71,5.4,1,17.9,0\r\
+    \nDesign,yes,16.0,0.78,14.7,0.74,8.7,1,7.4,1\r\nMedicine,no,10.3,0.65,7.1,0.67,5.9,1,8.2,0\r\
+    \nBusiness,yes,22.2,0.85,18.2,0.89,7.6,1,3.8,1\r\nComputer Science,no,30.6,0.79,12.6,0.74,8.0,1,6.5,1\r\
+    \nComputer Science,no,12.2,0.54,7.5,0.11,5.0,1,11.9,0\r\nDesign,yes,13.4,0.37,6.2,0.68,6.9,1,10.5,0\r\
+    \nEngineering,yes,18.2,0.73,12.6,0.67,7.7,1,1.3,1\r\nMedicine,no,3.4,0.61,12.9,0.31,4.1,1,8.8,0\r\
+    \nEngineering,no,11.3,0.42,6.6,0.32,5.2,1,11.0,0\r\nBusiness,yes,27.7,0.75,14.3,0.91,8.7,1,1.9,1\r\
+    \nComputer Science,yes,12.0,0.4,6.6,0.2,3.6,1,9.0,0\r\nBusiness,no,24.5,0.92,16.7,0.94,8.5,1,2.5,1\r\
+    \nEngineering,yes,22.3,0.87,14.8,0.89,8.3,1,6.2,1\r\nEngineering,no,7.2,0.5,8.6,0.57,3.8,1,15.5,0\r\
+    \nDesign,no,8.4,0.63,11.5,0.62,6.4,1,10.1,0\r\nBusiness,no,9.2,0.62,10.9,0.79,7.5,1,1.8,1\r\
+    \nDesign,no,27.9,0.76,15.8,0.89,7.7,1,6.1,1\r\nEngineering,no,1.5,0.73,9.6,0.32,3.6,1,7.1,0\r\
+    \nBusiness,no,31.0,0.75,14.9,0.81,7.7,1,6.7,1\r\nComputer Science,no,11.2,0.59,5.4,0.28,6.8,1,5.4,0\r\
+    \nEngineering,no,4.7,0.66,6.3,0.62,5.4,1,8.4,0\r\nBusiness,no,16.6,0.98,18.1,0.94,8.7,1,4.9,1\r\
+    \nMedicine,yes,15.4,0.86,17.1,0.9,8.2,1,9.0,1\r\nMedicine,yes,9.3,0.56,12.5,0.75,7.5,1,3.1,1\r\
+    \nMedicine,no,17.1,0.66,13.9,0.5,5.7,0,15.3,0\r\nEngineering,yes,23.8,0.97,18.7,0.96,6.9,1,3.6,1\r\
+    \nDesign,yes,9.5,0.5,13.0,0.39,5.1,1,7.4,0\r\nDesign,yes,29.8,0.93,12.8,0.98,8.2,1,3.8,1\r\
+    \nBusiness,yes,5.3,0.7,11.9,0.29,6.4,0,16.6,0\r\nBusiness,yes,13.5,0.37,10.9,0.49,5.1,1,10.9,0\r\
+    \nDesign,yes,21.9,0.81,14.9,0.78,6.9,1,1.5,1\r\nComputer Science,no,9.6,0.36,7.4,0.39,5.0,1,10.3,0\r\
+    \nDesign,yes,21.8,0.92,16.1,0.83,6.1,1,8.0,1\r\nComputer Science,no,13.0,0.39,9.9,0.47,6.5,1,8.9,0\r\
+    \nBusiness,no,13.7,0.77,15.5,0.58,8.1,1,3.3,1\r\nBusiness,no,19.8,0.75,15.6,0.5,6.5,1,4.5,1\r\
+    \nMedicine,yes,22.1,0.87,16.4,0.73,8.3,1,5.4,1\r\nComputer Science,no,11.7,0.5,8.5,0.67,5.6,0,15.5,0\r\
+    \nMedicine,yes,6.3,0.74,9.2,0.43,5.9,1,9.5,0\r\nComputer Science,yes,7.4,0.6,5.6,0.13,6.2,1,10.1,0\r\
+    \nEngineering,yes,13.3,0.68,10.3,0.48,7.1,1,12.0,0\r\nBusiness,no,27.5,0.79,12.6,0.91,7.5,1,3.4,1\r\
+    \nComputer Science,no,22.3,0.98,16.2,0.98,8.4,1,8.7,1\r\nEngineering,yes,18.8,0.98,15.4,0.8,7.6,1,6.8,1\r\
+    \nMedicine,yes,12.5,0.75,18.0,0.84,8.0,1,6.6,1\r\nMedicine,no,5.1,0.47,13.4,0.22,7.1,1,9.9,0\r\
+    \nBusiness,no,12.9,0.49,11.9,0.28,5.5,0,17.9,0\r\nMedicine,yes,14.6,0.8,16.9,0.76,7.6,1,8.6,1\r\
+    \nEngineering,no,8.9,0.69,10.6,0.2,5.1,1,5.3,0\r\nMedicine,yes,5.1,0.44,6.0,0.42,5.8,0,10.4,0\r\
+    \nDesign,no,25.4,0.78,17.9,0.98,8.1,1,2.4,1\r\nMedicine,yes,16.8,0.64,15.9,0.57,8.5,1,7.3,1\r\
+    \nComputer Science,yes,14.2,0.8,14.0,0.91,8.8,1,6.4,1\r\nMedicine,no,13.5,0.41,5.8,0.17,6.6,1,6.0,0\r\
+    \nMedicine,no,22.2,0.78,15.0,0.77,6.1,1,8.4,1\r\nMedicine,yes,23.7,0.96,18.7,0.89,6.9,1,5.3,1\r\
+    \nEngineering,yes,28.8,0.94,17.8,0.99,7.4,1,4.6,1\r\nDesign,no,9.1,0.44,9.2,0.25,3.6,0,6.0,0\r\
+    \nDesign,yes,5.9,0.55,9.6,0.71,5.8,1,12.1,0\r\nMedicine,no,10.8,0.62,15.2,0.45,3.9,1,14.7,0\r\
+    \nDesign,yes,11.7,0.57,7.5,0.29,6.5,0,17.4,0\r\nDesign,yes,30.7,0.76,14.0,0.89,7.3,1,0.6,1\r\
+    \nMedicine,yes,21.2,0.75,13.0,0.85,6.8,1,6.3,1\r\nMedicine,no,10.7,0.62,7.3,0.18,6.9,1,17.4,0\r\
+    \nMedicine,yes,27.3,0.88,17.0,0.73,7.4,1,4.7,1\r\nComputer Science,yes,10.5,0.73,5.1,0.62,3.7,0,7.0,0\r\
+    \nMedicine,no,6.3,0.62,10.0,0.48,4.6,1,12.0,0\r\nEngineering,yes,3.6,0.63,9.5,0.15,7.2,1,5.4,0\r\
+    \nMedicine,yes,18.0,0.86,17.9,0.75,6.9,1,4.8,1\r\nDesign,yes,3.0,0.59,8.7,0.21,4.9,1,11.1,0\r\
+    \nEngineering,yes,4.3,0.6,9.4,0.46,4.4,1,8.0,0\r\nComputer Science,yes,24.9,0.84,16.2,0.78,8.8,1,3.4,1\r\
+    \nEngineering,yes,7.7,0.68,8.9,0.62,5.4,1,5.2,0\r\nComputer Science,yes,15.3,0.94,16.7,0.98,7.3,1,4.4,1\r\
+    \nBusiness,yes,3.5,0.64,11.3,0.28,4.0,1,8.2,0\r\nEngineering,no,18.7,1.0,15.7,0.76,6.1,1,0.6,1\r\
+    \nDesign,no,16.1,0.74,16.0,0.56,4.1,1,18.0,0\r\nDesign,no,8.0,0.5,12.7,0.36,6.5,1,9.1,0\r\
+    \nComputer Science,no,8.0,0.61,9.6,0.58,5.5,1,15.4,0\r\nBusiness,yes,12.2,0.82,18.2,0.78,7.8,1,3.2,1\r\
+    \nEngineering,yes,22.1,0.94,12.5,0.98,6.3,1,6.6,1\r\nDesign,yes,26.3,0.94,18.8,0.98,6.1,1,6.6,1\r\
+    \nBusiness,yes,4.4,0.63,10.7,0.74,3.6,1,7.4,0\r\nEngineering,no,10.4,0.6,9.7,0.5,5.0,1,18.0,0\r\
+    \nBusiness,yes,11.8,0.54,11.6,0.61,6.0,1,13.5,0\r\nEngineering,no,11.2,0.87,13.7,0.79,6.2,1,7.5,1\r\
+    \nBusiness,no,17.2,0.78,14.2,0.92,8.3,1,2.3,1\r\nComputer Science,yes,11.6,0.87,10.1,0.57,8.4,1,5.2,1\r\
+    \nMedicine,no,27.9,0.73,18.9,0.84,6.4,1,0.9,1\r\nEngineering,no,6.9,0.77,9.5,0.3,4.3,1,6.2,0\r\
+    \nMedicine,no,23.5,0.87,15.3,0.73,7.7,1,1.8,1\r\nEngineering,yes,6.8,0.54,10.6,0.43,7.0,1,17.5,0\r\
+    \nMedicine,no,23.3,0.75,16.6,0.75,7.9,1,5.3,1\r\nBusiness,yes,29.4,1.0,14.6,0.84,7.4,1,9.0,1\r\
+    \nBusiness,no,16.7,0.86,13.4,0.57,5.4,1,7.2,0\r\nComputer Science,no,27.6,0.92,14.8,0.95,7.9,1,8.0,1\r\
+    \nBusiness,yes,19.0,1.0,13.7,0.97,7.5,1,1.9,1\r\nBusiness,no,11.7,0.54,11.7,0.4,4.6,1,12.4,0\r\
+    \nDesign,yes,17.6,0.73,16.3,0.72,8.5,1,1.6,1\r\nBusiness,yes,24.2,0.95,17.6,0.82,6.3,1,3.7,1\r\
+    \nComputer Science,no,31.4,0.83,17.8,0.89,7.3,1,5.7,1\r\nComputer Science,no,18.7,0.86,15.0,0.7,6.2,1,4.7,1\r\
+    \nMedicine,no,16.5,0.84,15.9,0.59,8.3,1,8.0,1\r\nBusiness,yes,8.7,0.54,5.8,0.74,7.2,0,8.6,0\r\
+    \nMedicine,no,5.4,0.7,13.5,0.11,7.2,1,16.6,0\r\nMedicine,no,13.1,0.75,10.8,0.74,5.6,1,7.5,0\r\
+    \nBusiness,no,24.1,0.97,12.9,0.84,7.0,1,0.4,1\r\nDesign,yes,24.9,0.97,17.9,0.75,7.9,1,5.9,1\r\
+    \nMedicine,no,10.9,0.57,5.5,0.41,4.8,0,11.7,0\r\nEngineering,no,9.4,0.77,10.5,0.45,4.7,0,14.2,0\r\
+    \nDesign,no,26.8,0.84,15.6,0.99,7.2,1,3.6,1\r\nComputer Science,yes,2.9,0.5,6.6,0.41,5.3,0,7.3,0\r\
+    \nEngineering,no,18.0,0.87,13.0,0.47,7.8,1,8.7,1\r\nEngineering,yes,15.0,0.66,13.0,0.79,5.5,1,13.5,0\r\
+    \nComputer Science,no,11.6,0.87,12.6,0.7,6.4,1,17.4,0\r\nEngineering,yes,15.3,0.98,18.9,0.77,6.3,1,8.9,1\r\
+    \nEngineering,yes,10.9,0.6,11.4,0.77,8.7,1,5.7,1\r\nEngineering,yes,13.4,0.73,5.0,0.22,3.6,0,16.8,0\r\
+    \nComputer Science,yes,6.7,0.61,10.0,0.62,4.9,1,6.5,0\r\nBusiness,no,12.0,0.72,13.7,0.93,8.6,1,4.2,1\r\
+    \nMedicine,no,12.5,0.68,9.6,0.18,6.1,1,5.6,0\r\nComputer Science,no,5.3,0.61,5.2,0.62,4.0,1,5.0,0\r\
+    \nEngineering,yes,5.5,0.75,9.7,0.55,5.0,0,16.6,0\r\nComputer Science,no,14.3,0.63,15.8,0.66,6.1,1,8.9,1\r\
+    \nDesign,yes,6.6,0.62,6.1,0.73,4.4,0,17.3,0\r\nMedicine,no,10.7,0.84,10.8,0.71,4.4,1,8.1,0\r\
+    \nBusiness,yes,18.8,0.75,13.8,0.84,7.3,1,0.8,1\r\nMedicine,yes,16.3,0.75,14.9,0.77,8.2,1,7.9,1\r\
+    \nBusiness,yes,16.6,0.89,12.3,0.48,7.4,1,6.8,1\r\nDesign,no,3.4,0.37,10.5,0.23,7.0,1,8.0,0\r\
+    \nDesign,yes,6.8,0.4,6.8,0.52,3.9,0,16.6,0\r\nComputer Science,yes,25.1,0.95,19.0,0.76,7.8,1,2.0,1\r\
+    \nBusiness,yes,19.3,0.62,15.9,0.85,7.4,1,4.5,1\r\nEngineering,no,12.8,0.39,12.2,0.22,7.0,0,6.1,0\r\
+    \nBusiness,yes,9.8,0.66,5.7,0.7,4.0,1,15.2,0\r\nEngineering,no,12.8,0.91,18.1,0.76,7.0,1,2.3,1\r\
+    \nComputer Science,yes,17.2,0.62,11.8,0.57,3.7,0,13.7,0\r\nComputer Science,no,10.3,0.74,5.1,0.51,5.1,0,10.0,0\r\
+    \nComputer Science,no,15.1,0.86,18.8,0.92,7.4,1,8.2,1\r\nMedicine,no,10.5,0.56,14.8,0.69,5.3,1,9.4,0\r\
+    \nDesign,no,29.2,0.77,14.9,0.81,7.1,1,8.6,1\r\nComputer Science,yes,18.9,0.76,12.8,0.83,8.2,1,1.8,1\r\
+    \nMedicine,no,4.5,0.68,12.8,0.68,6.0,1,8.0,0\r\nDesign,yes,15.8,0.99,13.1,0.84,7.7,1,3.1,1\r\
+    \nComputer Science,no,4.4,0.76,8.9,0.6,3.7,1,7.3,0\r\nDesign,no,2.8,0.5,12.2,0.43,5.0,1,8.9,0\r\
+    \nMedicine,yes,11.1,0.41,5.2,0.73,4.1,0,5.3,0\r\nBusiness,yes,24.3,0.9,16.6,0.7,6.2,1,3.0,1\r\
+    \nBusiness,yes,25.2,0.92,15.1,0.9,8.3,1,1.2,1\r\nMedicine,yes,2.4,0.65,13.2,0.58,4.3,1,15.3,0\r\
+    \nMedicine,yes,5.8,0.44,7.8,0.55,3.6,1,17.4,0\r\nBusiness,yes,12.1,0.75,14.2,0.67,7.3,1,3.4,1\r\
+    \nComputer Science,no,17.7,0.59,11.5,0.59,6.0,1,6.9,0\r\nComputer Science,no,23.7,0.9,17.3,1.0,7.4,1,4.7,1\r\
+    \nEngineering,yes,31.1,0.84,18.7,0.97,8.4,1,2.3,1\r\nBusiness,yes,15.7,0.9,18.6,0.93,6.0,1,0.4,1\r\
+    \nDesign,no,13.3,0.76,18.8,0.86,6.5,1,0.8,1\r\nBusiness,yes,5.1,0.45,8.3,0.2,6.7,0,7.7,0\r\
+    \nMedicine,no,29.5,0.74,15.7,0.99,7.9,1,5.9,1\r\nEngineering,no,19.3,0.74,12.6,0.81,7.7,1,5.8,1\r\
+    \nComputer Science,yes,10.4,0.37,12.0,0.22,6.7,1,8.4,0\r\nComputer Science,yes,10.8,0.43,5.0,0.2,7.1,1,9.2,0\r\
+    \nComputer Science,no,4.0,0.45,11.9,0.56,6.4,1,12.6,0\r\nBusiness,yes,15.6,0.8,15.6,0.81,8.7,1,5.0,1\r\
+    \nEngineering,yes,2.8,0.56,9.6,0.39,5.1,1,13.7,0\r\nDesign,no,12.9,0.59,12.5,0.7,3.9,1,14.7,0\r\
+    \nDesign,no,1.2,0.57,12.3,0.17,5.5,1,7.8,0\r\nDesign,no,10.0,0.51,10.7,0.29,5.1,1,16.3,0\r\
+    \nDesign,no,18.4,0.68,14.2,0.62,7.0,1,15.9,0\r\nBusiness,no,8.1,0.84,13.7,0.72,4.0,1,14.7,0\r\
+    \nBusiness,yes,22.0,0.79,13.0,0.83,8.2,1,8.2,1\r\nBusiness,yes,10.7,0.75,15.0,0.48,5.9,1,13.4,0\r\
+    \nDesign,no,2.7,0.65,9.1,0.33,3.6,1,14.5,0\r\nMedicine,no,4.7,0.62,8.4,0.45,7.1,1,16.2,0\r\
+    \nDesign,yes,9.2,0.59,11.3,0.58,4.5,1,5.8,0\r\nComputer Science,no,13.8,0.62,5.0,0.62,4.5,1,7.3,0\r\
+    \nBusiness,yes,17.1,0.79,17.8,0.97,8.8,1,6.9,1\r\nDesign,yes,26.3,0.84,14.1,0.72,6.9,1,6.0,1\r\
+    \nBusiness,yes,2.1,0.41,5.9,0.52,5.1,1,15.3,0\r\nDesign,yes,18.3,0.87,12.0,0.56,6.8,1,7.2,0\r\
+    \nBusiness,no,27.7,0.86,15.7,0.95,8.6,1,5.2,1\r\nEngineering,no,3.6,0.44,9.5,0.25,6.7,1,7.3,0\r\
+    \nEngineering,no,6.2,0.71,8.6,0.54,7.1,1,7.0,0\r\nBusiness,no,12.7,1.0,13.2,0.92,7.2,1,4.4,1\r\
+    \nMedicine,no,5.9,0.48,9.0,0.71,6.0,1,17.3,0\r\nBusiness,no,2.7,0.67,10.6,0.47,5.0,1,16.9,0\r\
+    \nEngineering,no,17.0,0.97,14.6,0.77,8.5,1,8.3,1\r\nMedicine,yes,8.6,0.6,12.1,0.74,5.0,1,17.6,0\r\
+    \nComputer Science,yes,9.7,0.69,5.9,0.12,5.7,1,5.8,0\r\nEngineering,yes,28.2,0.89,12.6,0.96,8.1,1,4.1,1\r\
+    \nBusiness,yes,28.5,0.79,14.7,0.98,7.3,1,0.4,1\r\nBusiness,no,13.5,0.9,14.0,0.77,7.8,1,2.5,1\r\
+    \nEngineering,yes,10.1,0.75,16.0,0.68,4.4,1,17.3,0\r\nBusiness,yes,14.4,0.82,14.9,0.81,8.5,1,1.8,1\r\
+    \nMedicine,no,11.0,0.7,6.9,0.63,4.0,1,5.4,0\r\nMedicine,no,12.6,0.72,11.6,0.1,5.8,0,14.4,0\r\
+    \nDesign,no,7.3,0.7,9.4,0.11,4.9,1,10.4,0\r\nMedicine,yes,15.7,0.93,16.2,0.94,6.8,1,1.0,1\r\
+    \nComputer Science,no,16.8,0.99,17.0,0.78,7.1,1,0.1,1\r\nBusiness,no,14.3,0.66,12.8,0.61,7.0,1,8.2,0\r\
+    \nEngineering,no,20.7,0.79,18.0,0.97,7.7,1,2.8,1\r\nEngineering,yes,4.8,0.56,6.2,0.68,7.0,1,8.4,0\r\
+    \nDesign,yes,12.9,0.79,13.5,0.82,6.7,0,17.0,0\r\nBusiness,no,2.6,0.46,12.9,0.2,5.9,0,15.3,0\r\
+    \nMedicine,yes,3.5,0.49,9.0,0.49,6.0,0,16.0,0\r\nEngineering,yes,13.9,0.62,10.1,0.78,5.0,0,16.4,0\r\
+    \nDesign,yes,19.9,1.0,18.9,0.84,8.3,1,0.7,1\r\nMedicine,no,18.7,0.72,13.8,0.81,6.7,1,2.3,1\r\
+    \nMedicine,no,23.4,0.89,16.1,0.95,7.5,1,3.4,1\r\nComputer Science,no,21.3,0.9,17.5,0.74,7.8,1,4.9,1\r\
+    \nDesign,no,30.6,0.88,15.8,0.82,7.9,1,1.3,1\r\nComputer Science,yes,12.4,0.73,12.7,0.74,4.0,1,5.0,0\r\
+    \nBusiness,no,14.9,0.67,12.7,0.49,3.8,0,14.2,0\r\nBusiness,yes,12.3,0.47,8.9,0.68,5.9,0,9.4,0\r\
+    \nBusiness,no,7.1,0.7,6.4,0.72,6.6,1,11.9,0\r\nDesign,no,7.9,0.41,7.5,0.48,4.5,1,9.2,0\r\
+    \nEngineering,yes,7.1,0.46,11.4,0.13,7.2,1,11.0,0\r\nBusiness,yes,21.6,0.92,15.7,0.84,6.9,1,5.3,1\r\
+    \nEngineering,yes,30.1,0.98,12.7,0.89,7.3,1,8.0,1\r\nBusiness,yes,12.2,0.86,11.6,0.66,4.1,1,7.6,0\r\
+    \nComputer Science,no,15.6,0.57,10.9,0.55,8.2,1,4.5,1\r\nComputer Science,no,11.8,0.52,10.9,0.74,5.5,1,8.2,0\r\
+    \nBusiness,no,20.0,0.96,12.8,0.78,7.6,1,5.2,1\r\nComputer Science,yes,4.0,0.61,7.6,0.62,3.9,1,9.2,0\r\
+    \nMedicine,no,1.5,0.63,5.4,0.48,5.5,1,15.6,0\r\nComputer Science,no,11.3,0.6,14.1,0.5,7.0,1,3.3,1\r\
+    \nComputer Science,yes,20.6,0.87,16.0,0.77,7.9,1,3.3,1\r\nDesign,yes,6.2,0.46,13.0,0.53,5.5,1,14.2,0\r\
+    \nMedicine,yes,15.5,0.88,14.1,0.75,6.7,1,1.5,1\r\nEngineering,yes,9.8,0.46,5.8,0.25,6.1,1,12.5,0\r\
+    \nComputer Science,yes,22.6,0.99,13.0,0.8,6.2,1,6.5,1\r\nMedicine,no,8.6,0.51,6.9,0.13,3.6,1,14.5,0\r\
+    \nBusiness,yes,9.1,0.38,9.0,0.11,3.7,1,5.1,0\r\nEngineering,no,21.7,0.85,13.7,0.77,6.3,0,6.4,1\r\
+    \nEngineering,no,25.0,0.88,12.6,0.93,6.4,1,0.6,1\r\nDesign,no,23.0,0.96,15.1,0.91,8.1,1,5.9,1\r\
+    \nBusiness,no,1.3,0.77,11.1,0.65,4.4,1,5.0,0\r\nMedicine,no,5.7,0.48,8.6,0.36,5.5,1,8.7,0\r\
+    \nDesign,yes,5.7,0.51,5.4,0.37,6.8,1,13.7,0\r\nEngineering,no,8.9,0.43,7.5,0.29,5.2,1,6.6,0\r\
+    \nDesign,no,28.8,0.9,12.6,0.92,6.3,1,2.7,1\r\nComputer Science,yes,14.4,0.78,10.9,0.57,4.0,1,15.3,0\r\
+    \nEngineering,yes,13.2,0.87,17.9,0.95,8.7,1,2.2,1\r\nMedicine,yes,15.8,0.92,13.7,0.74,8.4,1,4.0,1\r\
+    \nMedicine,no,28.6,0.77,18.7,0.71,7.7,1,0.4,1\r\nComputer Science,yes,12.0,0.85,13.4,0.83,6.7,1,6.9,1\r\
+    \nMedicine,no,14.4,0.57,10.8,0.5,7.4,1,4.3,1\r\nBusiness,no,13.3,0.5,7.9,0.62,5.5,0,9.6,0\r\
+    \nEngineering,yes,29.4,0.86,15.6,1.0,8.1,0,1.1,1\r\nMedicine,yes,17.7,0.81,15.0,0.73,7.3,1,1.5,1\r\
+    \nDesign,no,12.0,0.42,9.8,0.52,5.9,1,12.0,0\r\nEngineering,yes,5.5,0.39,6.1,0.27,4.6,1,13.1,0\r\
+    \nDesign,yes,11.6,0.65,12.3,0.54,4.2,1,15.4,0\r\nDesign,yes,20.2,0.93,14.9,0.9,8.1,1,0.9,1\r\
+    \nComputer Science,yes,26.3,0.86,13.4,0.81,8.0,1,4.0,1\r\nComputer Science,yes,4.4,0.65,7.9,0.44,5.7,1,16.1,0\r\
+    \nBusiness,no,19.9,0.85,11.4,0.63,7.4,1,8.0,1\r\nDesign,no,7.6,0.53,11.3,0.46,4.6,1,10.5,0\r\
+    \nComputer Science,no,24.3,0.82,13.7,0.93,8.5,1,7.0,1\r\nDesign,no,8.1,0.46,6.5,0.48,6.3,1,7.2,0\r\
+    \nMedicine,yes,20.3,0.95,15.5,0.92,7.5,1,0.2,1\r\nDesign,yes,10.6,0.41,6.4,0.62,5.3,1,10.3,0\r\
+    \nComputer Science,no,10.5,0.44,11.8,0.58,3.9,1,17.9,0\r\nMedicine,no,31.0,0.95,16.0,0.73,7.4,1,0.4,1\r\
+    \nComputer Science,no,20.0,0.91,19.0,0.94,7.6,1,1.1,1\r\nMedicine,yes,4.7,0.64,13.3,0.61,4.2,1,6.0,0\r\
+    \nComputer Science,yes,13.2,0.83,13.4,0.63,6.6,1,6.2,0\r\nDesign,yes,19.0,0.93,16.4,0.81,8.8,1,2.8,1\r\
+    \nBusiness,no,12.2,0.88,14.5,0.76,6.3,1,7.8,1\r\nComputer Science,yes,14.4,0.55,12.7,0.59,5.3,1,8.4,0\r\
+    \nDesign,no,29.9,0.82,12.9,0.75,6.5,1,8.0,1\r\nComputer Science,yes,12.8,0.89,13.2,0.47,6.2,0,5.7,1\r\
+    \nBusiness,yes,20.7,0.98,17.0,0.75,7.5,1,7.4,1\r\nBusiness,yes,14.8,0.67,10.6,0.69,7.6,1,5.9,1\r\
+    \nDesign,yes,4.2,0.54,10.2,0.43,3.7,1,14.4,0\r\nEngineering,no,4.8,0.54,12.3,0.3,6.7,1,14.1,0\r\
+    \nBusiness,no,11.0,0.65,13.3,0.73,8.8,1,4.5,1\r\nEngineering,no,10.4,0.37,5.9,0.58,7.0,1,6.7,0\r\
+    \nEngineering,no,17.0,0.61,11.2,0.72,6.7,1,6.1,0\r\nEngineering,no,13.4,0.64,8.8,0.39,4.5,1,6.4,0\r\
+    \nMedicine,no,28.1,0.92,15.8,0.9,7.4,1,3.4,1\r\nDesign,yes,28.4,0.84,17.6,0.83,6.5,1,8.1,1\r\
+    \nComputer Science,no,21.7,0.74,18.3,0.81,6.9,1,8.1,1\r\nBusiness,yes,11.9,0.75,12.5,0.48,3.6,1,8.5,0\r\
+    \nComputer Science,no,2.3,0.71,12.9,0.43,4.4,1,13.2,0\r\nComputer Science,yes,5.9,0.41,5.5,0.14,5.2,1,11.7,0\r\
+    \nEngineering,no,10.4,0.43,12.3,0.31,3.8,1,13.5,0\r\nComputer Science,no,27.8,0.98,16.2,0.74,6.8,1,5.7,1\r\
+    \nBusiness,no,2.9,0.47,11.8,0.6,6.7,1,6.2,0\r\nComputer Science,yes,26.5,0.83,13.5,0.85,6.2,1,0.1,1\r\
+    \nMedicine,yes,21.6,0.92,13.9,0.79,8.7,1,5.3,1\r\nMedicine,no,7.1,0.53,12.2,0.11,3.6,1,6.5,0\r\
+    \nEngineering,no,28.2,0.75,15.1,0.82,7.0,1,8.2,1\r\nComputer Science,yes,19.7,0.7,12.5,0.65,6.5,1,2.7,1\r\
+    \nBusiness,no,25.7,1.0,17.3,0.91,6.9,1,7.8,1\r\nEngineering,yes,17.7,0.74,14.8,0.94,7.8,1,0.1,1\r\
+    \nDesign,no,10.9,0.6,10.7,0.39,6.4,1,7.5,0\r\nDesign,yes,18.6,0.61,15.2,0.54,8.3,1,4.9,1\r\
+    \nComputer Science,no,22.8,0.82,15.5,0.71,6.6,1,7.1,1\r\nEngineering,yes,3.3,0.51,8.0,0.24,6.9,1,10.4,0\r\
+    \nMedicine,yes,1.8,0.42,10.0,0.12,5.4,1,7.8,0\r\nComputer Science,yes,14.9,0.56,11.9,0.78,8.5,1,2.6,1\r\
+    \nEngineering,yes,11.0,0.69,12.3,0.73,3.6,1,5.2,0\r\nMedicine,yes,8.5,0.45,8.6,0.63,4.5,0,6.5,0\r\
+    \nMedicine,no,7.1,0.48,7.8,0.48,4.0,1,11.9,0\r\nComputer Science,yes,16.1,0.98,16.0,0.81,8.4,1,3.0,1\r\
+    \nBusiness,no,12.9,0.6,12.3,0.83,5.2,1,9.4,0\r\nEngineering,yes,19.4,0.79,15.6,0.88,8.2,1,8.8,1\r\
+    \nDesign,yes,19.5,0.67,12.1,0.78,7.9,1,0.8,1\r\nBusiness,yes,14.1,0.98,17.7,0.98,7.1,1,5.5,1\r\
+    \nMedicine,yes,11.4,0.38,12.8,0.41,6.3,1,17.1,0\r\nBusiness,no,25.2,0.95,15.7,0.98,7.1,1,4.0,1\r\
+    \nEngineering,yes,2.5,0.72,10.9,0.37,4.9,1,6.3,0\r\nBusiness,no,3.7,0.44,5.2,0.51,6.2,1,7.2,0\r\
+    \nMedicine,yes,13.4,0.62,12.7,0.7,6.5,1,16.1,0\r\nBusiness,no,12.8,0.69,14.4,0.62,6.8,1,8.3,1\r\
+    \nBusiness,no,28.1,0.74,16.4,0.86,8.1,1,0.4,1\r\nBusiness,yes,13.6,0.9,17.9,0.89,6.0,1,7.4,1\r\
+    \nMedicine,yes,13.8,0.91,15.9,0.97,8.3,1,4.8,1\r\nDesign,no,29.4,0.78,14.2,0.86,7.7,0,1.9,1\r\
+    \nMedicine,no,25.6,0.99,17.2,0.89,6.6,1,4.5,1\r\nDesign,yes,17.2,0.76,15.0,0.93,6.6,1,0.6,1\r\
+    \nBusiness,yes,28.1,0.8,16.0,0.89,8.1,1,8.1,1\r\nMedicine,yes,16.6,0.8,10.3,0.71,3.6,0,12.6,0\r\
+    \nBusiness,yes,29.9,0.79,14.1,1.0,6.6,1,6.0,1\r\nComputer Science,no,23.5,0.75,18.3,1.0,6.0,1,3.7,1\r\
+    \nComputer Science,yes,3.5,0.64,8.4,0.52,5.8,1,10.8,0\r\nBusiness,yes,18.0,0.93,13.5,0.75,6.0,1,8.8,1\r\
+    \nMedicine,no,30.6,0.89,16.3,0.74,8.7,1,8.8,1\r\nBusiness,yes,26.0,0.84,13.9,0.76,7.4,1,5.1,1\r\
+    \nDesign,yes,11.4,0.86,15.7,0.46,8.2,1,1.9,1\r\nDesign,no,5.7,0.64,7.4,0.57,6.3,1,17.0,0\r\
+    \nBusiness,no,19.1,0.99,17.3,0.73,8.6,1,7.9,1\r\nComputer Science,no,24.7,0.79,15.0,0.98,6.9,1,0.9,1\r\
+    \nMedicine,yes,19.5,0.78,13.3,0.8,6.6,1,4.5,1\r\nEngineering,yes,21.1,0.96,18.7,0.75,7.7,1,1.9,1\r\
+    \nDesign,no,9.4,0.58,9.3,0.61,6.1,1,8.8,0\r\nMedicine,yes,9.8,0.37,10.6,0.29,4.6,1,6.3,0\r\
+    \nBusiness,no,21.1,0.96,17.2,0.79,7.6,1,6.1,1\r\nEngineering,yes,2.9,0.5,12.6,0.55,5.4,1,16.4,0\r\
+    \nBusiness,yes,5.1,0.72,12.5,0.19,4.5,1,12.1,0\r\nBusiness,yes,18.1,0.82,10.0,0.64,6.6,1,5.4,1\r\
+    \nDesign,yes,30.8,0.76,18.3,0.79,6.8,1,7.5,1\r\nDesign,yes,16.5,0.79,18.6,0.86,8.3,1,0.5,1\r\
+    \nComputer Science,yes,8.4,0.54,7.1,0.36,6.5,1,12.1,0\r\nMedicine,yes,5.1,0.58,8.3,0.73,3.7,0,14.9,0\r\
+    \nMedicine,yes,24.1,0.85,13.1,0.9,8.6,1,1.0,1\r\nComputer Science,yes,10.6,0.39,11.7,0.31,6.0,1,9.1,0\r\
+    \nBusiness,no,14.3,0.78,14.9,0.92,8.0,1,0.9,1\r\nMedicine,yes,18.9,0.68,10.9,0.59,5.3,1,6.0,0\r\
+    \nDesign,yes,8.2,0.38,8.3,0.32,7.2,0,8.1,0\r\nMedicine,yes,11.7,0.52,10.4,0.66,6.9,1,15.8,0\r\
+    \nComputer Science,no,1.7,0.41,9.3,0.38,6.3,1,16.6,0\r\nMedicine,yes,29.4,0.82,18.6,0.74,7.3,1,4.7,1\r\
+    \nComputer Science,yes,16.3,0.85,14.1,0.68,7.9,1,3.2,1\r\nEngineering,no,1.3,0.66,8.0,0.33,4.4,0,9.2,0\r\
+    \nDesign,no,2.9,0.78,12.2,0.65,5.4,1,9.5,0\r\nDesign,yes,26.4,0.98,15.1,0.99,6.8,1,4.2,1\r\
+    \nMedicine,no,22.0,0.91,14.3,0.8,7.5,1,0.6,1\r\nMedicine,yes,15.2,0.71,10.5,0.45,7.3,1,0.5,1\r\
+    \nBusiness,no,8.8,0.68,7.2,0.64,4.0,1,7.9,0\r\nBusiness,no,19.2,0.58,15.3,0.68,6.9,1,9.8,0\r\
+    \nComputer Science,yes,16.0,0.8,15.7,0.85,6.3,1,11.6,0\r\nDesign,yes,10.5,0.62,5.9,0.57,4.4,1,14.0,0\r\
+    \nDesign,no,1.7,0.35,7.3,0.74,4.4,1,13.0,0\r\nEngineering,no,31.4,0.79,15.2,0.73,6.2,1,4.5,1\r\
+    \nEngineering,no,11.1,0.76,8.2,0.24,3.6,0,8.7,0\r\nEngineering,yes,26.9,0.99,14.3,0.91,6.1,1,5.1,1\r\
+    \nDesign,no,5.7,0.75,6.8,0.25,6.9,1,14.1,0\r\nDesign,no,4.7,0.59,10.8,0.6,6.5,1,15.0,0\r\
+    \nComputer Science,yes,18.8,0.81,15.6,0.75,6.7,1,2.4,1\r\nEngineering,yes,25.2,0.81,14.2,0.77,6.5,1,7.5,1\r\
+    \nBusiness,no,13.9,0.53,8.5,0.34,6.4,1,17.4,0\r\nBusiness,yes,29.2,0.74,14.1,0.94,6.7,1,8.5,1\r\
+    \nEngineering,no,8.5,0.5,6.4,0.6,6.7,0,6.7,0\r\nComputer Science,no,19.4,0.87,16.0,0.6,6.1,0,17.2,0\r\
+    \nComputer Science,yes,24.5,0.88,17.9,0.97,7.0,1,6.5,1\r\nEngineering,no,13.4,0.84,15.2,0.55,6.9,1,15.9,0\r\
+    \nMedicine,no,14.4,0.99,16.7,0.86,7.3,1,4.9,1\r\nEngineering,no,17.3,0.92,13.4,0.95,6.1,1,4.9,1\r\
+    \nBusiness,no,18.8,0.77,13.8,0.65,6.0,1,6.8,1\r\nEngineering,no,19.0,0.78,18.8,0.92,8.7,1,2.9,1\r\
+    \nMedicine,no,31.5,0.86,18.9,0.87,6.7,1,8.2,1\r\nEngineering,yes,11.8,0.39,12.4,0.2,3.8,0,8.4,0\r\
+    \nBusiness,no,7.9,0.69,9.0,0.28,4.8,1,14.7,0\r\nMedicine,yes,15.6,0.96,16.6,0.94,6.4,1,4.6,1\r\
+    \nDesign,yes,14.6,0.88,16.1,0.88,6.8,1,0.8,1\r\nDesign,no,13.2,0.62,13.0,0.22,5.2,1,8.5,0\r\
+    \nDesign,no,14.2,0.74,18.8,0.91,8.6,1,0.4,1\r\nMedicine,yes,6.8,0.53,11.9,0.61,5.7,1,15.6,0\r\
+    \nDesign,yes,12.6,0.83,14.6,0.96,7.8,1,7.2,1\r\nMedicine,yes,8.8,0.77,7.4,0.55,5.9,1,5.1,0\r\
+    \nMedicine,yes,20.0,0.98,15.3,0.82,6.9,1,3.5,1\r\nDesign,no,20.4,0.88,14.5,0.74,8.4,1,8.2,1\r\
+    \nBusiness,yes,30.8,0.96,13.4,0.82,6.9,1,2.7,1\r\nComputer Science,no,23.0,0.77,16.3,0.98,6.7,1,5.0,1\r\
+    \nComputer Science,yes,13.9,0.86,15.5,0.72,7.5,0,5.1,1\r\nEngineering,yes,1.8,0.66,11.8,0.62,5.1,0,5.7,0\r\
+    \nMedicine,yes,2.3,0.43,12.0,0.31,3.7,1,5.3,0\r\nEngineering,yes,27.3,0.73,17.9,1.0,7.4,1,1.1,1\r\
+    \nBusiness,no,15.4,0.67,11.3,0.57,6.1,1,6.6,1\r\nDesign,yes,13.5,0.69,8.9,0.22,4.9,1,13.1,0\r\
+    \nComputer Science,yes,14.9,0.64,10.6,0.59,3.7,1,16.6,0\r\nBusiness,no,14.6,0.62,13.0,0.46,3.6,1,7.2,0\r\
+    \nBusiness,no,12.3,0.77,15.1,0.73,6.2,1,5.3,0\r\nMedicine,yes,14.2,0.99,15.7,0.74,8.2,1,3.1,1\r\
+    \nMedicine,no,4.3,0.72,8.0,0.25,7.1,1,12.4,0\r\nBusiness,no,9.8,0.6,15.4,0.72,8.5,1,6.8,1\r\
+    \nMedicine,no,27.4,0.96,18.5,0.88,7.8,1,3.1,1\r\nEngineering,yes,16.3,0.86,18.9,0.91,7.6,1,1.7,1\r\
+    \nComputer Science,yes,11.4,0.67,9.0,0.3,6.6,1,7.8,0\r\nComputer Science,no,12.2,0.56,7.1,0.65,6.5,1,16.2,0\r\
+    \nComputer Science,no,12.2,0.58,15.0,0.73,6.6,0,5.8,0\r\nMedicine,no,2.5,0.72,12.7,0.36,4.0,1,6.5,0\r\
+    \nBusiness,no,17.7,0.88,18.7,0.83,7.3,1,4.2,1\r\nMedicine,no,12.4,0.62,11.1,0.3,4.6,0,12.2,0\r\
+    \nDesign,yes,28.5,0.88,17.8,0.99,6.8,1,8.8,1\r\nMedicine,yes,10.3,0.58,13.0,0.71,5.1,0,16.4,0\r\
+    \nComputer Science,yes,17.2,0.77,13.5,0.48,7.0,1,5.5,1\r\nMedicine,yes,2.1,0.71,8.0,0.16,5.5,1,14.8,0\r\
+    \nMedicine,no,10.8,0.83,10.3,0.63,6.1,1,5.3,0\r\nComputer Science,no,20.8,0.79,13.5,0.97,8.1,1,2.6,1\r\
+    \nBusiness,yes,18.2,0.97,18.7,0.94,6.8,1,1.2,1\r\nBusiness,yes,23.8,0.72,15.0,0.71,8.1,1,0.3,1\r\
+    \nMedicine,yes,15.5,0.86,13.3,0.81,8.1,1,4.6,1\r\nDesign,yes,19.9,0.65,15.5,0.49,6.6,1,7.7,1\r\
+    \nComputer Science,yes,31.6,0.85,16.1,0.84,7.7,1,0.4,1\r\nDesign,no,15.6,0.57,14.9,0.5,7.5,1,5.6,1\r\
+    \nEngineering,yes,17.7,0.94,13.2,0.87,8.7,1,1.8,1\r\nBusiness,yes,13.2,0.55,15.9,0.82,5.9,1,14.7,0\r\
+    \nComputer Science,yes,6.0,0.78,5.6,0.56,6.1,1,5.1,0\r\nMedicine,no,28.0,0.77,12.8,0.74,7.0,1,8.5,1\r\
+    \nEngineering,no,7.2,0.71,5.3,0.31,4.1,0,13.9,0\r\nBusiness,yes,10.9,0.62,14.0,0.51,7.1,1,5.4,0\r\
+    \nMedicine,yes,13.5,0.67,5.4,0.21,5.3,1,8.7,0\r\nEngineering,yes,21.2,0.94,17.6,0.89,8.5,1,6.8,1\r\
+    \nComputer Science,yes,12.9,0.72,18.8,0.95,8.0,1,2.8,1\r\nMedicine,no,27.7,0.93,18.3,0.71,6.3,0,8.0,1\r\
+    \nDesign,yes,11.0,0.45,10.1,0.66,7.1,1,16.6,0\r\nComputer Science,no,18.3,0.89,15.3,0.67,6.6,1,0.1,1\r\
+    \nEngineering,yes,4.9,0.36,5.5,0.5,6.7,0,14.0,0\r\nComputer Science,yes,14.1,0.87,10.7,0.67,4.9,1,5.1,0\r\
+    \nMedicine,yes,18.5,0.83,10.2,0.74,5.6,1,16.9,0\r\nMedicine,yes,14.8,0.76,13.9,0.73,7.5,1,3.5,1\r\
+    \nEngineering,yes,7.1,0.36,12.9,0.62,5.6,0,5.4,0\r\nEngineering,yes,8.3,0.77,13.1,0.24,4.1,0,15.7,0\r\
+    \nMedicine,no,24.5,0.99,18.7,0.93,6.6,1,2.4,1\r\nBusiness,yes,12.0,0.67,10.3,0.83,3.6,1,6.8,0\r\
+    \nDesign,yes,12.8,0.73,13.0,0.97,8.3,1,8.8,1\r\nEngineering,yes,2.4,0.65,5.8,0.3,5.2,1,8.2,0\r\
+    \nMedicine,yes,15.6,0.75,14.3,0.85,7.5,1,4.6,1\r\nDesign,yes,5.7,0.4,6.1,0.27,3.7,0,9.7,0\r\
+    \nMedicine,yes,14.8,0.68,11.2,0.61,6.8,1,1.9,1\r\nMedicine,yes,14.8,0.73,13.2,0.78,7.2,1,0.8,1\r\
+    \nDesign,yes,22.8,0.96,17.1,0.91,7.9,1,0.5,1\r\nMedicine,no,1.7,0.71,11.8,0.14,6.1,1,11.2,0\r\
+    \nComputer Science,yes,16.8,0.78,11.7,0.74,8.5,1,7.7,1\r\nBusiness,yes,9.4,0.53,7.0,0.47,6.6,1,18.0,0\r\
+    \nDesign,yes,11.1,0.38,6.1,0.55,4.7,1,16.0,0\r\nEngineering,no,29.8,0.86,17.0,0.77,6.1,1,4.4,1\r\
+    \nDesign,no,23.4,0.74,15.6,0.82,8.0,1,3.7,1\r\nDesign,no,6.9,0.55,10.9,0.48,3.5,1,16.0,0\r\
+    \nEngineering,no,4.7,0.43,11.5,0.13,4.5,1,10.4,0\r\nDesign,no,13.3,0.59,8.2,0.72,4.1,0,11.1,0\r\
+    \nBusiness,yes,12.8,0.77,5.0,0.22,3.9,1,14.7,0\r\nDesign,yes,2.6,0.49,7.8,0.22,6.7,0,11.3,0\r\
+    \nBusiness,no,27.9,0.96,14.2,0.99,7.5,1,2.1,1\r\nDesign,no,1.1,0.4,9.0,0.61,6.6,0,13.0,0\r\
+    \nEngineering,no,16.7,0.81,13.2,0.82,5.8,1,10.3,0\r\nDesign,no,31.7,0.84,13.8,0.74,6.3,1,4.0,1\r\
+    \nBusiness,yes,1.6,0.44,10.7,0.11,6.1,1,10.5,0\r\nEngineering,yes,17.5,0.87,17.6,0.9,8.2,1,9.0,1\r\
+    \nComputer Science,no,19.9,0.73,17.8,0.82,8.3,1,1.4,1\r\nBusiness,no,21.7,0.97,13.4,0.8,6.2,1,4.5,1\r\
+    \nEngineering,yes,12.9,0.9,12.3,0.62,8.2,1,8.7,1\r\nComputer Science,yes,5.1,0.42,10.7,0.5,5.0,1,14.5,0\r\
+    \nComputer Science,yes,7.5,0.66,10.9,0.39,4.4,1,13.5,0\r\nMedicine,yes,22.0,0.73,15.3,0.94,6.1,1,1.5,1\r\
+    \nDesign,yes,9.8,0.35,10.4,0.39,3.9,1,14.8,0\r\nEngineering,no,21.3,0.98,15.4,0.72,6.4,1,3.5,1\r\
+    \nDesign,yes,17.7,0.59,13.1,0.46,7.0,1,5.3,1\r\nMedicine,yes,29.8,0.96,17.6,0.93,8.1,1,8.6,1\r\
+    \nMedicine,no,2.3,0.39,11.4,0.71,3.9,0,9.5,0\r\nEngineering,yes,13.5,0.79,14.8,0.81,7.1,1,2.5,1\r\
+    \nEngineering,yes,8.0,0.86,13.6,0.54,6.2,1,4.5,1\r\nEngineering,yes,13.0,0.74,14.1,0.91,6.8,1,2.0,1\r\
+    \nMedicine,no,14.6,0.9,14.9,0.97,6.5,1,2.1,1\r\nMedicine,yes,9.0,0.88,10.5,0.77,6.1,1,8.4,1\r\
+    \nEngineering,no,11.2,0.35,7.1,0.57,5.1,0,15.4,0\r\nMedicine,no,3.4,0.61,12.2,0.22,5.5,1,10.8,0\r\
+    \nBusiness,no,17.9,0.8,16.5,0.97,8.1,1,3.7,1\r\nBusiness,yes,11.4,0.72,11.4,0.78,4.8,1,12.7,0\r\
+    \nEngineering,no,6.2,0.46,9.1,0.24,4.3,0,9.9,0\r\nMedicine,no,23.8,0.95,13.4,0.98,6.2,1,4.1,1\r\
+    \nDesign,yes,19.2,0.96,16.4,0.89,6.6,1,3.7,1\r\nMedicine,no,6.9,0.7,9.2,0.21,4.3,1,11.0,0\r\
+    \nMedicine,yes,21.3,0.82,12.8,0.87,8.6,1,6.9,1\r\nDesign,yes,18.5,0.89,16.4,0.88,8.1,1,5.8,1\r\
+    \nMedicine,no,11.4,0.57,15.6,0.56,6.9,1,7.8,0\r\nBusiness,yes,28.4,0.91,15.6,0.75,6.1,0,0.5,1\r\
+    \nBusiness,no,11.4,0.44,5.2,0.52,3.9,1,12.6,0\r\nBusiness,no,14.2,0.75,11.9,0.58,6.5,0,15.8,0\r\
+    \nBusiness,no,11.1,0.64,11.9,0.56,3.8,1,11.8,0\r\nMedicine,yes,28.8,0.78,14.7,0.91,8.2,1,6.5,1\r\
+    \nDesign,no,11.5,0.84,14.4,0.83,6.4,1,13.2,0\r\nBusiness,no,30.0,0.78,14.5,0.82,6.3,1,8.0,1\r\
+    \nEngineering,yes,15.0,0.75,15.3,0.81,5.0,1,12.3,0\r\nEngineering,no,1.3,0.36,12.4,0.46,4.8,1,12.5,0\r\
+    \nDesign,yes,11.6,0.66,12.8,0.79,5.4,1,8.6,0\r\nComputer Science,yes,20.9,0.92,13.8,0.93,7.9,1,8.3,1\r\
+    \nBusiness,yes,21.7,0.81,17.4,0.94,8.0,1,0.3,1\r\nMedicine,yes,24.1,0.73,18.8,0.74,7.4,1,6.2,1\r\
+    \nMedicine,yes,14.2,0.94,15.6,0.97,6.2,1,2.9,1\r\nEngineering,no,12.3,0.81,18.1,0.87,6.2,0,3.3,1\r\
+    \nComputer Science,yes,14.7,0.73,13.2,0.48,7.4,1,9.0,1\r\nBusiness,no,6.2,0.6,8.2,0.16,5.3,0,10.1,0\r\
+    \nEngineering,yes,11.5,0.57,9.9,0.43,3.7,1,12.3,0\r\nDesign,no,29.5,0.83,17.3,0.84,7.7,1,3.8,1\r\
+    \nBusiness,no,6.4,0.75,9.6,0.37,5.3,1,5.0,0\r\nEngineering,yes,12.7,0.59,12.0,0.7,5.1,1,11.0,0\r\
+    \nEngineering,no,12.1,0.52,11.8,0.6,3.9,1,5.6,0\r\nMedicine,yes,1.8,0.58,9.3,0.43,3.9,1,9.9,0\r\
+    \nEngineering,yes,12.3,0.83,11.0,0.56,7.8,1,5.9,1\r\nMedicine,yes,13.0,0.9,15.7,0.79,6.7,1,6.8,1\r\
+    \nDesign,no,13.3,0.68,11.6,0.48,6.4,1,4.1,1\r\nEngineering,yes,4.8,0.67,8.8,0.53,3.8,1,7.6,0\r\
+    \nMedicine,yes,27.5,0.76,16.7,0.91,6.2,1,5.3,1\r\nBusiness,no,4.2,0.36,10.4,0.33,7.1,0,15.6,0\r\
+    \nBusiness,no,21.9,0.77,13.9,0.81,6.6,1,4.3,1\r\nEngineering,yes,28.5,0.89,13.9,0.97,8.6,1,6.8,1\r\
+    \nComputer Science,no,5.8,0.58,10.7,0.32,5.5,1,7.2,0\r\nComputer Science,yes,7.8,0.35,6.9,0.74,6.7,0,9.9,0\r\
+    \nDesign,yes,2.8,0.6,13.3,0.5,6.8,0,6.1,0\r\nComputer Science,yes,1.9,0.64,8.2,0.54,4.2,1,15.4,0\r\
+    \nComputer Science,yes,19.8,0.74,12.9,0.99,8.0,1,1.5,1\r\nComputer Science,no,23.6,0.85,14.2,0.88,8.7,1,2.2,1\r\
+    \nComputer Science,no,10.8,0.72,6.6,0.72,5.0,1,16.3,0\r\nComputer Science,no,21.6,0.74,17.3,0.77,7.6,1,3.1,1\r\
+    \nComputer Science,yes,3.1,0.51,11.8,0.74,6.3,1,9.5,0\r\nEngineering,yes,27.0,0.84,14.0,0.78,6.7,1,3.7,1\r\
+    \nDesign,no,8.9,0.68,12.3,0.59,4.5,1,9.5,0\r\nDesign,yes,6.2,0.76,10.3,0.51,5.1,1,12.8,0\r\
+    \nDesign,yes,9.5,0.35,13.2,0.35,5.1,1,8.2,0\r\nEngineering,no,5.8,0.5,7.7,0.12,5.0,1,5.0,0\r\
+    \nDesign,yes,17.2,0.88,13.8,0.95,8.0,0,8.7,1\r\nEngineering,yes,12.2,0.64,11.9,0.68,5.2,1,16.2,0\r\
+    \nEngineering,yes,4.5,0.4,10.9,0.69,4.3,1,17.2,0\r\nEngineering,yes,25.6,0.89,15.2,0.8,6.8,1,0.9,1\r\
+    \nBusiness,yes,7.3,0.74,9.1,0.67,5.1,0,5.6,0\r\nBusiness,no,23.6,0.84,13.1,0.78,8.6,1,6.5,1\r\
+    \nBusiness,yes,11.3,0.77,8.8,0.66,4.0,1,12.8,0\r\nBusiness,no,24.1,0.84,17.6,0.91,8.3,1,0.1,1\r\
+    \nComputer Science,no,8.2,0.56,9.9,0.47,4.5,1,9.2,0\r\nBusiness,no,28.4,0.95,12.5,0.85,6.1,1,3.3,1\r\
+    \nDesign,no,23.6,0.76,14.3,0.84,7.8,1,7.2,1\r\nBusiness,yes,10.4,0.85,10.4,0.54,5.4,0,8.0,0\r\
+    \nBusiness,yes,20.7,0.8,18.3,0.92,8.2,1,0.9,1\r\nBusiness,no,14.6,0.76,10.7,0.56,7.4,1,1.0,1\r\
+    \nDesign,yes,23.5,0.98,15.4,0.71,6.7,1,0.0,1\r\nComputer Science,yes,30.3,0.74,18.1,0.94,7.3,1,5.1,1\r\
+    \nComputer Science,yes,20.6,0.74,18.2,0.95,6.5,1,5.3,1\r\nBusiness,yes,11.1,0.51,10.7,0.2,6.3,1,11.6,0\r\
+    \nDesign,yes,15.1,0.88,17.9,0.84,6.2,1,0.6,1\r\nEngineering,yes,15.5,0.76,14.3,0.88,7.5,1,3.8,1\r\
+    \nEngineering,yes,5.5,0.71,13.2,0.39,6.1,0,16.5,0\r\nMedicine,no,11.3,0.74,6.4,0.31,5.2,1,10.2,0\r\
+    \nBusiness,yes,13.3,0.93,14.6,0.7,8.0,1,1.7,1\r\nMedicine,no,12.3,0.72,9.5,0.62,5.9,1,14.2,0\r\
+    \nEngineering,no,12.7,0.37,9.6,0.3,4.3,1,6.3,0\r\nComputer Science,no,9.5,0.58,13.4,0.78,8.0,1,3.4,1\r\
+    \nBusiness,yes,29.9,0.81,13.3,0.88,6.6,1,4.4,1\r\nEngineering,no,13.8,0.68,9.6,0.65,3.9,1,6.6,0\r\
+    \nMedicine,no,23.5,0.99,13.6,0.89,8.0,1,4.8,1\r\nBusiness,no,19.9,0.78,14.0,0.82,7.2,1,2.0,1\r\
+    \nEngineering,no,18.9,0.69,11.5,0.63,5.1,1,16.2,0\r\nEngineering,no,26.8,0.79,16.5,0.71,6.7,1,7.6,1\r\
+    \nEngineering,yes,4.2,0.37,13.2,0.48,5.5,1,17.6,0\r\nDesign,no,16.9,0.62,10.0,0.68,6.9,0,12.6,0\r\
+    \nDesign,no,2.0,0.62,10.9,0.34,5.0,1,6.8,0\r\nEngineering,yes,1.3,0.37,10.2,0.11,5.3,1,12.6,0\r\
+    \nDesign,no,14.0,0.91,15.8,0.83,6.7,1,0.2,1\r\nBusiness,yes,2.9,0.55,8.7,0.7,6.1,1,12.5,0\r\
+    \nComputer Science,no,11.6,0.9,15.0,0.51,8.5,1,8.7,1\r\nBusiness,no,17.8,0.92,15.4,0.96,6.6,1,3.1,1\r\
+    \nMedicine,no,18.6,0.7,13.1,0.79,6.9,1,2.6,1\r\nDesign,yes,4.0,0.7,10.1,0.52,5.4,1,12.0,0\r\
+    \nEngineering,no,5.4,0.36,11.3,0.64,4.9,0,7.2,0\r\nBusiness,yes,1.6,0.55,10.7,0.29,7.2,0,13.7,0\r\
+    \nMedicine,no,12.0,0.57,7.9,0.56,4.1,1,7.6,0\r\nMedicine,no,22.1,0.89,18.0,0.8,7.8,1,5.7,1\r\
+    \nComputer Science,yes,19.9,0.88,13.9,0.84,7.5,1,5.2,1\r\nComputer Science,yes,25.0,0.95,15.9,0.79,8.6,1,6.8,1\r\
+    \nDesign,no,23.3,0.9,17.6,0.78,7.8,1,4.5,1\r\nBusiness,no,10.3,0.6,12.7,0.55,5.8,1,6.0,0\r\
+    \nComputer Science,yes,17.8,0.55,10.9,0.47,7.2,1,0.2,1\r\nComputer Science,yes,18.7,0.89,17.1,0.98,6.8,1,7.1,1\r\
+    \nComputer Science,yes,19.1,0.96,12.7,0.98,7.4,1,3.2,1\r\nEngineering,no,12.4,0.81,12.8,0.74,7.4,1,7.3,1\r\
+    \nBusiness,no,18.9,0.79,14.9,0.77,4.4,1,13.2,0\r\nMedicine,yes,18.2,0.62,13.2,0.65,7.1,1,6.2,1\r\
+    \nComputer Science,no,13.3,0.72,18.3,0.84,7.7,1,0.1,1\r\nComputer Science,yes,12.5,0.42,11.2,0.52,5.0,1,16.5,0\r\
+    \nEngineering,yes,18.2,0.55,15.1,0.68,7.2,1,5.9,1\r\nEngineering,no,14.0,0.78,15.7,0.47,8.0,1,0.1,1\r\
+    \nEngineering,yes,24.4,0.72,13.6,0.96,7.1,1,6.5,1\r\nDesign,no,12.1,0.83,13.3,0.49,5.0,1,11.3,0\r\
+    \nDesign,no,14.5,0.76,16.3,0.86,7.7,1,5.1,1\r\nDesign,yes,12.2,0.7,12.5,0.74,6.3,1,15.3,0\r\
+    \nComputer Science,no,10.0,0.64,13.4,0.39,5.2,1,10.0,0\r\nDesign,yes,3.0,0.77,13.0,0.43,6.3,1,16.5,0\r\
+    \nMedicine,no,1.7,0.45,12.0,0.38,3.9,1,8.3,0\r\nEngineering,no,26.0,0.92,15.2,0.85,7.4,1,7.4,1\r\
+    \nEngineering,no,12.9,0.43,11.2,0.55,4.5,0,5.3,0\r\nBusiness,yes,9.2,0.69,12.2,0.64,6.2,1,6.6,1\r\
+    \nComputer Science,yes,1.0,0.47,5.5,0.2,4.5,1,13.3,0\r\nComputer Science,yes,16.2,0.87,15.9,0.69,6.7,1,3.5,1\r\
+    \nBusiness,no,28.9,0.72,15.1,0.75,6.3,1,3.3,1\r\nDesign,yes,18.9,0.62,15.9,0.66,5.9,1,17.3,0\r\
+    \nMedicine,no,24.5,0.87,12.8,0.75,7.5,1,0.7,1\r\nDesign,yes,18.3,0.79,12.3,0.71,5.6,0,10.6,0\r\
+    \nComputer Science,no,23.3,0.98,16.2,0.91,7.0,1,4.4,1\r\nBusiness,yes,9.6,0.46,11.5,0.13,6.3,1,7.4,0\r\
+    \nBusiness,no,13.0,0.53,11.7,0.72,5.2,0,12.9,0\r\nMedicine,no,27.8,0.9,16.2,0.93,6.6,1,2.4,1\r\
+    \nBusiness,no,15.5,0.83,13.8,0.83,4.6,1,15.9,0\r\nComputer Science,yes,23.4,0.87,12.7,0.93,8.0,1,3.3,1\r\
+    \nMedicine,yes,4.1,0.66,10.9,0.21,4.3,1,16.9,0\r\nEngineering,no,16.4,0.63,14.0,0.47,5.1,1,9.4,0\r\
+    \nDesign,no,13.7,0.41,9.9,0.45,4.8,1,15.5,0\r\nComputer Science,no,6.5,0.67,11.9,0.19,6.8,0,5.3,0\r\
+    \n"
+registry:
+  model_name: students-success-or-failure
+  alias: production
+validation:
+  enabled: false
+  strict: false
+  input_example: null

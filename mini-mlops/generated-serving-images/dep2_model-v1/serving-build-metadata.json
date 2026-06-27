@@ -1,0 +1,10 @@
+{
+  "registeredModelName": "dep2_model",
+  "modelVersion": "1",
+  "modelUri": "models:/dep2_model/1",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-dep2-model-v1:latest",
+  "requirementsHash": "bc5f0aafc8f4169f589f319447de948711943052111088f39af21908192d9ab1",
+  "createdAt": "2026-06-07T06:03:24.944638300",
+  "requirementsCount": 11
+}

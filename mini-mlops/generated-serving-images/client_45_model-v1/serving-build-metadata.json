@@ -1,0 +1,10 @@
+{
+  "registeredModelName": "client_45_model",
+  "modelVersion": "1",
+  "modelUri": "models:/client_45_model/1",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-client-45-model-v1:latest",
+  "requirementsHash": "8c83634076c77bed24252f90ada5d1f7bd68ea9b05010b9e0b3da6052f2ababb",
+  "createdAt": "2026-06-11T02:29:23.921725100",
+  "requirementsCount": 12
+}

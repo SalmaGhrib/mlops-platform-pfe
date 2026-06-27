@@ -1,0 +1,9 @@
+{
+  "registeredModelName": "plm_model",
+  "modelVersion": "7",
+  "modelUri": "models:/plm_model/7",
+  "dataType": "TEXT",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-plm_model-v7:latest",
+  "createdAt": "2026-06-05T05:30:26.140012800",
+  "requirementsCount": 11
+}

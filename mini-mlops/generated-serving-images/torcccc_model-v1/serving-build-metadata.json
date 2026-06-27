@@ -1,0 +1,10 @@
+{
+  "registeredModelName": "torcccc_model",
+  "modelVersion": "1",
+  "modelUri": "models:/torcccc_model/1",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-torcccc-model-v1:latest",
+  "requirementsHash": "bc5f0aafc8f4169f589f319447de948711943052111088f39af21908192d9ab1",
+  "createdAt": "2026-06-06T03:55:21.259053300",
+  "requirementsCount": 11
+}

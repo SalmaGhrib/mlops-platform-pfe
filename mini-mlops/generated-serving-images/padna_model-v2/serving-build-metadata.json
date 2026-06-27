@@ -1,0 +1,10 @@
+{
+  "registeredModelName": "padna_model",
+  "modelVersion": "2",
+  "modelUri": "models:/padna_model/2",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-padna-model-v2:latest",
+  "requirementsHash": "c02b3a49473c155293ca4e543236021398fede3434bf25b1bcd47b74c7cab307",
+  "createdAt": "2026-06-07T04:27:32.299839200",
+  "requirementsCount": 12
+}

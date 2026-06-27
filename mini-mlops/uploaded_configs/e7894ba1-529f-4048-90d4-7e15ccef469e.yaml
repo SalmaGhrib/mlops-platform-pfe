@@ -1,0 +1,50 @@
+project_name: nv
+project_type: classification
+task:
+  type: classification
+run:
+  name: nv_run_20260526_134747_20260526_134806_315_b91258d1
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+  experiment_name: nv
+model:
+  name: nv_model
+  primary_metric: accuracy
+  direction: max
+  project_type: classification
+  task_type: classification
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: c34f5d9e-dd0d-4626-9e7f-50bf25172301.py
+  files:
+    c34f5d9e-dd0d-4626-9e7f-50bf25172301.py: "import pandas as pd\r\nfrom sklearn.model_selection\
+      \ import train_test_split\r\nfrom sklearn.ensemble import RandomForestClassifier\r\
+      \nfrom sklearn.metrics import accuracy_score\r\n\r\n# 1. Chargement des modules\
+      \ et du fichier CSV\r\nprint(\"Chargement des données depuis dataset.csv...\"\
+      )\r\ndf = pd.read_csv('dataset.csv')\r\n\r\n# 2. Séparation des caractéristiques\
+      \ (X) et de la cible à prédire (y)\r\nX = df[['Age', 'Salaire', 'TempsSurSite']]\r\
+      \ny = df['Achete']\r\n\r\n# Découpage du dataset (80% entraînement / 20% test)\r\
+      \nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)\r\
+      \n\r\n# 3. Utilisation de l'algorithme RandomForest (Forêt Aléatoire)\r\nprint(\"\
+      Initialisation de l'algorithme RandomForestClassifier...\")\r\nmodel = RandomForestClassifier(n_estimators=100,\
+      \ random_state=42)\r\n\r\n# 4. Entraînement du modèle\r\nprint(\"Début de l'entraînement\
+      \ de l'IA...\")\r\nmodel.fit(X_train, y_train)\r\n\r\n# 5. Évaluation et score\
+      \ de performance\r\npredictions = model.predict(X_test)\r\naccuracy = accuracy_score(y_test,\
+      \ predictions)\r\n\r\nprint(\"--- Entraînement terminé avec succès ! ---\")\r\
+      \nprint(f\"Précision du modèle (Accuracy) : {accuracy * 100:.2f}%\")\r\n"
+data:
+  source_type: inline
+  dataset_name: 5cf97182-b49d-4ee4-a476-e64430f55c20.csv
+  filename: 5cf97182-b49d-4ee4-a476-e64430f55c20.csv
+  content: "age \tsalaire \ttemps sur site \tachete \r\n22\t2500\t8\t1\r\n81\t7500\t\
+    4\t9\r\n60\t6800\t5\t10\r\n31\t5504\t6\t5\r\n45\t5600\t6\t7\r\n55\t6750\t8\t6\r\
+    \n66\t7412\t3\t2\r\n77\t6230\t7\t4\r\n"
+registry:
+  model_name: nv
+  alias: production
+algorithm_replacements: []
+validation:
+  enabled: false
+  strict: false
+  input_example: null

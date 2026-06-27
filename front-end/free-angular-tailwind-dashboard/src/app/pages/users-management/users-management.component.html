@@ -1,0 +1,222 @@
+<app-page-breadcrumb pageTitle="Gestion des Utilisateurs" />
+
+<div class="space-y-6">
+  <div class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
+    <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h2 class="text-xl font-semibold text-gray-900 dark:text-white">
+          Users Management
+        </h2>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          Consultez et gérez les utilisateurs de la plateforme MLOps.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        (click)="loadUsers()"
+        class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+      >
+        Actualiser
+      </button>
+    </div>
+
+    @if (loading) {
+      <div class="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300">
+        Chargement des utilisateurs...
+      </div>
+    }
+
+    @if (errorMessage) {
+      <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+        {{ errorMessage }}
+      </div>
+    }
+
+    @if (successMessage) {
+      <div class="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700 dark:border-green-900/50 dark:bg-green-900/20 dark:text-green-300">
+        {{ successMessage }}
+      </div>
+    }
+
+    @if (!loading && !errorMessage) {
+      <div class="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-800">
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
+            <thead class="bg-gray-50 dark:bg-gray-900">
+              <tr>
+                <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Utilisateur
+                </th>
+
+                <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Email
+                </th>
+
+                <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Téléphone
+                </th>
+
+                <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Rôle
+                </th>
+
+                <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Statut
+                </th>
+
+                <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Email vérifié
+                </th>
+
+                <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Créé le
+                </th>
+
+                <th class="px-5 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+
+            <tbody class="divide-y divide-gray-200 bg-white dark:divide-gray-800 dark:bg-transparent">
+              @for (user of users; track user.id) {
+                <tr class="hover:bg-gray-50 dark:hover:bg-white/[0.03]">
+                  <td class="px-5 py-4">
+                    <div class="flex items-center gap-3">
+                      <div class="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-sm font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                        {{ getInitials(user) }}
+                      </div>
+
+                      <div>
+                        <p class="text-sm font-medium text-gray-900 dark:text-white">
+                          {{ user.firstName || '-' }} {{ user.lastName || '-' }}
+                        </p>
+                        <p class="text-xs text-gray-500 dark:text-gray-400">
+                          ID: {{ user.id }}
+                        </p>
+                      </div>
+                    </div>
+                  </td>
+
+                  <td class="px-5 py-4">
+                    <p class="text-sm text-gray-700 dark:text-gray-300">
+                      {{ user.email || '-' }}
+                    </p>
+                  </td>
+
+                  <td class="px-5 py-4">
+                    <p class="text-sm text-gray-700 dark:text-gray-300">
+                      {{ user.phone || '-' }}
+                    </p>
+                  </td>
+
+                  <td class="px-5 py-4">
+                    <span
+                      class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium"
+                      [ngClass]="
+                        user.role === 'ADMIN'
+                          ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300'
+                          : 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'
+                      "
+                    >
+                      {{ user.role || '-' }}
+                    </span>
+                  </td>
+
+                  <td class="px-5 py-4">
+                    <span
+                      class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium"
+                      [ngClass]="
+                        user.status === 'ACTIVE'
+                          ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                          : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300'
+                      "
+                    >
+                      {{ user.status || '-' }}
+                    </span>
+                  </td>
+
+                  <td class="px-5 py-4">
+                    <span
+                      class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium"
+                      [ngClass]="
+                        user.emailVerified
+                          ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                          : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300'
+                      "
+                    >
+                      {{ user.emailVerified ? 'Oui' : 'Non' }}
+                    </span>
+                  </td>
+
+                  <td class="px-5 py-4">
+                    <p class="text-sm text-gray-700 dark:text-gray-300">
+                      {{ formatDate(user.createdAt) }}
+                    </p>
+                  </td>
+
+                  <td class="px-5 py-4 text-right">
+                    <div class="flex flex-wrap justify-end gap-2">
+                      <button
+                        type="button"
+                        (click)="toggleUserRole(user)"
+                        [disabled]="roleUpdateLoadingId === user.id"
+                        class="rounded-lg border border-purple-300 px-3 py-1.5 text-xs font-medium text-purple-700 hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-purple-700 dark:text-purple-300 dark:hover:bg-purple-900/20"
+                      >
+                        @if (roleUpdateLoadingId === user.id) {
+                          ...
+                        } @else {
+                          {{ user.role === 'ADMIN' ? 'Rendre USER' : 'Rendre ADMIN' }}
+                        }
+                      </button>
+
+                      <button
+                        type="button"
+                        (click)="toggleUserStatus(user)"
+                        [disabled]="statusUpdateLoadingId === user.id"
+                        class="rounded-lg border px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
+                        [ngClass]="
+                          user.status === 'ACTIVE'
+                            ? 'border-red-300 text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/20'
+                            : 'border-green-300 text-green-700 hover:bg-green-50 dark:border-green-700 dark:text-green-300 dark:hover:bg-green-900/20'
+                        "
+                      >
+                        @if (statusUpdateLoadingId === user.id) {
+                          ...
+                        } @else {
+                          {{ user.status === 'ACTIVE' ? 'Bloquer' : 'Activer' }}
+                        }
+                      </button>
+
+                      <button
+                        type="button"
+                        (click)="deleteUser(user)"
+                        [disabled]="deleteLoadingId === user.id"
+                        class="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/20"
+                      >
+                        @if (deleteLoadingId === user.id) {
+                          ...
+                        } @else {
+                          Supprimer
+                        }
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              }
+
+              @if (users.length === 0) {
+                <tr>
+                  <td colspan="8" class="px-5 py-10 text-center text-sm text-gray-500 dark:text-gray-400">
+                    Aucun utilisateur trouvé.
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    }
+  </div>
+</div>

@@ -1,0 +1,91 @@
+project_name: clients
+project_type: classification
+task:
+  type: classification
+run:
+  name: clients_run_20260526_154446_20260526_154648_564_6234e7dd
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+  experiment_name: clients
+model:
+  name: clients_model
+  primary_metric: accuracy
+  direction: max
+  project_type: classification
+  task_type: classification
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: 4c0852e1-99ec-4b2f-adce-9e838a35bea9.py
+  files:
+    4c0852e1-99ec-4b2f-adce-9e838a35bea9.py: "import pandas as pd\r\nfrom sklearn.model_selection\
+      \ import train_test_split\r\nfrom sklearn.ensemble import RandomForestClassifier\r\
+      \nfrom sklearn.metrics import accuracy_score\r\n\r\n# 1. Chargement des modules\
+      \ et du fichier CSV\r\nprint(\"Chargement des données depuis dataset.csv...\"\
+      )\r\ndf = pd.read_csv('dataset.csv')\r\n\r\n# 2. Séparation des caractéristiques\
+      \ (X) et de la cible à prédire (y)\r\nX = df[['Age', 'Salaire', 'TempsSurSite']]\r\
+      \ny = df['Achete']\r\n\r\n# Découpage du dataset (80% entraînement / 20% test)\r\
+      \nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)\r\
+      \n\r\n# 3. Utilisation de l'algorithme RandomForest (Forêt Aléatoire)\r\nprint(\"\
+      Initialisation de l'algorithme RandomForestClassifier...\")\r\nmodel = RandomForestClassifier(n_estimators=100,\
+      \ random_state=42)\r\n\r\n# 4. Entraînement du modèle\r\nprint(\"Début de l'entraînement\
+      \ de l'IA...\")\r\nmodel.fit(X_train, y_train)\r\n\r\n# 5. Évaluation et score\
+      \ de performance\r\npredictions = model.predict(X_test)\r\naccuracy = accuracy_score(y_test,\
+      \ predictions)\r\n\r\nprint(\"--- Entraînement terminé avec succès ! ---\")\r\
+      \nprint(f\"Précision du modèle (Accuracy) : {accuracy * 100:.2f}%\")\r\n"
+data:
+  source_type: inline
+  dataset_name: c1b48a24-254d-4fb3-9e4a-9ab3f857ff77.csv
+  filename: c1b48a24-254d-4fb3-9e4a-9ab3f857ff77.csv
+  content: "Age,Salaire,TempsSurSite,Achete\r\n58,1812,1.61,0\r\n32,2043,33.27,1\r\
+    \n52,1612,26.78,0\r\n23,2691,10.85,0\r\n53,2528,32.36,1\r\n44,2705,20.49,0\r\n\
+    18,7116,36.36,1\r\n39,3176,7.42,0\r\n39,1737,4.63,0\r\n40,5845,12.27,0\r\n47,5292,6.05,1\r\
+    \n23,5422,13.55,1\r\n41,5629,9.06,0\r\n60,2766,34.9,1\r\n32,7998,4.99,1\r\n58,7733,16.74,1\r\
+    \n31,6390,12.38,1\r\n59,1484,27.61,0\r\n64,2905,7.77,0\r\n58,6537,25.28,1\r\n\
+    21,2776,37.07,1\r\n43,3093,3.45,0\r\n54,8079,32.45,1\r\n49,4141,39.87,1\r\n27,3069,6.71,0\r\
+    \n52,3052,33.74,1\r\n55,4171,16.61,1\r\n26,5074,22.46,1\r\n25,2152,28.42,1\r\n\
+    45,5785,3.33,0\r\n47,5234,11.69,0\r\n18,6472,32.57,1\r\n52,7051,12.37,1\r\n25,3304,19.85,0\r\
+    \n64,8074,32.53,1\r\n29,5058,41.11,1\r\n37,7794,28.93,1\r\n27,3963,34.43,1\r\n\
+    51,8424,0.53,0\r\n19,1816,41.84,1\r\n37,2861,3.08,0\r\n23,1601,33.07,1\r\n52,7173,6.1,1\r\
+    \n53,2252,12.3,0\r\n45,8800,9.93,1\r\n64,6551,9.45,0\r\n60,6223,17.12,1\r\n46,1891,11.53,0\r\
+    \n19,5719,25.15,1\r\n18,1481,32.0,0\r\n22,8317,1.9,0\r\n50,2849,12.89,0\r\n52,1983,32.69,1\r\
+    \n54,4772,11.31,0\r\n44,2459,4.7,0\r\n40,4369,18.79,1\r\n21,6416,29.58,1\r\n21,4198,32.91,1\r\
+    \n24,2936,9.03,0\r\n26,4356,8.67,0\r\n22,4530,36.46,1\r\n24,1314,29.52,0\r\n18,8838,4.65,1\r\
+    \n33,2262,18.59,0\r\n43,8292,3.11,1\r\n42,3072,41.73,1\r\n36,4365,31.5,1\r\n53,6322,32.47,1\r\
+    \n36,2683,43.61,1\r\n52,1399,33.78,0\r\n55,4805,22.88,1\r\n28,1365,43.25,0\r\n\
+    29,1461,26.98,0\r\n33,4207,5.83,0\r\n33,5642,26.96,1\r\n44,6285,26.47,1\r\n34,2573,30.3,0\r\
+    \n34,4142,6.32,0\r\n47,3490,41.84,1\r\n18,4654,28.14,1\r\n24,1500,24.42,0\r\n\
+    26,8545,16.03,1\r\n33,3927,13.18,0\r\n52,6663,13.96,1\r\n59,5233,0.85,0\r\n37,8532,30.02,1\r\
+    \n26,3066,5.64,0\r\n53,2173,12.62,0\r\n63,3708,9.56,0\r\n34,5040,22.24,1\r\n21,1656,28.73,0\r\
+    \n20,929,15.34,0\r\n34,2223,33.48,1\r\n45,5494,0.93,0\r\n62,8304,7.13,0\r\n41,5671,25.09,1\r\
+    \n20,3425,16.73,0\r\n20,8263,16.42,1\r\n60,1742,16.24,0\r\n44,8877,28.12,1\r\n\
+    33,7982,7.73,1\r\n29,8120,18.85,1\r\n39,7309,41.92,1\r\n65,7541,11.54,0\r\n62,1785,17.52,0\r\
+    \n48,2722,9.38,0\r\n40,3400,37.01,1\r\n32,1093,29.87,0\r\n35,7980,3.59,1\r\n40,6155,23.17,1\r\
+    \n52,3612,42.3,1\r\n34,2362,26.34,1\r\n20,1788,27.05,0\r\n38,4474,27.48,1\r\n\
+    42,8268,26.16,1\r\n63,4472,0.58,0\r\n52,6526,32.51,1\r\n60,2514,16.71,0\r\n60,8442,15.19,1\r\
+    \n25,6796,40.55,1\r\n60,4245,15.02,0\r\n53,1942,9.04,0\r\n42,6448,33.79,1\r\n\
+    54,3365,18.57,0\r\n37,3250,9.85,0\r\n56,6263,14.84,1\r\n61,2650,23.25,0\r\n65,2290,29.82,0\r\
+    \n60,6085,28.06,1\r\n33,6411,14.31,1\r\n27,1100,2.56,0\r\n57,7861,34.7,1\r\n58,5615,9.15,0\r\
+    \n49,4173,11.36,0\r\n18,8212,33.92,1\r\n24,7276,19.42,1\r\n62,5143,21.17,1\r\n\
+    25,4639,6.43,0\r\n51,8992,25.37,1\r\n46,5918,36.77,1\r\n45,7704,40.86,1\r\n28,6992,38.84,1\r\
+    \n33,7780,28.88,1\r\n51,4869,28.39,1\r\n22,6745,13.21,0\r\n38,8215,24.54,1\r\n\
+    32,4037,31.38,1\r\n22,4298,18.64,0\r\n44,1410,9.7,0\r\n55,8650,31.45,1\r\n54,4016,21.73,1\r\
+    \n37,7072,17.85,1\r\n44,5309,33.76,1\r\n56,8254,10.31,1\r\n45,4878,1.79,0\r\n\
+    61,7438,18.49,1\r\n47,8432,6.18,1\r\n19,8329,18.03,1\r\n19,1587,29.1,0\r\n47,2388,2.74,0\r\
+    \n31,4624,15.04,1\r\n42,3179,33.96,1\r\n34,7739,4.14,0\r\n52,1326,45.0,0\r\n59,1462,35.26,0\r\
+    \n19,8679,11.5,1\r\n57,2148,11.12,0\r\n25,5520,42.68,1\r\n34,7182,16.92,1\r\n\
+    65,6784,5.6,1\r\n37,1785,26.25,1\r\n54,6448,40.91,1\r\n63,2524,3.88,0\r\n58,2889,5.03,0\r\
+    \n61,5818,36.35,1\r\n54,7311,2.33,0\r\n60,3935,3.57,0\r\n18,7859,19.19,1\r\n45,8770,16.62,1\r\
+    \n47,6694,7.31,0\r\n51,8809,29.45,1\r\n52,7245,22.02,1\r\n64,5753,12.44,1\r\n\
+    23,3184,39.73,1\r\n47,5568,27.66,1\r\n19,4949,38.37,1\r\n31,3806,36.0,1\r\n56,6644,39.66,1\r\
+    \n51,8666,9.0,1\r\n44,4902,25.21,1\r\n48,6191,32.18,1\r\n19,1662,13.59,0\r\n33,3408,30.05,1\r\
+    \n53,5249,15.8,1\r\n53,3609,16.16,0\r\n37,2959,10.76,0\r\n38,1879,33.56,1\r\n\
+    62,2416,9.02,0\r\n35,6835,26.74,1\r\n56,3218,44.13,1\r\n"
+registry:
+  model_name: clients
+  alias: production
+algorithm_replacements: []
+validation:
+  enabled: false
+  strict: false
+  input_example: null

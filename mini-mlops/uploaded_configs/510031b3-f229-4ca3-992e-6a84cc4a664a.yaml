@@ -1,0 +1,90 @@
+project_name: mp
+project_type: regression
+task:
+  type: regression
+run:
+  name: mp_run_20260526_120018_20260526_120102_057_81893033
+tracking:
+  uri: http://mlflow-service.mlops.svc.cluster.local:5000
+  experiment_name: mp
+model:
+  name: mp_model
+  primary_metric: rmse
+  direction: min
+  project_type: regression
+  task_type: regression
+  params: {}
+custom_code:
+  source_type: inline
+  entrypoint: 433ee4d0-3399-42bb-bbd7-36a8bf2e81ce.py
+  files:
+    433ee4d0-3399-42bb-bbd7-36a8bf2e81ce.py: "import os\nimport sys\nfrom pathlib\
+      \ import Path\n\nimport joblib\nimport mlflow\nimport numpy as np\nimport pandas\
+      \ as pd\n\nfrom sklearn.compose import ColumnTransformer\nfrom sklearn.ensemble\
+      \ import RandomForestRegressor\nfrom sklearn.metrics import mean_absolute_error,\
+      \ mean_squared_error, r2_score\nfrom sklearn.model_selection import train_test_split\n\
+      from sklearn.pipeline import Pipeline\nfrom sklearn.preprocessing import OneHotEncoder\n\
+      \n\nTARGET_COLUMN = \"final_score\"\n\n\ndef find_dataset_path() -> Path:\n\
+      \    \"\"\"\n    Robust dataset detection for different execution environments.\n\
+      \n    Priority:\n    1. --data path\n    2. DATASET_PATH environment variable\n\
+      \    3. First CSV file found in current directory\n    4. First CSV file found\
+      \ in /tmp\n    5. First CSV file found in /shared\n    \"\"\"\n    args = sys.argv[1:]\n\
+      \n    if \"--data\" in args:\n        idx = args.index(\"--data\")\n       \
+      \ if idx + 1 < len(args):\n            candidate = Path(args[idx + 1])\n   \
+      \         if candidate.exists():\n                return candidate\n\n    env_path\
+      \ = os.getenv(\"DATASET_PATH\")\n    if env_path and Path(env_path).exists():\n\
+      \        return Path(env_path)\n\n    search_dirs = [\n        Path.cwd(),\n\
+      \        Path(\"/tmp\"),\n        Path(\"/shared\"),\n        Path(\"/app\"\
+      ),\n    ]\n\n    for directory in search_dirs:\n        if directory.exists():\n\
+      \            csv_files = sorted(directory.rglob(\"*.csv\"))\n            if\
+      \ csv_files:\n                return csv_files[0]\n\n    raise FileNotFoundError(\n\
+      \        \"No CSV dataset found. Please upload student_performance_regression_dataset.csv.\"\
+      \n    )\n\n\ndef normalize_rmse(y_true, y_pred) -> float:\n    mse = mean_squared_error(y_true,\
+      \ y_pred)\n    return float(np.sqrt(mse))\n\n\ndef main():\n    dataset_path\
+      \ = find_dataset_path()\n    print(f\"dataset_path={dataset_path}\")\n\n   \
+      \ df = pd.read_csv(dataset_path)\n\n    if TARGET_COLUMN not in df.columns:\n\
+      \        raise ValueError(\n            f\"Target column '{TARGET_COLUMN}' not\
+      \ found. \"\n            f\"Available columns: {list(df.columns)}\"\n      \
+      \  )\n\n    X = df.drop(columns=[TARGET_COLUMN])\n    y = df[TARGET_COLUMN]\n\
+      \n    categorical_features = X.select_dtypes(include=[\"object\", \"category\"\
+      ]).columns.tolist()\n    numeric_features = X.select_dtypes(exclude=[\"object\"\
+      , \"category\"]).columns.tolist()\n\n    preprocessor = ColumnTransformer(\n\
+      \        transformers=[\n            (\"cat\", OneHotEncoder(handle_unknown=\"\
+      ignore\"), categorical_features),\n            (\"num\", \"passthrough\", numeric_features),\n\
+      \        ]\n    )\n\n    model = RandomForestRegressor(\n        n_estimators=140,\n\
+      \        max_depth=8,\n        min_samples_leaf=4,\n        random_state=42,\n\
+      \        n_jobs=-1,\n    )\n\n    pipeline = Pipeline(\n        steps=[\n  \
+      \          (\"preprocessor\", preprocessor),\n            (\"model\", model),\n\
+      \        ]\n    )\n\n    X_train, X_test, y_train, y_test = train_test_split(\n\
+      \        X,\n        y,\n        test_size=0.25,\n        random_state=42\n\
+      \    )\n\n    pipeline.fit(X_train, y_train)\n    y_pred = pipeline.predict(X_test)\n\
+      \n    mae = float(mean_absolute_error(y_test, y_pred))\n    rmse = normalize_rmse(y_test,\
+      \ y_pred)\n    r2 = float(r2_score(y_test, y_pred))\n\n    output_dir = Path(\"\
+      outputs\")\n    output_dir.mkdir(parents=True, exist_ok=True)\n\n    model_path\
+      \ = output_dir / \"model.pkl\"\n    joblib.dump(pipeline, model_path)\n\n  \
+      \  # Log to MLflow when a run is already active.\n    if mlflow.active_run()\
+      \ is not None:\n        mlflow.log_metric(\"mae\", mae)\n        mlflow.log_metric(\"\
+      rmse\", rmse)\n        mlflow.log_metric(\"r2\", r2)\n        mlflow.log_artifact(str(model_path))\n\
+      \n    # Important for your platform parser:\n    # These names must match regression\
+      \ project metrics.\n    print(f\"mae={mae}\")\n    print(f\"rmse={rmse}\")\n\
+      \    print(f\"r2={r2}\")\n\n    prediction_example = float(pipeline.predict(X_test.iloc[[0]])[0])\n\
+      \    print(f\"prediction_example={prediction_example}\")\n    print(\"return_code=0\"\
+      )\n\n\nif __name__ == \"__main__\":\n    main()\n"
+data:
+  source_type: none
+  dataset_name: internal-data
+  filename: null
+  content: null
+registry:
+  model_name: mp
+  alias: production
+algorithm_replacements:
+- occurrence_id: model:RandomForestRegressor:0
+  var_name: model
+  original_class: RandomForestRegressor
+  new_class: XGBRegressor
+  new_lib: xgboost
+validation:
+  enabled: false
+  strict: false
+  input_example: null

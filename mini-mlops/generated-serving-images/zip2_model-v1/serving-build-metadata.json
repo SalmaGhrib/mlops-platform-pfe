@@ -1,0 +1,10 @@
+{
+  "registeredModelName": "zip2_model",
+  "modelVersion": "1",
+  "modelUri": "models:/zip2_model/1",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-zip2-model-v1:latest",
+  "requirementsHash": "ebb87233e2596b408aa530cb2a762763e4f50138b1127b45a69bd9c11850ca20",
+  "createdAt": "2026-06-08T06:15:03.693169800",
+  "requirementsCount": 11
+}

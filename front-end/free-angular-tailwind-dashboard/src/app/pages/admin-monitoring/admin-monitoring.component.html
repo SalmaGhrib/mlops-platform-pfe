@@ -1,0 +1,652 @@
+<div class="space-y-6">
+  <!-- Header -->
+  <div class="dashboard-panel">
+    <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+      <div>
+        <span class="inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+          Admin Monitoring
+        </span>
+
+        <h1 class="mt-3 text-2xl font-semibold text-gray-900 dark:text-white">
+          MLOps Monitoring Dashboard
+        </h1>
+
+        <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+          Supervision visuelle des runs, des déploiements, de la latence backend et de la disponibilité Kubernetes.
+        </p>
+      </div>
+
+      <div class="flex flex-wrap gap-3">
+        <button
+          type="button"
+          (click)="loadMonitoringSummary()"
+          class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Actualiser
+        </button>
+
+        <button
+          type="button"
+          (click)="openGrafana()"
+          class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+        >
+          Ouvrir Grafana
+        </button>
+
+        <button
+          type="button"
+          (click)="openPrometheus()"
+          class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+        >
+          Targets Prometheus
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div
+    *ngIf="loading"
+    class="dashboard-panel text-sm text-gray-500 dark:text-gray-400"
+  >
+    Chargement des métriques de monitoring...
+  </div>
+
+  <!-- Error -->
+  <div
+    *ngIf="errorMessage"
+    class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400"
+  >
+    {{ errorMessage }}
+  </div>
+
+  <ng-container *ngIf="summary && !loading">
+    <!-- Main gauges -->
+    <div class="grid grid-cols-1 gap-5 xl:grid-cols-4">
+      <!-- Global Health -->
+      <div class="dashboard-panel">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="panel-label">Global Health</p>
+            <h2 class="panel-title">État global</h2>
+          </div>
+
+          <span
+            class="rounded-full px-3 py-1 text-xs font-semibold"
+            [ngClass]="getHealthBadgeClass()"
+          >
+            {{ getHealthStatus() }}
+          </span>
+        </div>
+
+        <div class="mt-6 flex items-center justify-center">
+          <div
+            class="health-ring"
+            [style.background]="'conic-gradient(#22c55e 0% ' + getHealthScore() + '%, #374151 ' + getHealthScore() + '% 100%)'"
+          >
+            <div class="health-ring-inner">
+              <span>{{ getHealthScore() }}</span>
+              <small>/100</small>
+            </div>
+          </div>
+        </div>
+
+        <p class="mt-4 text-center text-sm text-gray-500 dark:text-gray-400">
+          Score calculé selon les échecs, alertes et indisponibilités.
+        </p>
+      </div>
+
+      <!-- Run Success Rate -->
+      <div class="dashboard-panel">
+        <p class="panel-label">Run Success Rate</p>
+        <h2 class="panel-title">Réussite des runs</h2>
+
+        <div class="mt-6 flex items-center justify-center">
+          <div
+            class="gauge-ring"
+            [style.background]="'conic-gradient(#22c55e 0% ' + summary.runSuccessRate + '%, #374151 ' + summary.runSuccessRate + '% 100%)'"
+          >
+            <div class="gauge-inner">
+              <span>{{ summary.runSuccessRate }}%</span>
+              <small>Runs</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Deployment Success Rate -->
+      <div class="dashboard-panel">
+        <p class="panel-label">Deployment Success Rate</p>
+        <h2 class="panel-title">Réussite déploiements</h2>
+
+        <div class="mt-6 flex items-center justify-center">
+          <div
+            class="gauge-ring"
+            [style.background]="'conic-gradient(#22c55e 0% ' + summary.deploymentSuccessRate + '%, #374151 ' + summary.deploymentSuccessRate + '% 100%)'"
+          >
+            <div class="gauge-inner">
+              <span>{{ summary.deploymentSuccessRate }}%</span>
+              <small>Deployments</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Backend Latency Gauge -->
+      <div class="dashboard-panel">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="panel-label">Backend Latency</p>
+            <h2 class="panel-title">Latence API</h2>
+          </div>
+
+          <span [ngClass]="getLatencyBadgeClass()">
+            {{ getLatencyStatus() }}
+          </span>
+        </div>
+
+        <div class="mt-6 flex items-center justify-center">
+          <div
+            class="gauge-ring"
+            [style.background]="'conic-gradient(#3b82f6 0% ' + getLatencyGaugePercent() + '%, #374151 ' + getLatencyGaugePercent() + '% 100%)'"
+          >
+            <div class="gauge-inner">
+              <span>{{ summary.averageBackendLatencyMs }}</span>
+              <small>ms</small>
+            </div>
+          </div>
+        </div>
+
+        <p class="mt-4 text-center text-sm text-gray-500 dark:text-gray-400">
+          Temps moyen de réponse du backend Spring Boot.
+        </p>
+      </div>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
+      <div class="metric-card">
+        <p class="metric-label">Total Deployments</p>
+        <h3 class="metric-value">{{ summary.totalDeployments }}</h3>
+        <p class="metric-help">Déploiements enregistrés.</p>
+      </div>
+
+      <div class="metric-card">
+        <p class="metric-label">Active Production Models</p>
+        <h3 class="metric-value">{{ summary.activeProductionModels }}</h3>
+        <p class="metric-help">Modèles actifs en production.</p>
+      </div>
+
+      <div class="metric-card">
+        <p class="metric-label">Completed Runs</p>
+        <h3 class="metric-value text-green-600 dark:text-green-400">
+          {{ summary.completedRuns }}
+        </h3>
+        <p class="metric-help">Runs terminés avec succès.</p>
+      </div>
+
+      <div class="metric-card">
+        <p class="metric-label">Failed Runs</p>
+        <h3 class="metric-value text-red-600 dark:text-red-400">
+          {{ summary.failedRuns }}
+        </h3>
+        <p class="metric-help">Runs échoués à analyser.</p>
+      </div>
+    </div>
+
+    <!-- Second KPI Cards -->
+    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
+      <div class="metric-card">
+        <p class="metric-label">Successful Deployments</p>
+        <h3 class="metric-value text-green-600 dark:text-green-400">
+          {{ summary.successfulDeployments }}
+        </h3>
+        <p class="metric-help">Déploiements terminés avec succès.</p>
+      </div>
+
+      <div class="metric-card">
+        <p class="metric-label">Failed Deployments</p>
+        <h3 class="metric-value text-red-600 dark:text-red-400">
+          {{ summary.failedDeployments }}
+        </h3>
+        <p class="metric-help">Déploiements échoués.</p>
+      </div>
+
+      <div class="metric-card">
+        <p class="metric-label">Running Runs</p>
+        <h3 class="metric-value text-blue-600 dark:text-blue-400">
+          {{ summary.runningRuns }}
+        </h3>
+        <p class="metric-help">Runs actuellement en cours.</p>
+      </div>
+
+      <div class="metric-card">
+        <p class="metric-label">Average Backend Latency</p>
+        <h3
+          class="metric-value"
+          [ngClass]="{
+            'text-green-600 dark:text-green-400': getLatencyStatus() === 'GOOD',
+            'text-yellow-600 dark:text-yellow-400': getLatencyStatus() === 'WARNING',
+            'text-red-600 dark:text-red-400': getLatencyStatus() === 'CRITICAL'
+          }"
+        >
+          {{ summary.averageBackendLatencyMs }} ms
+        </h3>
+        <p class="metric-help">Latence moyenne exposée par Prometheus.</p>
+      </div>
+    </div>
+
+    <!-- Pie charts -->
+    <div class="grid grid-cols-1 gap-5 xl:grid-cols-2">
+      <!-- Runs Pie -->
+      <div class="dashboard-panel">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p class="panel-label">Runs Distribution</p>
+            <h2 class="panel-title">Répartition des runs</h2>
+          </div>
+
+          <span class="text-sm text-gray-500 dark:text-gray-400">
+            Total : {{ getTotalRuns() }}
+          </span>
+        </div>
+
+        <div class="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2 md:items-center">
+          <div class="pie-chart" [style.background]="getRunsPieStyle()">
+            <div class="pie-inner">
+              <span>{{ getTotalRuns() }}</span>
+              <small>Runs</small>
+            </div>
+          </div>
+
+          <div class="space-y-4">
+            <div>
+              <div class="mb-2 flex justify-between text-sm">
+                <span class="text-gray-600 dark:text-gray-400">Completed</span>
+                <strong class="text-green-600 dark:text-green-400">
+                  {{ summary.completedRuns }} / {{ getRunCompletedPercent() }}%
+                </strong>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill bg-green-500" [style.width.%]="getRunCompletedPercent()"></div>
+              </div>
+            </div>
+
+            <div>
+              <div class="mb-2 flex justify-between text-sm">
+                <span class="text-gray-600 dark:text-gray-400">Failed</span>
+                <strong class="text-red-600 dark:text-red-400">
+                  {{ summary.failedRuns }} / {{ getRunFailedPercent() }}%
+                </strong>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill bg-red-500" [style.width.%]="getRunFailedPercent()"></div>
+              </div>
+            </div>
+
+            <div>
+              <div class="mb-2 flex justify-between text-sm">
+                <span class="text-gray-600 dark:text-gray-400">Running</span>
+                <strong class="text-blue-600 dark:text-blue-400">
+                  {{ summary.runningRuns }} / {{ getRunRunningPercent() }}%
+                </strong>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill bg-blue-500" [style.width.%]="getRunRunningPercent()"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Deployments Pie -->
+      <div class="dashboard-panel">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p class="panel-label">Deployments Distribution</p>
+            <h2 class="panel-title">Répartition des déploiements</h2>
+          </div>
+
+          <span class="text-sm text-gray-500 dark:text-gray-400">
+            Total : {{ getTotalDeploymentStatus() }}
+          </span>
+        </div>
+
+        <div class="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2 md:items-center">
+          <div class="pie-chart" [style.background]="getDeploymentsPieStyle()">
+            <div class="pie-inner">
+              <span>{{ getTotalDeploymentStatus() }}</span>
+              <small>Deployments</small>
+            </div>
+          </div>
+
+          <div class="space-y-4">
+            <div>
+              <div class="mb-2 flex justify-between text-sm">
+                <span class="text-gray-600 dark:text-gray-400">Successful</span>
+                <strong class="text-green-600 dark:text-green-400">
+                  {{ summary.successfulDeployments }} / {{ getDeploymentSuccessPercent() }}%
+                </strong>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill bg-green-500" [style.width.%]="getDeploymentSuccessPercent()"></div>
+              </div>
+            </div>
+
+            <div>
+              <div class="mb-2 flex justify-between text-sm">
+                <span class="text-gray-600 dark:text-gray-400">Failed</span>
+                <strong class="text-red-600 dark:text-red-400">
+                  {{ summary.failedDeployments }} / {{ getDeploymentFailedPercent() }}%
+                </strong>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill bg-red-500" [style.width.%]="getDeploymentFailedPercent()"></div>
+              </div>
+            </div>
+
+            <div>
+              <div class="mb-2 flex justify-between text-sm">
+                <span class="text-gray-600 dark:text-gray-400">In Progress</span>
+                <strong class="text-yellow-600 dark:text-yellow-400">
+                  {{ summary.deploymentsInProgress }} / {{ getDeploymentInProgressPercent() }}%
+                </strong>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill bg-yellow-500" [style.width.%]="getDeploymentInProgressPercent()"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bar chart + Alerting table -->
+    <div class="grid grid-cols-1 gap-5 xl:grid-cols-2">
+      <!-- Vertical bar chart -->
+      <div class="dashboard-panel">
+        <p class="panel-label">Deployment Status</p>
+        <h2 class="panel-title">Vue en bar chart</h2>
+
+        <div class="mt-6 grid grid-cols-3 gap-5">
+          <div class="bar-card">
+            <div class="bar-value text-green-600 dark:text-green-400">
+              {{ summary.successfulDeployments }}
+            </div>
+
+            <div class="vertical-bar-track">
+              <div
+                class="vertical-bar-fill bg-green-500"
+                [style.height.%]="getDeploymentSuccessPercent()"
+              ></div>
+            </div>
+
+            <p class="mt-3 text-sm font-medium text-gray-700 dark:text-gray-300">
+              Successful
+            </p>
+          </div>
+
+          <div class="bar-card">
+            <div class="bar-value text-red-600 dark:text-red-400">
+              {{ summary.failedDeployments }}
+            </div>
+
+            <div class="vertical-bar-track">
+              <div
+                class="vertical-bar-fill bg-red-500"
+                [style.height.%]="getDeploymentFailedPercent()"
+              ></div>
+            </div>
+
+            <p class="mt-3 text-sm font-medium text-gray-700 dark:text-gray-300">
+              Failed
+            </p>
+          </div>
+
+          <div class="bar-card">
+            <div class="bar-value text-yellow-600 dark:text-yellow-400">
+              {{ summary.deploymentsInProgress }}
+            </div>
+
+            <div class="vertical-bar-track">
+              <div
+                class="vertical-bar-fill bg-yellow-500"
+                [style.height.%]="getDeploymentInProgressPercent()"
+              ></div>
+            </div>
+
+            <p class="mt-3 text-sm font-medium text-gray-700 dark:text-gray-300">
+              In Progress
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Alerting table -->
+      <div class="dashboard-panel">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="panel-label">Alerting</p>
+            <h2 class="panel-title">État des alertes</h2>
+          </div>
+
+          <div class="alert-counter">
+            {{ getActiveAlertsCount() }}
+          </div>
+        </div>
+
+        <div class="mt-6 overflow-x-auto">
+          <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
+            <thead>
+              <tr class="bg-gray-50 dark:bg-gray-800/60">
+                <th class="monitoring-th">Alerte</th>
+                <th class="monitoring-th">Valeur</th>
+                <th class="monitoring-th">État</th>
+              </tr>
+            </thead>
+
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-800">
+              <tr>
+                <td class="monitoring-td">Failed Runs</td>
+                <td class="monitoring-td font-semibold">{{ summary.failedRuns }}</td>
+                <td class="monitoring-td">
+                  <span [ngClass]="summary.failedRuns > 0 ? 'status-warning' : 'status-ok'">
+                    {{ summary.failedRuns > 0 ? 'FIRING' : 'NORMAL' }}
+                  </span>
+                </td>
+              </tr>
+
+              <tr>
+                <td class="monitoring-td">Failed Deployments</td>
+                <td class="monitoring-td font-semibold">{{ summary.failedDeployments }}</td>
+                <td class="monitoring-td">
+                  <span [ngClass]="summary.failedDeployments > 0 ? 'status-danger' : 'status-ok'">
+                    {{ summary.failedDeployments > 0 ? 'FIRING' : 'NORMAL' }}
+                  </span>
+                </td>
+              </tr>
+
+              <tr>
+                <td class="monitoring-td">Unavailable Models</td>
+                <td class="monitoring-td font-semibold">{{ summary.unavailableModelDeployments }}</td>
+                <td class="monitoring-td">
+                  <span [ngClass]="summary.unavailableModelDeployments > 0 ? 'status-danger' : 'status-ok'">
+                    {{ summary.unavailableModelDeployments > 0 ? 'FIRING' : 'NORMAL' }}
+                  </span>
+                </td>
+              </tr>
+
+              <tr>
+                <td class="monitoring-td">Running Runs</td>
+                <td class="monitoring-td font-semibold">{{ summary.runningRuns }}</td>
+                <td class="monitoring-td">
+                  <span [ngClass]="summary.runningRuns > 0 ? 'status-info' : 'status-ok'">
+                    {{ summary.runningRuns > 0 ? 'IN PROGRESS' : 'NORMAL' }}
+                  </span>
+                </td>
+              </tr>
+
+              <tr>
+                <td class="monitoring-td">Backend Latency</td>
+                <td class="monitoring-td font-semibold">
+                  {{ summary.averageBackendLatencyMs }} ms
+                </td>
+                <td class="monitoring-td">
+                  <span [ngClass]="getLatencyBadgeClass()">
+                    {{ getLatencyStatus() }}
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Runtime mode monitoring -->
+<div class="grid grid-cols-1 gap-5 xl:grid-cols-3">
+  <!-- Runtime distribution -->
+  <div class="dashboard-panel">
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p class="panel-label">Runtime Modes</p>
+        <h2 class="panel-title">Répartition des modes</h2>
+      </div>
+
+      <span class="text-sm text-gray-500 dark:text-gray-400">
+        Total : {{ getRuntimeTotalRuns() }}
+      </span>
+    </div>
+
+    <div class="mt-6 flex items-center justify-center">
+      <div class="pie-chart" [style.background]="getRuntimePieStyle()">
+        <div class="pie-inner">
+          <span>{{ getRuntimeTotalRuns() }}</span>
+          <small>Runs</small>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-6 space-y-4">
+      <div>
+        <div class="mb-2 flex justify-between text-sm">
+          <span class="text-gray-600 dark:text-gray-400">Standard Runtime</span>
+          <strong class="text-blue-600 dark:text-blue-400">
+            {{ summary.standardRunsCount }} / {{ getStandardRunsPercent() }}%
+          </strong>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill bg-blue-500" [style.width.%]="getStandardRunsPercent()"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="mb-2 flex justify-between text-sm">
+          <span class="text-gray-600 dark:text-gray-400">Custom Dockerfile</span>
+          <strong class="text-orange-600 dark:text-orange-400">
+            {{ summary.dockerRunsCount }} / {{ getDockerRunsPercent() }}%
+          </strong>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill bg-orange-500" [style.width.%]="getDockerRunsPercent()"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Standard runtime monitoring -->
+  <div class="dashboard-panel">
+    <p class="panel-label">Standard Runtime</p>
+    <h2 class="panel-title">Monitoring mode standard</h2>
+
+    <div class="mt-6 space-y-5">
+      <div class="runtime-metric-box">
+        <p class="runtime-label">Nombre de runs</p>
+        <h3 class="runtime-value text-blue-600 dark:text-blue-400">
+          {{ summary.standardRunsCount }}
+        </h3>
+      </div>
+
+      <div class="runtime-metric-box">
+        <p class="runtime-label">Durée moyenne</p>
+        <h3 class="runtime-value">
+          {{ formatDuration(summary.averageStandardRunDurationSeconds) }}
+        </h3>
+      </div>
+
+      <div class="runtime-metric-box">
+        <p class="runtime-label">Dernier run</p>
+        <h3 class="runtime-value text-green-600 dark:text-green-400">
+          {{ formatDuration(summary.lastStandardRunDurationSeconds) }}
+        </h3>
+      </div>
+    </div>
+  </div>
+
+  <!-- Docker runtime monitoring -->
+  <div class="dashboard-panel">
+    <p class="panel-label">Custom Dockerfile</p>
+    <h2 class="panel-title">Monitoring mode dockerisé</h2>
+
+    <div class="mt-6 space-y-5">
+      <div class="runtime-metric-box">
+        <p class="runtime-label">Nombre de runs</p>
+        <h3 class="runtime-value text-orange-600 dark:text-orange-400">
+          {{ summary.dockerRunsCount }}
+        </h3>
+      </div>
+
+      <div class="runtime-metric-box">
+        <p class="runtime-label">Durée moyenne</p>
+        <h3 class="runtime-value">
+          {{ formatDuration(summary.averageDockerRunDurationSeconds) }}
+        </h3>
+      </div>
+
+      <div class="runtime-metric-box">
+        <p class="runtime-label">Dernier run</p>
+        <h3 class="runtime-value text-green-600 dark:text-green-400">
+          {{ formatDuration(summary.lastDockerRunDurationSeconds) }}
+        </h3>
+      </div>
+    </div>
+  </div>
+</div>
+
+    <!-- Kubernetes health cards -->
+    <div class="grid grid-cols-1 gap-5 md:grid-cols-3">
+      <div class="metric-card">
+        <p class="metric-label">Unavailable Model Deployments</p>
+        <h3
+          class="metric-value"
+          [ngClass]="summary.unavailableModelDeployments > 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'"
+        >
+          {{ summary.unavailableModelDeployments }}
+        </h3>
+        <p class="metric-help">
+          Déploiements Kubernetes avec 0 replica disponible.
+        </p>
+      </div>
+
+      <div class="metric-card">
+        <p class="metric-label">Running Runs</p>
+        <h3 class="metric-value text-blue-600 dark:text-blue-400">
+          {{ summary.runningRuns }}
+        </h3>
+        <p class="metric-help">
+          Runs actuellement marqués en cours.
+        </p>
+      </div>
+
+      <div class="metric-card">
+        <p class="metric-label">Deployments In Progress</p>
+        <h3 class="metric-value text-yellow-600 dark:text-yellow-400">
+          {{ summary.deploymentsInProgress }}
+        </h3>
+        <p class="metric-help">
+          Déploiements encore en cours.
+        </p>
+      </div>
+    </div>
+  </ng-container>
+</div>

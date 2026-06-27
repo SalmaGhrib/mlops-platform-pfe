@@ -1,0 +1,10 @@
+{
+  "registeredModelName": "pzee_model",
+  "modelVersion": "1",
+  "modelUri": "models:/pzee_model/1",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-pzee-model-v1:latest",
+  "requirementsHash": "4a7a4f67a168eeda046b4e11c9eedc7786a83609a8e5b17ce32254f7ef6d47d8",
+  "createdAt": "2026-06-09T18:45:21.466344100",
+  "requirementsCount": 11
+}

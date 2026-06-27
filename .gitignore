@@ -1,0 +1,51 @@
+# =========================
+# Frontend Angular
+# =========================
+front-end/node_modules/
+front-end/dist/
+front-end/.angular/
+front-end/.env
+front-end/.env.*
+
+# =========================
+# Backend Spring Boot
+# =========================
+mlops-backend/**/target/
+mlops-backend/**/*.log
+mlops-backend/**/logs/
+mlops-backend/**/uploads/
+mlops-backend/**/.env
+mlops-backend/**/.env.*
+mlops-backend/**/application-secret.properties
+
+# =========================
+# Python / mini-mlops
+# =========================
+mini-mlops/**/__pycache__/
+mini-mlops/**/*.pyc
+mini-mlops/**/.pytest_cache/
+mini-mlops/**/venv/
+mini-mlops/**/.venv/
+mini-mlops/**/mlruns/
+mini-mlops/**/artifacts/
+mini-mlops/**/models/
+mini-mlops/**/.env
+mini-mlops/**/.env.*
+
+# =========================
+# Kubernetes / secrets
+# =========================
+**/kubeconfig.yaml
+**/kubeconfig.yml
+**/*.pem
+**/*.key
+**/*.crt
+
+# =========================
+# IDE
+# =========================
+.idea/
+.vscode/
+# Docker exported images
+*.tar
+**/*.tar

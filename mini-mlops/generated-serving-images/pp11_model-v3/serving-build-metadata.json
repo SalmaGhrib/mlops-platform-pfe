@@ -1,0 +1,9 @@
+{
+  "registeredModelName": "pp11_model",
+  "modelVersion": "3",
+  "modelUri": "models:/pp11_model/3",
+  "dataType": "TABULAR",
+  "imageName": "docker.io/salmaghrib2003/mlops-serving-pp11-model-v3:latest",
+  "createdAt": "2026-06-05T15:22:24.872774200",
+  "requirementsCount": 11
+}

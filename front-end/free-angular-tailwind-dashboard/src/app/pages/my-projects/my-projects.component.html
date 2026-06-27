@@ -1,0 +1,719 @@
+<app-page-breadcrumb pageTitle="Mes Projets ML" />
+
+<div class="space-y-6">
+  <div class="overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-white/[0.03]">
+    <div class="border-b border-gray-100 bg-gradient-to-r from-blue-50 via-white to-indigo-50 px-6 py-6 dark:border-gray-800 dark:from-blue-950/20 dark:via-transparent dark:to-indigo-950/20">
+      <div class="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <div class="mb-2 inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+            Gestion des projets Machine Learning
+          </div>
+
+          <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
+            Mes Projets ML
+          </h2>
+
+          <p class="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-400">
+            Créez vos projets ML, choisissez vos métriques et configurez le réentraînement automatique.
+          </p>
+        </div>
+
+        <div class="flex flex-wrap gap-3">
+          <button
+            type="button"
+            (click)="loadProjects()"
+            class="inline-flex items-center justify-center rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 hover:shadow dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.05]"
+          >
+            Actualiser
+          </button>
+
+          <button
+            type="button"
+            (click)="openCreateForm()"
+            class="inline-flex items-center justify-center rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 hover:shadow-md"
+          >
+            Nouveau projet
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="p-6">
+      @if (errorMessage) {
+        <div class="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+          {{ errorMessage }}
+        </div>
+      }
+
+      @if (successMessage) {
+        <div class="mb-5 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700 dark:border-green-900/50 dark:bg-green-900/20 dark:text-green-300">
+          {{ successMessage }}
+        </div>
+      }
+
+      @if (isFormOpen) {
+        <div
+          #projectFormSection
+          class="mb-8 overflow-hidden rounded-3xl border border-gray-200 bg-gray-50 shadow-sm dark:border-gray-800 dark:bg-gray-900/70"
+        >
+          <div class="border-b border-gray-200 bg-white px-5 py-4 dark:border-gray-800 dark:bg-gray-900">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+              {{ editingProjectId ? 'Modifier le projet' : 'Créer un nouveau projet' }}
+            </h3>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              Les métriques sont choisies par ordre de priorité. Le réentraînement automatique peut être configuré pour chaque projet.
+            </p>
+          </div>
+
+          <div class="p-5">
+            <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
+              <div>
+                <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  Nom du projet *
+                </label>
+
+                <input
+                  type="text"
+                  [(ngModel)]="projectForm.name"
+                  name="name"
+                  [disabled]="editingProjectId !== null"
+                  class="h-12 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white dark:disabled:bg-gray-900"
+                  placeholder="Exemple : Sentiment Analysis"
+                />
+
+                @if (editingProjectId !== null) {
+                  <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    Le nom du projet est utilisé comme identifiant technique pour MLflow, Kubeflow et le Model Registry.
+                    Il ne peut pas être modifié après création.
+                  </p>
+                }
+              </div>
+
+              <div>
+                <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  Type du projet *
+                </label>
+
+                <select
+                  [(ngModel)]="projectForm.projectType"
+                  name="projectType"
+                  [disabled]="editingProjectId !== null"
+                  (ngModelChange)="onProjectTypeChange($event)"
+                  class="h-12 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white dark:disabled:bg-gray-900"
+                >
+                  <option value="classification">Classification</option>
+                  <option value="regression">Régression</option>
+                </select>
+
+                @if (editingProjectId !== null) {
+                  <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    Le type du projet est défini à la création et ne peut plus être modifié.
+                  </p>
+                }
+              </div>
+
+              <div class="lg:col-span-2">
+                <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  Type de données *
+                </label>
+
+                <select
+                  [(ngModel)]="projectForm.dataType"
+                  name="dataType"
+                  [disabled]="editingProjectId !== null"
+                  (ngModelChange)="onDataTypeChange($event)"
+                  class="h-12 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white dark:disabled:bg-gray-900"
+                >
+                  <option value="TABULAR">Tabulaire</option>
+                  <option value="TEXT">Texte / NLP</option>
+                  <option value="IMAGE">Image</option>
+                </select>
+
+                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  Ce champ permet à la plateforme de choisir le bon mode de prédiction : JSON tabulaire, texte ou image.
+                </p>
+              </div>
+
+              <div class="lg:col-span-2">
+                <div class="rounded-2xl border border-blue-100 bg-white p-5 shadow-sm dark:border-blue-900/40 dark:bg-gray-800/70">
+                  <div class="mb-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h4 class="text-base font-semibold text-gray-900 dark:text-white">
+                        Priorité des métriques
+                      </h4>
+                      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                        La meilleure version sera choisie en comparant d’abord la priorité 1, puis la priorité 2, puis la priorité 3.
+                      </p>
+                    </div>
+
+                    <div class="flex flex-wrap gap-2">
+                      <span
+                        class="w-fit rounded-full px-3 py-1 text-xs font-medium"
+                        [ngClass]="{
+                          'bg-purple-50 text-purple-700 dark:bg-purple-900/20 dark:text-purple-300': projectForm.projectType === 'classification',
+                          'bg-orange-50 text-orange-700 dark:bg-orange-900/20 dark:text-orange-300': projectForm.projectType === 'regression'
+                        }"
+                      >
+                        {{ getProjectTypeLabel(projectForm.projectType) }}
+                      </span>
+
+                      <span
+                        class="w-fit rounded-full px-3 py-1 text-xs font-medium"
+                        [ngClass]="getDataTypeClass(projectForm.dataType)"
+                      >
+                        {{ getDataTypeLabel(projectForm.dataType) }}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Priorité 1 *
+                      </label>
+
+                      <select
+                        [(ngModel)]="projectForm.primaryMetric1"
+                        name="primaryMetric1"
+                        (ngModelChange)="onMetricChange(1)"
+                        [disabled]="loadingMetrics || metricOptions.length === 0"
+                        class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                      >
+                        @for (metric of getAvailableMetricsFor(1); track metric) {
+                          <option [value]="metric">
+                            {{ formatMetric(metric) }}
+                          </option>
+                        }
+                      </select>
+                    </div>
+
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Priorité 2
+                      </label>
+
+                      <select
+                        [(ngModel)]="projectForm.primaryMetric2"
+                        name="primaryMetric2"
+                        (ngModelChange)="onMetricChange(2)"
+                        [disabled]="loadingMetrics || metricOptions.length === 0"
+                        class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                      >
+                        <option [ngValue]="null">Aucune</option>
+                        @for (metric of getAvailableMetricsFor(2); track metric) {
+                          <option [value]="metric">
+                            {{ formatMetric(metric) }}
+                          </option>
+                        }
+                      </select>
+                    </div>
+
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Priorité 3
+                      </label>
+
+                      <select
+                        [(ngModel)]="projectForm.primaryMetric3"
+                        name="primaryMetric3"
+                        (ngModelChange)="onMetricChange(3)"
+                        [disabled]="loadingMetrics || metricOptions.length === 0"
+                        class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                      >
+                        <option [ngValue]="null">Aucune</option>
+                        @for (metric of getAvailableMetricsFor(3); track metric) {
+                          <option [value]="metric">
+                            {{ formatMetric(metric) }}
+                          </option>
+                        }
+                      </select>
+                    </div>
+                  </div>
+
+                  @if (loadingMetrics) {
+                    <p class="mt-4 text-sm font-medium text-blue-600 dark:text-blue-300">
+                      Chargement des métriques compatibles...
+                    </p>
+                  } @else {
+                    <p class="mt-4 text-sm text-gray-500 dark:text-gray-400">
+                      Les métriques disponibles sont adaptées automatiquement au type du projet.
+                    </p>
+                  }
+                </div>
+              </div>
+
+              <div class="lg:col-span-2">
+                <div class="rounded-2xl border border-purple-100 bg-white p-5 shadow-sm dark:border-purple-900/40 dark:bg-gray-800/70">
+                  <div class="mb-5">
+                    <h4 class="text-base font-semibold text-gray-900 dark:text-white">
+                      Mode d’exécution du projet
+                    </h4>
+                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                      Choisissez l’environnement utilisé pour les futurs entraînements de ce projet.
+                    </p>
+                  </div>
+
+                  <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <label
+                      class="cursor-pointer rounded-2xl border p-4 transition"
+                      [ngClass]="projectForm.runtimeMode === 'STANDARD_RUNTIME'
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                        : 'border-gray-200 bg-white hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-900 dark:hover:bg-white/[0.03]'"
+                    >
+                      <input
+                        type="radio"
+                        name="runtimeMode"
+                        value="STANDARD_RUNTIME"
+                        [(ngModel)]="projectForm.runtimeMode"
+                        (ngModelChange)="onRuntimeModeChange($event)"
+                        [disabled]="editingProjectId !== null"
+                        class="sr-only"
+                      />
+
+                      <div class="flex items-start gap-3">
+                        <span
+                          class="mt-1 flex h-5 w-5 items-center justify-center rounded-full border"
+                          [ngClass]="projectForm.runtimeMode === 'STANDARD_RUNTIME'
+                            ? 'border-blue-600 bg-blue-600'
+                            : 'border-gray-300 dark:border-gray-700'"
+                        >
+                          @if (projectForm.runtimeMode === 'STANDARD_RUNTIME') {
+                            <span class="h-2 w-2 rounded-full bg-white"></span>
+                          }
+                        </span>
+
+                        <div>
+                          <p class="font-semibold text-gray-900 dark:text-white">
+                            Runtime standard
+                          </p>
+
+                          <p class="mt-1 text-sm leading-5 text-gray-500 dark:text-gray-400">
+                            Utilise l’image Docker actuelle de la plateforme.
+                            C’est le mode recommandé pour les tests simples et rapides.
+                          </p>
+
+                          <p class="mt-2 text-xs font-semibold text-blue-700 dark:text-blue-300">
+                            Par défaut : mini-mlops-runtime
+                          </p>
+                        </div>
+                      </div>
+                    </label>
+
+                    <label
+                      class="cursor-pointer rounded-2xl border p-4 transition"
+                      [ngClass]="projectForm.runtimeMode === 'CUSTOM_DOCKERFILE'
+                        ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
+                        : 'border-gray-200 bg-white hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-900 dark:hover:bg-white/[0.03]'"
+                    >
+                      <input
+                        type="radio"
+                        name="runtimeMode"
+                        value="CUSTOM_DOCKERFILE"
+                        [(ngModel)]="projectForm.runtimeMode"
+                        (ngModelChange)="onRuntimeModeChange($event)"
+                        [disabled]="editingProjectId !== null"
+                        class="sr-only"
+                      />
+
+                      <div class="flex items-start gap-3">
+                        <span
+                          class="mt-1 flex h-5 w-5 items-center justify-center rounded-full border"
+                          [ngClass]="projectForm.runtimeMode === 'CUSTOM_DOCKERFILE'
+                            ? 'border-purple-600 bg-purple-600'
+                            : 'border-gray-300 dark:border-gray-700'"
+                        >
+                          @if (projectForm.runtimeMode === 'CUSTOM_DOCKERFILE') {
+                            <span class="h-2 w-2 rounded-full bg-white"></span>
+                          }
+                        </span>
+
+                        <div>
+                          <p class="font-semibold text-gray-900 dark:text-white">
+                            Dockerfile personnalisé
+                          </p>
+
+                          <p class="mt-1 text-sm leading-5 text-gray-500 dark:text-gray-400">
+                            Le projet utilisera plus tard un Dockerfile et un requirements.txt
+                            pour construire une image d’entraînement personnalisée.
+                          </p>
+
+                          <p class="mt-2 text-xs font-semibold text-purple-700 dark:text-purple-300">
+                            Mode avancé — préparation pour la prochaine étape
+                          </p>
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="lg:col-span-2">
+                <div class="rounded-2xl border border-green-100 bg-white p-5 shadow-sm dark:border-green-900/40 dark:bg-gray-800/70">
+                  <div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h4 class="text-base font-semibold text-gray-900 dark:text-white">
+                        Réentraînement automatique
+                      </h4>
+
+                      <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
+                        Configurez la fréquence de réentraînement de ce projet.
+                        Le système utilisera automatiquement la version actuellement en Production comme source.
+                      </p>
+                    </div>
+
+                    <label class="inline-flex cursor-pointer items-center gap-3">
+                      <input
+                        type="checkbox"
+                        name="retrainingEnabled"
+                        [(ngModel)]="projectForm.retrainingEnabled"
+                        (ngModelChange)="onRetrainingEnabledChange($event)"
+                        class="h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500 dark:border-gray-700 dark:bg-gray-900"
+                      />
+
+                      <span class="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                        Activer
+                      </span>
+                    </label>
+                  </div>
+
+                  <div
+                    class="grid grid-cols-1 gap-4 lg:grid-cols-2"
+                    [ngClass]="!projectForm.retrainingEnabled ? 'opacity-50' : ''"
+                  >
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Fréquence
+                      </label>
+
+                      <select
+                        [(ngModel)]="projectForm.retrainingFrequencyType"
+                        name="retrainingFrequencyType"
+                        [disabled]="!projectForm.retrainingEnabled"
+                        class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                      >
+                        <option value="DAY">Jour</option>
+                        <option value="WEEK">Semaine</option>
+                        <option value="MONTH">Mois</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Valeur
+                      </label>
+
+                      <input
+                        type="number"
+                        min="1"
+                        [(ngModel)]="projectForm.retrainingFrequencyValue"
+                        name="retrainingFrequencyValue"
+                        [disabled]="!projectForm.retrainingEnabled"
+                        class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="mt-4 rounded-xl bg-green-50 px-4 py-3 text-xs leading-5 text-green-700 dark:bg-green-900/20 dark:text-green-300">
+                    @if (projectForm.retrainingEnabled) {
+                      Le réentraînement sera lancé chaque
+                      <strong>{{ projectForm.retrainingFrequencyValue || 1 }}</strong>
+                      <strong>
+                        {{ getFrequencyUnitLabel(projectForm.retrainingFrequencyType, projectForm.retrainingFrequencyValue || 1) }}
+                      </strong>.
+                    } @else {
+                      Le réentraînement automatique est désactivé pour ce projet.
+                    }
+                  </div>
+                </div>
+              </div>
+
+              <div class="lg:col-span-2">
+                <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  Description
+                </label>
+
+                <textarea
+                  [(ngModel)]="projectForm.description"
+                  name="description"
+                  rows="4"
+                  class="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                  placeholder="Décrivez brièvement l'objectif du projet, le dataset utilisé ou le problème à résoudre..."
+                ></textarea>
+              </div>
+
+              <div class="lg:col-span-2">
+                <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  Colonne cible
+                </label>
+
+                <input
+                  type="text"
+                  [(ngModel)]="projectForm.targetColumn"
+                  name="targetColumn"
+                  class="h-12 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                  placeholder="Exemple : label, target, outcome"
+                />
+
+                @if (projectForm.dataType === 'TEXT') {
+                  <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    Pour un dataset NLP : la colonne texte peut être <strong>text</strong> et la colonne cible <strong>label</strong>.
+                  </p>
+                }
+              </div>
+            </div>
+
+            <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                (click)="closeForm()"
+                class="rounded-xl border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.05]"
+              >
+                Annuler
+              </button>
+
+              <button
+                type="button"
+                (click)="saveProject()"
+                [disabled]="saving || loadingMetrics"
+                class="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                @if (saving) {
+                  Enregistrement...
+                } @else {
+                  {{ editingProjectId ? 'Enregistrer les modifications' : 'Créer le projet' }}
+                }
+              </button>
+            </div>
+          </div>
+        </div>
+      }
+
+      @if (loading) {
+        <div class="rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4 text-sm font-medium text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300">
+          Chargement des projets...
+        </div>
+      }
+
+      @if (!loading && projects.length === 0) {
+        <div class="rounded-3xl border border-dashed border-gray-300 bg-gray-50 p-10 text-center dark:border-gray-700 dark:bg-gray-900/40">
+          <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300">
+            ML
+          </div>
+
+          <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+            Aucun projet pour le moment
+          </h3>
+
+          <p class="mx-auto mt-2 max-w-md text-sm leading-6 text-gray-500 dark:text-gray-400">
+            Créez votre premier projet ML pour organiser vos datasets, lancer vos expériences et suivre vos métriques.
+          </p>
+
+          <button
+            type="button"
+            (click)="openCreateForm()"
+            class="mt-6 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 hover:shadow-md"
+          >
+            Créer un projet
+          </button>
+        </div>
+      }
+
+      @if (!loading && projects.length > 0) {
+        <div class="grid grid-cols-1 gap-5 lg:grid-cols-2 xl:grid-cols-3">
+          @for (project of projects; track project.id) {
+            <div class="group overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg dark:border-gray-800 dark:bg-gray-900">
+              <div class="p-5">
+                <div class="mb-4 flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <h3 class="truncate text-lg font-bold text-gray-900 dark:text-white">
+                      {{ project.name }}
+                    </h3>
+
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      Créé le {{ formatDate(project.createdAt) }}
+                    </p>
+                  </div>
+
+                  <div class="flex shrink-0 flex-col items-end gap-2">
+                    <span
+                      class="rounded-full px-3 py-1 text-xs font-semibold"
+                      [ngClass]="{
+                        'bg-purple-50 text-purple-700 ring-1 ring-purple-100 dark:bg-purple-900/20 dark:text-purple-300 dark:ring-purple-900/30': project.projectType === 'classification',
+                        'bg-orange-50 text-orange-700 ring-1 ring-orange-100 dark:bg-orange-900/20 dark:text-orange-300 dark:ring-orange-900/30': project.projectType === 'regression'
+                      }"
+                    >
+                      {{ getProjectTypeLabel(project.projectType) }}
+                    </span>
+
+                    <span
+                      class="rounded-full px-3 py-1 text-xs font-semibold"
+                      [ngClass]="getDataTypeClass(getProjectDataType(project))"
+                    >
+                      {{ getDataTypeLabel(getProjectDataType(project)) }}
+                    </span>
+
+                    <span
+                      class="rounded-full px-3 py-1 text-xs font-semibold"
+                      [ngClass]="getRuntimeModeClass(project)"
+                    >
+                      {{ getRuntimeModeLabel(project) }}
+                    </span>
+
+                    <span
+                      class="rounded-full px-3 py-1 text-xs font-semibold"
+                      [ngClass]="getRetrainingBadgeClass(project)"
+                    >
+                      {{ getRetrainingBadgeLabel(project) }}
+                    </span>
+                  </div>
+                </div>
+
+                <p class="min-h-[56px] text-sm leading-6 text-gray-600 dark:text-gray-400">
+                  {{ project.description || 'Aucune description pour ce projet.' }}
+                </p>
+
+                <div class="mt-4 rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+                  <div class="grid grid-cols-1 gap-3">
+                    <div class="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 dark:bg-gray-900">
+                      <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                        Type de données
+                      </span>
+                      <span class="text-sm font-semibold text-gray-900 dark:text-white">
+                        {{ getDataTypeLabel(getProjectDataType(project)) }}
+                      </span>
+                    </div>
+
+                    <div class="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 dark:bg-gray-900">
+                      <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                        Colonne cible
+                      </span>
+                      <span class="text-sm font-semibold text-gray-900 dark:text-white">
+                        {{ project.targetColumn || '-' }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mt-4 rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <p class="text-sm font-semibold text-gray-900 dark:text-white">
+                        Mode d’exécution
+                      </p>
+                      <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                        @if (isCustomDockerfileProject(project)) {
+                          Ce projet utilisera un Dockerfile personnalisé pour ses futurs entraînements.
+                        } @else {
+                          Ce projet utilise l’image runtime standard de la plateforme.
+                        }
+                      </p>
+                    </div>
+
+                    <span
+                      class="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
+                      [ngClass]="getRuntimeModeClass(project)"
+                    >
+                      {{ getRuntimeModeLabel(project) }}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="mt-4 rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <p class="text-sm font-semibold text-gray-900 dark:text-white">
+                        Réentraînement automatique
+                      </p>
+
+                      <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                        @if (isRetrainingEnabled(project)) {
+                          Prochain lancement :
+                          {{ formatDateTime(getProjectRetrainingConfig(project)?.nextRetrainingAt) }}
+                        } @else {
+                          Aucun réentraînement planifié pour ce projet.
+                        }
+                      </p>
+                    </div>
+
+                    <span
+                      class="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
+                      [ngClass]="getRetrainingBadgeClass(project)"
+                    >
+                      {{ getRetrainingBadgeLabel(project) }}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="mt-5 rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+                  <div class="mb-3 flex items-center justify-between">
+                    <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
+                      Priorité des métriques
+                    </h4>
+                    <span class="text-xs text-gray-500 dark:text-gray-400">
+                      {{ getProjectTypeLabel(project.projectType) }}
+                    </span>
+                  </div>
+
+                  <div class="space-y-3">
+                    <div class="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 dark:bg-gray-900">
+                      <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                        Priorité 1
+                      </span>
+                      <span class="text-sm font-semibold text-gray-900 dark:text-white">
+                        {{ formatMetric(project.primaryMetric1) }}
+                      </span>
+                    </div>
+
+                    <div class="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 dark:bg-gray-900">
+                      <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                        Priorité 2
+                      </span>
+                      <span class="text-sm font-semibold text-gray-900 dark:text-white">
+                        {{ formatMetric(project.primaryMetric2) }}
+                      </span>
+                    </div>
+
+                    <div class="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 dark:bg-gray-900">
+                      <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                        Priorité 3
+                      </span>
+                      <span class="text-sm font-semibold text-gray-900 dark:text-white">
+                        {{ formatMetric(project.primaryMetric3) }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <button
+                    type="button"
+                    (click)="openEditForm(project)"
+                    class="rounded-xl border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.05]"
+                  >
+                    Modifier
+                  </button>
+
+                  <button
+                    type="button"
+                    (click)="deleteProject(project)"
+                    class="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-100 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
+                  >
+                    Supprimer
+                  </button>
+
+                  <a
+                    [routerLink]="['/upload-training']"
+                    [queryParams]="{ projectId: project.id }"
+                    class="rounded-xl bg-blue-600 px-3 py-2 text-center text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 hover:shadow-md"
+                  >
+                    Training
+                  </a>
+                </div>
+              </div>
+            </div>
+          }
+        </div>
+      }
+    </div>
+  </div>
+</div>
