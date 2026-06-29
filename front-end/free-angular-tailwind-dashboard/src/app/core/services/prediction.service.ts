@@ -78,7 +78,7 @@ export interface ProductionModel {
   providedIn: 'root',
 })
 export class PredictionService {
-  private readonly apiUrl = 'http://localhost:8081/api/predictions';
+  private readonly apiUrl = '/api/predictions';
 
   /*
    * Important :
@@ -90,7 +90,7 @@ export class PredictionService {
    * Donc on charge les modèles depuis :
    * /api/model-deployments/visible
    */
-  private readonly deploymentApiUrl = 'http://localhost:8081/api/model-deployments';
+  private readonly deploymentApiUrl = '/api/model-deployments';
 
   constructor(private http: HttpClient) {}
 

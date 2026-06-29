@@ -160,10 +160,10 @@ export type AccessibleModel = ModelDeploymentResponse;
   providedIn: 'root'
 })
 export class ModelRegistryService {
-  private readonly apiUrl = 'http://localhost:8081/api/model-registry';
-  private readonly deploymentApiUrl = 'http://localhost:8081/api/model-deployments';
-  private readonly externalApiBaseUrl = 'http://localhost:8081/api/external';
-  private readonly usersApiUrl = 'http://localhost:8081/api/users';
+  private readonly apiUrl = '/api/model-registry';
+  private readonly deploymentApiUrl = '/api/model-deployments';
+  private readonly externalApiBaseUrl = '/api/external';
+  private readonly usersApiUrl = '/api/users';
 
   constructor(private http: HttpClient) {}
 

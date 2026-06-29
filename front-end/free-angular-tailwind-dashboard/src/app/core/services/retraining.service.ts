@@ -28,7 +28,7 @@ export interface RetrainingConfigResponse {
   providedIn: 'root',
 })
 export class RetrainingService {
-  private readonly apiUrl = 'http://localhost:8081/api/retraining';
+  private readonly apiUrl = '/api/retraining';
 
   constructor(private http: HttpClient) {}
 

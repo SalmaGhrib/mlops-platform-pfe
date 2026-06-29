@@ -253,8 +253,8 @@ export interface UploadAndRunCustomModelRequest {
   providedIn: 'root'
 })
 export class ExperimentService {
-  private readonly springApiUrl = 'http://localhost:8081/api/experiments';
-  private readonly projectApiUrl = 'http://localhost:8081/api/projects';
+  private readonly springApiUrl = '/api/experiments';
+  private readonly projectApiUrl = '/api/projects';
   private readonly fastApiUrl = 'http://127.0.0.1:8001';
 
   constructor(private http: HttpClient) {}

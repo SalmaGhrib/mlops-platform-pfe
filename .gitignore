@@ -49,3 +49,6 @@ mini-mlops/**/.env.*
 # Docker exported images
 *.tar
 **/*.tar
+
+# Database dumps
+*.sql

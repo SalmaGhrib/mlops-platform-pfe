@@ -39,7 +39,7 @@ export interface MonitoringSummary {
   providedIn: 'root'
 })
 export class MonitoringService {
-  private apiUrl = 'http://localhost:8081/api/admin/monitoring';
+  private apiUrl = '/api/admin/monitoring';
 
   constructor(private http: HttpClient) {}
 
