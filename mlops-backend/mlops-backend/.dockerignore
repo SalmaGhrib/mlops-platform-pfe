@@ -1,0 +1,17 @@
+.git
+.gitignore
+HELP.md
+
+uploads/
+*.tar
+**/*.tar
+
+.mvn/
+mvnw
+mvnw.cmd
+
+src/
+pom.xml
+
+target/*
+!target/*.jar
