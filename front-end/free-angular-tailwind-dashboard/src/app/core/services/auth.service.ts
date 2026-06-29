@@ -37,12 +37,13 @@ export interface ResetPasswordRequest {
 
 export interface LoginResponse {
   token: string;
-  tokenType: string;
+  tokenType?: string;
   userId: number;
   firstName: string;
   lastName: string;
   email: string;
   role: string;
+  message?: string;
 }
 
 export interface UserResponse {
@@ -85,9 +86,9 @@ export interface UpdateUserStatusRequest {
   providedIn: 'root',
 })
 export class AuthService {
-  private readonly authApiUrl = 'http://localhost:8081/api/auth';
-  private readonly usersApiUrl = 'http://localhost:8081/api/users';
-  private readonly adminUsersApiUrl = 'http://localhost:8081/api/admin/users';
+  private readonly authApiUrl = '/api/auth';
+  private readonly usersApiUrl = '/api/users';
+  private readonly adminUsersApiUrl = '/api/admin/users';
 
   private readonly TOKEN_KEY = 'mlops_token';
   private readonly USER_KEY = 'mlops_user';
@@ -109,14 +110,24 @@ export class AuthService {
   }
 
   login(data: LoginRequest): Observable<LoginResponse> {
-    this.clearAuthStorage();
+  this.clearAuthStorage();
 
-    return this.http.post<LoginResponse>(`${this.authApiUrl}/login`, data).pipe(
-      tap((response) => {
-        this.saveSession(response, data.rememberMe);
-      })
-    );
-  }
+  const loginPayload = {
+    email: data.email.trim(),
+    password: data.password
+  };
+
+  return this.http.post<LoginResponse>(`${this.authApiUrl}/login`, loginPayload).pipe(
+    tap((response) => {
+      const fixedResponse: LoginResponse = {
+        ...response,
+        role: response.message || response.role
+      };
+
+      this.saveSession(fixedResponse, data.rememberMe);
+    })
+  );
+}
 
   private saveSession(response: LoginResponse, rememberMe: boolean): void {
     if (!response || !response.token) {

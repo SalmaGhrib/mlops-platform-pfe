@@ -36,8 +36,8 @@ export interface NotificationResponse {
   providedIn: 'root',
 })
 export class NotificationService {
-  private readonly apiUrl = 'http://localhost:8081/api/notifications';
-  private readonly wsUrl = 'http://localhost:8081/ws';
+  private readonly apiUrl = '/api/notifications';
+  private readonly wsUrl = '/ws';
 
   private stompClient: Client | null = null;
   private connectedUserId: number | null = null;

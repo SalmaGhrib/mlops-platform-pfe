@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlops-backend
+  namespace: mlops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlops-backend
+  template:
+    metadata:
+      labels:
+        app: mlops-backend
+    spec:
+      containers:
+        - name: mlops-backend
+          image: docker.io/salmaghrib2003/mlops-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secret
+          volumeMounts:
+            - name: backend-uploads
+              mountPath: /app/uploads
+      volumes:
+        - name: backend-uploads
+          persistentVolumeClaim:
+            claimName: backend-uploads-pvc

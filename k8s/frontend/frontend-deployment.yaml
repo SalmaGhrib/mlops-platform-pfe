@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlops-frontend
+  namespace: mlops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlops-frontend
+  template:
+    metadata:
+      labels:
+        app: mlops-frontend
+    spec:
+      containers:
+        - name: mlops-frontend
+          image: docker.io/salmaghrib2003/mlops-frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
