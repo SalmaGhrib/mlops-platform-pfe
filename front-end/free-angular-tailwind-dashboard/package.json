@@ -46,7 +46,6 @@
     "@angular/build": "^21.2.2",
     "@angular/cli": "^21.2.2",
     "@angular/compiler-cli": "^21.2.4",
-    "@tailwindcss/oxide-win32-x64-msvc": "^4.2.4",
     "@types/jasmine": "~5.1.0",
     "@types/sockjs-client": "^1.5.4",
     "jasmine-core": "~5.6.0",
