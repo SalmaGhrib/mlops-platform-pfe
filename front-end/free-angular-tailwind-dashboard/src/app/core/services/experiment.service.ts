@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { Observable, of } from 'rxjs';
 
 export interface MlProjectResponse {
   id: number;
@@ -442,19 +442,24 @@ export class ExperimentService {
     );
   }
 
-  analyzeRuntimeScript(modelFile: File): Observable<RuntimeAnalysisResult> {
-    const formData = new FormData();
+  analyzeRuntimeScript(file: File): Observable<RuntimeAnalysisResult> {
+  console.log('[AKS] Runtime analysis bypassed in ExperimentService:', file.name);
 
-    formData.append('file', modelFile);
-    formData.append('model_file', modelFile);
-    formData.append('script_file', modelFile);
-
-    return this.http.post<RuntimeAnalysisResult>(
-      `${this.fastApiUrl}/api/runtime/analyze-script`,
-      formData
-    );
-  }
-
+  return of({
+    runtimeCompatible: true,
+    compatible: true,
+    status: 'COMPATIBLE',
+    message: 'Runtime standard compatible',
+    summary: 'Analyse automatique désactivée temporairement sur AKS. Le script sera exécuté avec l’image standard.',
+    detectedModules: [],
+    supportedModules: [],
+    unsupportedModules: [],
+    detectedAlgorithms: [],
+    replaceableAlgorithms: [],
+    warnings: [],
+    recommendation: 'OK'
+  } as any);
+}
   uploadAndRunCustomModel(
     request: UploadAndRunCustomModelRequest
   ): Observable<MlExperimentResponse> {

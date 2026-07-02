@@ -1,4 +1,4 @@
-import json
+﻿import json
 import re
 import uuid
 from pathlib import Path
@@ -17,7 +17,7 @@ from src.custom_models.import_detector import analyze_script_imports
 app = FastAPI(title="Custom Models Upload API")
 
 # IMPORTANT :
-# Autoriser Angular à appeler FastAPI.
+# Autoriser Angular Ã  appeler FastAPI.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -52,7 +52,7 @@ def validate_direction(direction: str) -> str:
 def validate_project_type(project_type: Optional[str], primary_metric: str) -> str:
     """
     On accepte project_type si Angular l'envoie.
-    Sinon on l'infère depuis la métrique principale.
+    Sinon on l'infÃ¨re depuis la mÃ©trique principale.
     """
     normalized = str(project_type or "").strip().lower()
 
@@ -87,9 +87,9 @@ def build_registered_model_name(
     registered_model_name: Optional[str]
 ) -> str:
     """
-    Règle MLOps :
+    RÃ¨gle MLOps :
     - 1 projet = 1 Registered Model unique
-    - chaque nouveau training = 1 nouvelle version du même Registered Model
+    - chaque nouveau training = 1 nouvelle version du mÃªme Registered Model
     """
     if registered_model_name and registered_model_name.strip():
         return safe_name(registered_model_name)
@@ -161,11 +161,11 @@ async def analyze_model_file(
     model_file: UploadFile = File(...)
 ):
     """
-    Analyse le fichier Python uploadé avant le lancement Kubeflow.
+    Analyse le fichier Python uploadÃ© avant le lancement Kubeflow.
 
-    Rôle :
-    - détecter les algorithmes ML présents dans le fichier ;
-    - détecter les bibliothèques supportées ou non supportées ;
+    RÃ´le :
+    - dÃ©tecter les algorithmes ML prÃ©sents dans le fichier ;
+    - dÃ©tecter les bibliothÃ¨ques supportÃ©es ou non supportÃ©es ;
     - retourner les options de remplacement au frontend.
     """
     try:
@@ -267,7 +267,7 @@ async def upload_and_run_custom_model(
     primary_metric: str = Form("f1_score"),
     direction: str = Form("max"),
 
-    # Nouveau : optionnel, mais recommandé depuis Angular.
+    # Nouveau : optionnel, mais recommandÃ© depuis Angular.
     project_type: Optional[str] = Form(None),
 
     # Nom stable dans MLflow Registry.
@@ -444,7 +444,7 @@ async def upload_and_run_custom_model(
 
         config_yaml = config_path.read_text(encoding="utf-8")
 
-        client = Client(host="http://127.0.0.1:8889")
+        client = Client(host="http://ml-pipeline.kubeflow.svc.cluster.local:8888")
 
         kubeflow_run = client.create_run_from_pipeline_package(
             pipeline_file=str(pipeline_path),
@@ -457,7 +457,7 @@ async def upload_and_run_custom_model(
 
         return {
             "status": "RUNNING",
-            "message": "Modèle uploadé et pipeline Kubeflow lancé avec succès",
+            "message": "ModÃ¨le uploadÃ© et pipeline Kubeflow lancÃ© avec succÃ¨s",
             "configId": config_id,
             "configPath": str(config_path),
 

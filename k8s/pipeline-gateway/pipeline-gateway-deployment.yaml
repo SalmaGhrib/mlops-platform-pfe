@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pipeline-gateway
+  labels:
+    app: pipeline-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pipeline-gateway
+  template:
+    metadata:
+      labels:
+        app: pipeline-gateway
+    spec:
+      containers:
+        - name: pipeline-gateway
+          image: docker.io/salmaghrib2003/pipeline-gateway:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8001
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"

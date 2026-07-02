@@ -50,5 +50,21 @@ mini-mlops/**/.env.*
 *.tar
 **/*.tar
 
-# Database dumps
+# Dumps / gros fichiers
 *.sql
+*.tar
+
+# Backend
+**/target/
+**/uploads/
+
+# Frontend
+**/node_modules/
+**/dist/
+**/.angular/
+
+# Secrets
+.env
+**/.env
+**/*secret*
+**/application-secret.properties
