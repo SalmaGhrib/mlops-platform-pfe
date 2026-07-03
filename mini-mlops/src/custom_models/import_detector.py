@@ -89,6 +89,33 @@ METRIC_MODULES: Set[str] = {
     "torchvision",
 }
 
+KNOWN_METRIC_FUNCTIONS: Set[str] = {
+    "accuracy",
+    "accuracy_score",
+    "precision",
+    "precision_score",
+    "recall",
+    "recall_score",
+    "f1",
+    "f1_score",
+    "f1_weighted",
+    "precision_weighted",
+    "recall_weighted",
+    "roc_auc",
+    "roc_auc_score",
+    "auc",
+    "mean_squared_error",
+    "mean_absolute_error",
+    "mean_absolute_percentage_error",
+    "mse",
+    "rmse",
+    "mae",
+    "r2",
+    "r2_score",
+    "log_loss",
+    "cross_entropy",
+}
+
 
 def normalize_module_name(module_name: str) -> str:
     module_name = str(module_name or "").strip()
@@ -146,6 +173,40 @@ def extract_imported_modules(code: str) -> List[str]:
     return sorted(imported_modules)
 
 
+def extract_metric_references(code: str) -> List[str]:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+
+    metrics: Set[str] = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+
+                imported_name = alias.asname or alias.name
+                if imported_name in KNOWN_METRIC_FUNCTIONS:
+                    metrics.add(alias.name)
+                elif module.startswith("sklearn.metrics") and alias.name:
+                    metrics.add(alias.name)
+                elif module == "mlflow" and alias.name in {"log_metric", "log_metrics"}:
+                    metrics.add(alias.name)
+
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                module_name = alias.name.strip()
+                if module_name.startswith("sklearn.metrics"):
+                    metrics.add(module_name)
+                elif module_name == "mlflow":
+                    metrics.add(module_name)
+
+    return sorted(metrics)
+
+
 def _is_supported_module(module_name: str) -> bool:
     module_name = normalize_module_name(module_name)
     if module_name in SUPPORTED_MODULE_ROOTS:
@@ -184,6 +245,8 @@ def analyze_script_imports(code: str) -> Dict[str, Any]:
         else:
             unsupported_imports.append(normalized_module)
 
+    detected_metrics = extract_metric_references(code)
+
     supported = len(unsupported_imports) == 0
     recommendation = (
         "Runtime standard compatible"
@@ -196,5 +259,6 @@ def analyze_script_imports(code: str) -> Dict[str, Any]:
         "detectedImports": detected_imports,
         "supportedImports": supported_imports,
         "unsupportedImports": sorted(set(unsupported_imports)),
+        "detectedMetrics": detected_metrics,
         "recommendation": recommendation,
     }

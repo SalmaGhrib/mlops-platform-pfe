@@ -504,11 +504,13 @@ public class AutoProductionDeploymentReconcilerService {
             return false;
         }
 
-        if (!hasText(experiment.getRegisteredModelName())) {
+        if (!hasText(experiment.getRegisteredModelName())
+                && !hasText(experiment.getModelName())) {
             return false;
         }
 
-        if (!hasText(experiment.getModelVersion())) {
+        if (!hasText(experiment.getModelVersion())
+                && !hasText(experiment.getProductionVersion())) {
             return false;
         }
 
@@ -534,9 +536,9 @@ public class AutoProductionDeploymentReconcilerService {
     private String buildCandidateKey(MlExperiment experiment) {
         return experiment.getProject().getId()
                 + "|"
-                + clean(experiment.getRegisteredModelName())
+                + clean(resolveRegisteredModelName(experiment))
                 + "|"
-                + clean(experiment.getModelVersion());
+                + clean(firstNonBlank(experiment.getModelVersion(), experiment.getProductionVersion()));
     }
 
     private boolean isNewer(MlExperiment left, MlExperiment right) {

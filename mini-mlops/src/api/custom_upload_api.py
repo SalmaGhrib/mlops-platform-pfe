@@ -237,14 +237,67 @@ async def analyze_runtime_script(
                 },
             )
 
-        analysis_result = analyze_script_imports(script_code)
+        import_analysis = analyze_script_imports(script_code)
+        algorithm_analysis = detect_algorithms(script_code)
+
+        runtime_compatible = algorithm_analysis.get(
+            "runtimeCompatible",
+            algorithm_analysis.get("supported", import_analysis.get("supported", False))
+        )
+
+        detected_imports = import_analysis.get("detectedImports", [])
+        supported_imports = import_analysis.get("supportedImports", [])
+        unsupported_imports = import_analysis.get("unsupportedImports", [])
+
+        detected_metrics = import_analysis.get("detectedMetrics", [])
+        supported_libraries = algorithm_analysis.get("supportedModules", []) or algorithm_analysis.get("supported_modules", [])
+        unsupported_libraries = algorithm_analysis.get("unsupportedModules", []) or algorithm_analysis.get("unsupported_modules", [])
+
+        detected_libraries = []
+        if isinstance(supported_libraries, list):
+            detected_libraries.extend(supported_libraries)
+        if isinstance(unsupported_libraries, list):
+            detected_libraries.extend(unsupported_libraries)
+
+        missing_dependencies = []
+        for dep in unsupported_imports:
+            if dep and dep not in missing_dependencies:
+                missing_dependencies.append(dep)
+        if isinstance(unsupported_libraries, list):
+            for item in unsupported_libraries:
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("module") or item.get("key")
+                    if name and name not in missing_dependencies:
+                        missing_dependencies.append(name)
+                elif isinstance(item, str) and item not in missing_dependencies:
+                    missing_dependencies.append(item)
 
         return {
-            "supported": analysis_result["supported"],
-            "detectedImports": analysis_result["detectedImports"],
-            "supportedImports": analysis_result["supportedImports"],
-            "unsupportedImports": analysis_result["unsupportedImports"],
-            "recommendation": analysis_result["recommendation"],
+            "status": "SUCCESS",
+            "runtimeCompatible": runtime_compatible,
+            "supported": runtime_compatible,
+            "message": algorithm_analysis.get("message") or algorithm_analysis.get("summary") or (
+                "Runtime standard compatible" if runtime_compatible else
+                "Utilisez le mode Dockerfile personnalisé ou ajoutez ce module à l’image standard."
+            ),
+            "summary": algorithm_analysis.get("summary"),
+            "recommendation": algorithm_analysis.get("recommendation", import_analysis.get("recommendation")),
+            "detectedImports": detected_imports,
+            "supportedImports": supported_imports,
+            "unsupportedImports": unsupported_imports,
+            "detectedMetrics": detected_metrics,
+            "detectedModules": algorithm_analysis.get("detectedModules", []),
+            "supportedModules": algorithm_analysis.get("supportedModules", []),
+            "unsupportedModules": algorithm_analysis.get("unsupportedModules", []),
+            "detectedLibraries": detected_libraries,
+            "supportedLibraries": supported_libraries,
+            "unsupportedLibraries": unsupported_libraries,
+            "missingDependencies": missing_dependencies,
+            "detectedAlgorithms": algorithm_analysis.get("detectedAlgorithms", []),
+            "replaceableAlgorithms": algorithm_analysis.get("replaceableAlgorithms", []),
+            "warnings": algorithm_analysis.get("warnings", []),
+            "dataType": algorithm_analysis.get("dataType"),
+            "taskType": algorithm_analysis.get("taskType"),
         }
 
     except Exception as exc:

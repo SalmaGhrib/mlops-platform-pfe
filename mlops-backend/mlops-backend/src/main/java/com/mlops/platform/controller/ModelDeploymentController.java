@@ -162,6 +162,9 @@ public class ModelDeploymentController {
             @PathVariable Long projectId
     ) {
         ModelDeploymentResponse response = modelDeploymentService.getActiveDeploymentByProject(projectId);
+        if (response == null) {
+            return ResponseEntity.notFound().build();
+        }
         return ResponseEntity.ok(response);
     }
 

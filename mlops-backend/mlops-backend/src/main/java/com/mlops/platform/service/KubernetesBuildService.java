@@ -113,6 +113,8 @@ public class KubernetesBuildService {
 
         try (KubernetesClient client = new KubernetesClientBuilder().build()) {
 
+            validateKanikoDockerConfigSecret(client);
+
             deleteExistingJobIfExists(client, buildJobName);
             deleteExistingConfigMapIfExists(client, configMapName);
 
@@ -2323,6 +2325,25 @@ if __name__ == "__main__":
                     .withName(configMapName)
                     .delete();
         } catch (Exception ignored) {
+        }
+    }
+
+    private void validateKanikoDockerConfigSecret(KubernetesClient client) {
+        if (kanikoDockerConfigSecret == null || kanikoDockerConfigSecret.isBlank()) {
+            throw new RuntimeException("Kaniko Docker config secret name is not configured.");
+        }
+
+        try {
+            if (client.secrets()
+                    .inNamespace(namespace)
+                    .withName(kanikoDockerConfigSecret)
+                    .get() == null) {
+                throw new RuntimeException("Kaniko Docker config secret '" + kanikoDockerConfigSecret
+                        + "' not found in namespace '" + namespace + "'.");
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to validate Kaniko Docker config secret '"
+                    + kanikoDockerConfigSecret + "': " + e.getMessage(), e);
         }
     }
 

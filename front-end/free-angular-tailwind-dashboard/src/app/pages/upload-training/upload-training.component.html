@@ -489,6 +489,50 @@
                   </div>
                 }
 
+                @if (hasDetectedImports()) {
+                  <div class="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+                    <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
+                      Imports détectés
+                    </h4>
+                    <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                      {{ runtimeAnalysis!.detectedImports.join(', ') }}
+                    </p>
+                  </div>
+                }
+
+                @if (hasDetectedLibraries()) {
+                  <div class="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+                    <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
+                      Bibliothèques détectées
+                    </h4>
+                    <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                      {{ runtimeAnalysis!.detectedLibraries.map(formatLibraryName).join(', ') }}
+                    </p>
+                  </div>
+                }
+
+                @if (hasDetectedMetrics()) {
+                  <div class="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+                    <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
+                      Métriques détectées
+                    </h4>
+                    <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                      {{ runtimeAnalysis!.detectedMetrics.join(', ') }}
+                    </p>
+                  </div>
+                }
+
+                @if (hasMissingDependencies()) {
+                  <div class="rounded-2xl border border-yellow-200 bg-yellow-50 p-4 dark:border-yellow-900/40 dark:bg-yellow-900/10">
+                    <h4 class="text-sm font-semibold text-yellow-800 dark:text-yellow-300">
+                      Dépendances manquantes
+                    </h4>
+                    <p class="mt-2 text-sm text-yellow-800 dark:text-yellow-200">
+                      {{ runtimeAnalysis!.missingDependencies.join(', ') }}
+                    </p>
+                  </div>
+                }
+
                 @if (hasDetectedAlgorithms()) {
                   <div class="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
                     <div class="mb-3 flex items-center justify-between gap-3">

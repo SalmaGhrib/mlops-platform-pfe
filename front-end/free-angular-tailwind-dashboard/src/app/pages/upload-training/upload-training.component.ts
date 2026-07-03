@@ -209,31 +209,43 @@ export class UploadTrainingComponent implements OnInit, OnDestroy {
   }
 
   formatModuleName(module: any): string {
-  if (!module) {
-    return '';
+    if (!module) {
+      return '';
+    }
+
+    if (typeof module === 'string') {
+      return module;
+    }
+
+    return String(module.name || module.module || module.importName || module.packageName || module.key || module.label || '');
   }
 
-  if (typeof module === 'string') {
-    return module;
+  formatLibraryName(library: any): string {
+    if (!library) {
+      return '';
+    }
+
+    if (typeof library === 'string') {
+      return library;
+    }
+
+    return String(library.name || library.module || library.key || library.label || '');
   }
 
-  return String(module.name || module.module || module.importName || module.packageName || '');
-}
+  isModuleSupported(module: any): boolean {
+    if (!module) {
+      return false;
+    }
 
-isModuleSupported(module: any): boolean {
-  if (!module) {
-    return false;
+    if (typeof module === 'string') {
+      return true;
+    }
+
+    return module.supported === true || module.isSupported === true;
   }
 
-  if (typeof module === 'string') {
-    return true;
-  }
-
-  return module.supported === true || module.isSupported === true;
-}
-
-formatUnsupportedModules(): string {
-  const modules = this.runtimeAnalysis?.unsupportedModules || [];
+  formatUnsupportedModules(): string {
+    const modules = this.runtimeAnalysis?.unsupportedModules || [];
 
   return (modules as any[])
     .map((module) => this.formatModuleName(module))
@@ -241,7 +253,27 @@ formatUnsupportedModules(): string {
     .join(', ');
 }
 
-hasDetectedModules(): boolean {
+hasDetectedImports(): boolean {
+  return Array.isArray(this.runtimeAnalysis?.detectedImports)
+    && this.runtimeAnalysis!.detectedImports.length > 0;
+}
+
+hasDetectedLibraries(): boolean {
+    return Array.isArray(this.runtimeAnalysis?.detectedLibraries)
+      && this.runtimeAnalysis!.detectedLibraries.length > 0;
+  }
+
+  hasDetectedMetrics(): boolean {
+    return Array.isArray(this.runtimeAnalysis?.detectedMetrics)
+      && this.runtimeAnalysis!.detectedMetrics.length > 0;
+  }
+
+  hasMissingDependencies(): boolean {
+    return Array.isArray(this.runtimeAnalysis?.missingDependencies)
+      && this.runtimeAnalysis!.missingDependencies.length > 0;
+  }
+
+  hasDetectedModules(): boolean {
   return Array.isArray(this.runtimeAnalysis?.detectedModules)
     && this.runtimeAnalysis!.detectedModules.length > 0;
 }
@@ -457,6 +489,17 @@ getDetectedComponentsCount(): number {
     message: 'Module absent de l’image standard. Utilisez le mode Dockerfile personnalisé.'
   }));
 
+  const detectedLibraries = [
+    ...(response.detectedLibraries || response.detected_libraries || []),
+    ...(response.supportedLibraries || response.supported_libraries || []),
+    ...(response.unsupportedLibraries || response.unsupported_libraries || []),
+  ].filter((item: any, index: number, array: any[]) => item != null && array.indexOf(item) === index);
+
+  const missingDependencies = [
+    ...(response.missingDependencies || response.missing_dependencies || []),
+    ...unsupportedImports,
+  ].filter((item: any, index: number, array: any[]) => item != null && array.indexOf(item) === index);
+
   const detectedAlgorithms =
     response.detectedAlgorithms ||
     response.detected_algorithms ||
@@ -475,8 +518,36 @@ getDetectedComponentsCount(): number {
 
   const mappedResponse: RuntimeAnalysisResult = {
     runtimeCompatible,
+    status: response.status || undefined,
+    message: response.message || response.summary || undefined,
+    summary: response.summary || response.message || undefined,
+    detectedImports,
+    supportedImports,
+    unsupportedImports,
+    detectedMetrics:
+      response.detectedMetrics ||
+      response.detected_metrics ||
+      [],
     detectedModules,
+    supportedModules: response.supportedModules || response.supported_modules || [],
     unsupportedModules,
+    detectedLibraries:
+      response.detectedLibraries ||
+      response.detected_libraries ||
+      response.supportedLibraries ||
+      response.supported_libraries ||
+      response.unsupportedLibraries ||
+      response.unsupported_libraries ||
+      [],
+    supportedLibraries:
+      response.supportedLibraries ||
+      response.supported_libraries ||
+      [],
+    unsupportedLibraries:
+      response.unsupportedLibraries ||
+      response.unsupported_libraries ||
+      [],
+    missingDependencies,
     detectedAlgorithms,
     replaceableAlgorithms:
       response.replaceableAlgorithms ||
@@ -491,6 +562,7 @@ getDetectedComponentsCount(): number {
   };
 
   this.runtimeAnalysis = mappedResponse;
+  this.analysisSummary = mappedResponse.summary || mappedResponse.message || '';
   this.warnings = mappedResponse.warnings || [];
 
   console.log('Mapped runtime analysis:', this.runtimeAnalysis);

@@ -61,11 +61,19 @@ public class KubernetesJobService {
 
             deleteExistingJobIfExists(client, jobName);
 
+            boolean attachImagePullSecret = imagePullSecretExists(client);
+
+            if (!attachImagePullSecret && hasText(imagePullSecret)) {
+                System.out.println("[KubernetesJobService] Image pull secret '" + imagePullSecret
+                        + "' not found in namespace '" + namespace + "'. Training job will be created without it.");
+            }
+
             Job job = buildJob(
                     jobName,
                     project,
                     experiment,
-                    customImageUri.trim()
+                    customImageUri.trim(),
+                    attachImagePullSecret
             );
 
             client.batch()
@@ -204,11 +212,12 @@ public class KubernetesJobService {
             String jobName,
             MlProject project,
             MlExperiment experiment,
-            String imageUri
+            String imageUri,
+            boolean attachImagePullSecret
     ) {
         List<EnvVar> envVars = buildEnvironmentVariables(project, experiment);
 
-        return new JobBuilder()
+        JobBuilder jobBuilder = new JobBuilder()
                 .withNewMetadata()
                     .withName(jobName)
                     .withNamespace(namespace)
@@ -232,10 +241,16 @@ public class KubernetesJobService {
                         .endMetadata()
                         .withNewSpec()
                             .withRestartPolicy("Never")
-                            .withServiceAccountName(serviceAccountName)
+                            .withServiceAccountName(serviceAccountName);
+
+        if (attachImagePullSecret && hasText(imagePullSecret)) {
+            jobBuilder = jobBuilder
                             .addNewImagePullSecret()
                                 .withName(imagePullSecret)
-                            .endImagePullSecret()
+                            .endImagePullSecret();
+        }
+
+        jobBuilder = jobBuilder
                             .addNewContainer()
                                 .withName("custom-training")
                                 .withImage(imageUri)
@@ -244,8 +259,9 @@ public class KubernetesJobService {
                             .endContainer()
                         .endSpec()
                     .endTemplate()
-                .endSpec()
-                .build();
+                .endSpec();
+
+        return jobBuilder.build();
     }
 
     private String resolveImagePullPolicy(String imageUri) {
@@ -264,6 +280,23 @@ public class KubernetesJobService {
         }
 
         return "IfNotPresent";
+    }
+
+    private boolean imagePullSecretExists(KubernetesClient client) {
+        if (!hasText(imagePullSecret)) {
+            return false;
+        }
+
+        try {
+            return client.secrets()
+                    .inNamespace(namespace)
+                    .withName(imagePullSecret)
+                    .get() != null;
+        } catch (Exception e) {
+            System.out.println("[KubernetesJobService] Unable to validate image pull secret '"
+                    + imagePullSecret + "': " + e.getMessage());
+            return false;
+        }
     }
 
     private List<EnvVar> buildEnvironmentVariables(MlProject project, MlExperiment experiment) {
@@ -441,6 +474,10 @@ public class KubernetesJobService {
         }
 
         return "";
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private String safe(String value) {

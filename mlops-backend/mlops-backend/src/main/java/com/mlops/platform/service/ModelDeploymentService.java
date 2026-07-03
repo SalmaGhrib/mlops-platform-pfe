@@ -186,13 +186,19 @@ public ModelDeploymentResponse autoDeployExperimentIfNeeded(MlExperiment experim
         return null;
     }
 
-    String registeredModelName = firstNonBlank(managedExperiment.getRegisteredModelName());
-    String modelVersion = firstNonBlank(managedExperiment.getModelVersion());
+    String registeredModelName = firstNonBlank(
+            managedExperiment.getRegisteredModelName(),
+            managedExperiment.getModelName()
+    );
+    String modelVersion = firstNonBlank(
+            managedExperiment.getModelVersion(),
+            managedExperiment.getProductionVersion()
+    );
     String productionVersion = firstNonBlank(managedExperiment.getProductionVersion());
 
-   if (!hasText(registeredModelName)) {
-    return null;
-}
+    if (!hasText(registeredModelName)) {
+        return null;
+    }
 
 if (!hasText(modelVersion)) {
     try {
@@ -1259,7 +1265,8 @@ public ModelDeploymentResponse createDeploymentRecord(
         List<ModelDeployment> deployments = modelDeploymentRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
 
         if (deployments == null || deployments.isEmpty()) {
-            throw new RuntimeException("Aucun déploiement trouvé pour ce projet id=" + projectId);
+            System.out.println("[MODEL_DEPLOYMENT] No deployments found for project id=" + projectId);
+            return null;
         }
 
         for (ModelDeployment deployment : deployments) {
@@ -1296,7 +1303,8 @@ public ModelDeploymentResponse createDeploymentRecord(
             return enrichDeploymentResponse(response);
         }
 
-        throw new RuntimeException("Aucun déploiement actif et réellement prêt dans Kubernetes trouvé pour le projet id=" + projectId);
+        System.out.println("[MODEL_DEPLOYMENT] No active deployment found for project id=" + projectId);
+        return null;
     }
 
     @Transactional

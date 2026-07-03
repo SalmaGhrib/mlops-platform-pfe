@@ -211,9 +211,22 @@ export interface RuntimeAlgorithmAnalysis {
 
 export interface RuntimeAnalysisResult {
   runtimeCompatible: boolean;
+  runtime_compatible?: boolean;
+  compatible?: boolean;
+  status?: string;
+  message?: string;
+  summary?: string;
+  detectedImports?: string[];
+  supportedImports?: string[];
+  unsupportedImports?: string[];
+  detectedMetrics?: string[];
   detectedModules: RuntimeModuleAnalysis[];
   supportedModules?: RuntimeModuleAnalysis[];
   unsupportedModules: RuntimeModuleAnalysis[] | string[];
+  detectedLibraries?: any[];
+  supportedLibraries?: any[];
+  unsupportedLibraries?: any[];
+  missingDependencies?: string[];
   detectedAlgorithms: RuntimeAlgorithmAnalysis[];
   replaceableAlgorithms?: RuntimeAlgorithmAnalysis[];
   warnings?: string[];
@@ -443,23 +456,17 @@ export class ExperimentService {
   }
 
   analyzeRuntimeScript(file: File): Observable<RuntimeAnalysisResult> {
-  console.log('[AKS] Runtime analysis bypassed in ExperimentService:', file.name);
+    const formData = new FormData();
 
-  return of({
-    runtimeCompatible: true,
-    compatible: true,
-    status: 'COMPATIBLE',
-    message: 'Runtime standard compatible',
-    summary: 'Analyse automatique désactivée temporairement sur AKS. Le script sera exécuté avec l’image standard.',
-    detectedModules: [],
-    supportedModules: [],
-    unsupportedModules: [],
-    detectedAlgorithms: [],
-    replaceableAlgorithms: [],
-    warnings: [],
-    recommendation: 'OK'
-  } as any);
-}
+    formData.append('script_file', file);
+    formData.append('file', file);
+    formData.append('scriptFile', file);
+
+    return this.http.post<RuntimeAnalysisResult>(
+      `${this.fastApiUrl}/api/runtime/analyze-script`,
+      formData
+    );
+  }
   uploadAndRunCustomModel(
     request: UploadAndRunCustomModelRequest
   ): Observable<MlExperimentResponse> {
