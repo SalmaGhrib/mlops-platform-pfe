@@ -4066,17 +4066,15 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
             return result;
 
         } catch (Exception e) {
-    System.out.println("[RUNTIME_ANALYSIS] Analysis API unavailable, continuing with STANDARD_RUNTIME.");
-    System.out.println("[RUNTIME_ANALYSIS] Reason: " + e.getMessage());
+            System.out.println("[RUNTIME_ANALYSIS] Analysis API unavailable, continuing with STANDARD_RUNTIME.");
+            System.out.println("[RUNTIME_ANALYSIS] Reason: " + e.getMessage());
 
-    result.setRuntimeCompatible(true);
-    result.setCompatible(true);
-    result.setStatus("COMPATIBLE");
-    result.setMessage("Runtime analysis unavailable in AKS. Continuing with STANDARD_RUNTIME.");
-    result.setSummary("Analyse runtime non disponible dans AKS. Le lancement du pipeline standard est autorisé.");
+            result.setRuntimeCompatible(true);
+            result.setMessage("Runtime analysis unavailable in AKS. Continuing with STANDARD_RUNTIME.");
+            result.setRecommendation("Runtime analysis unavailable in AKS. Continuing with STANDARD_RUNTIME.");
 
-    return result;
-}
+            return result;
+        }
     }
 
     private String extractJsonArray(JsonNode node, String fieldName) {
