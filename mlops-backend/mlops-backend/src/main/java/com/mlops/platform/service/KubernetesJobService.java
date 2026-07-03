@@ -2,9 +2,12 @@ package com.mlops.platform.service;
 
 import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.MlProject;
+import io.fabric8.kubernetes.api.model.Container;
+import io.fabric8.kubernetes.api.model.ContainerBuilder;
 import io.fabric8.kubernetes.api.model.EnvVar;
 import io.fabric8.kubernetes.api.model.EnvVarBuilder;
 import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.PodSpecBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
@@ -32,7 +35,7 @@ public class KubernetesJobService {
     @Value("${app.kubernetes.custom-job.backoff-limit:0}")
     private Integer backoffLimit;
 
-    @Value("${app.mlflow.tracking-uri:http://mlflow-service.mlops.svc.cluster.local:5000}")
+    @Value("${app.mlflow.tracking-uri:${mlflow.tracking.uri:http://mlflow-service:5000}}")
     private String mlflowTrackingUri;
 
     @Value("${app.docker.image-pull-secret:dockerhub-secret}")
@@ -51,7 +54,7 @@ public class KubernetesJobService {
             throw new RuntimeException("Experiment is required to launch Kubernetes Job.");
         }
 
-        if (customImageUri == null || customImageUri.isBlank()) {
+        if (!hasText(customImageUri)) {
             throw new RuntimeException("customImageUri is required to launch Kubernetes Job.");
         }
 
@@ -83,6 +86,12 @@ public class KubernetesJobService {
                     .resource(job)
                     .create();
 
+            System.out.println("[KubernetesJobService] Custom image training job created. "
+                    + "jobName=" + jobName
+                    + ", experimentId=" + experiment.getId()
+                    + ", projectId=" + project.getId()
+                    + ", image=" + customImageUri);
+
             return jobName;
 
         } catch (Exception e) {
@@ -91,7 +100,7 @@ public class KubernetesJobService {
     }
 
     public String getCustomJobStatus(String jobName) {
-        if (jobName == null || jobName.isBlank()) {
+        if (!hasText(jobName)) {
             return "UNKNOWN";
         }
 
@@ -142,6 +151,9 @@ public class KubernetesJobService {
             return "PENDING";
 
         } catch (Exception e) {
+            System.out.println("[KubernetesJobService] Failed to get job status. "
+                    + "jobName=" + jobName
+                    + ", reason=" + e.getMessage());
             return "UNKNOWN";
         }
     }
@@ -155,7 +167,7 @@ public class KubernetesJobService {
     }
 
     public String getCustomJobLogs(String jobName) {
-        if (jobName == null || jobName.isBlank()) {
+        if (!hasText(jobName)) {
             return "";
         }
 
@@ -217,11 +229,31 @@ public class KubernetesJobService {
     ) {
         List<EnvVar> envVars = buildEnvironmentVariables(project, experiment);
 
-        JobBuilder jobBuilder = new JobBuilder()
+        Container trainingContainer = new ContainerBuilder()
+                .withName("custom-training")
+                .withImage(imageUri)
+                .withImagePullPolicy(resolveImagePullPolicy(imageUri))
+                .withEnv(envVars)
+                .build();
+
+        PodSpecBuilder podSpecBuilder = new PodSpecBuilder()
+                .withRestartPolicy("Never")
+                .withServiceAccountName(serviceAccountName)
+                .withContainers(trainingContainer);
+
+        if (attachImagePullSecret && hasText(imagePullSecret)) {
+            podSpecBuilder
+                    .addNewImagePullSecret()
+                    .withName(imagePullSecret.trim())
+                    .endImagePullSecret();
+        }
+
+        return new JobBuilder()
                 .withNewMetadata()
                     .withName(jobName)
                     .withNamespace(namespace)
                     .addToLabels("app", "mlops-custom-training")
+                    .addToLabels("job-name", jobName)
                     .addToLabels("mlops.project.id", String.valueOf(project.getId()))
                     .addToLabels("mlops.experiment.id", String.valueOf(experiment.getId()))
                     .addToLabels("mlops.runtime", "custom-image")
@@ -239,41 +271,26 @@ public class KubernetesJobService {
                             .addToLabels("mlops.runtime", "custom-image")
                             .addToLabels("mlops.phase", "training")
                         .endMetadata()
-                        .withNewSpec()
-                            .withRestartPolicy("Never")
-                            .withServiceAccountName(serviceAccountName);
-
-        if (attachImagePullSecret && hasText(imagePullSecret)) {
-            jobBuilder = jobBuilder
-                            .addNewImagePullSecret()
-                                .withName(imagePullSecret)
-                            .endImagePullSecret();
-        }
-
-        jobBuilder = jobBuilder
-                            .addNewContainer()
-                                .withName("custom-training")
-                                .withImage(imageUri)
-                                .withImagePullPolicy(resolveImagePullPolicy(imageUri))
-                                .withEnv(envVars)
-                            .endContainer()
-                        .endSpec()
+                        .withSpec(podSpecBuilder.build())
                     .endTemplate()
-                .endSpec();
-
-        return jobBuilder.build();
+                .endSpec()
+                .build();
     }
 
     private String resolveImagePullPolicy(String imageUri) {
-        if (imageUri == null || imageUri.isBlank()) {
+        if (!hasText(imageUri)) {
             return "IfNotPresent";
         }
 
         String clean = imageUri.trim();
 
+        if (clean.endsWith(":latest")) {
+            return "Always";
+        }
+
         boolean looksLikeLocalImage =
                 !clean.contains("/")
-                        && (clean.endsWith(":latest") || clean.contains(":"));
+                        && clean.contains(":");
 
         if (looksLikeLocalImage) {
             return "Never";
@@ -290,7 +307,7 @@ public class KubernetesJobService {
         try {
             return client.secrets()
                     .inNamespace(namespace)
-                    .withName(imagePullSecret)
+                    .withName(imagePullSecret.trim())
                     .get() != null;
         } catch (Exception e) {
             System.out.println("[KubernetesJobService] Unable to validate image pull secret '"
@@ -300,110 +317,76 @@ public class KubernetesJobService {
     }
 
     private List<EnvVar> buildEnvironmentVariables(MlProject project, MlExperiment experiment) {
-    List<EnvVar> envVars = new ArrayList<>();
+        List<EnvVar> envVars = new ArrayList<>();
 
-    /*
-     * MLflow / Registry
-     */
-    addEnv(envVars, "MLFLOW_TRACKING_URI", mlflowTrackingUri);
+        String registeredModelName = firstNonBlank(
+                safe(experiment.getRegisteredModelName()),
+                safe(experiment.getModelName()),
+                safe(experiment.getExperimentName())
+        );
 
-    addEnv(envVars, "MLFLOW_EXPERIMENT_NAME", safe(experiment.getRegisteredModelName()));
-    addEnv(envVars, "REGISTERED_MODEL_NAME", safe(experiment.getRegisteredModelName()));
+        addEnv(envVars, "MLFLOW_TRACKING_URI", mlflowTrackingUri);
 
-    /*
-     * Identité du run
-     */
-    addEnv(envVars, "RUN_NAME", safe(experiment.getExperimentName()));
-    addEnv(envVars, "PROJECT_NAME", safe(project.getName()));
-    addEnv(envVars, "PROJECT_ID", String.valueOf(project.getId()));
-    addEnv(envVars, "SPRING_EXPERIMENT_ID", String.valueOf(experiment.getId()));
+        addEnv(envVars, "MLFLOW_EXPERIMENT_NAME", registeredModelName);
+        addEnv(envVars, "REGISTERED_MODEL_NAME", registeredModelName);
 
-    /*
-     * Métriques / scoring
-     */
-    addEnv(envVars, "PRIMARY_METRIC", safe(experiment.getPrimaryMetric()));
-    addEnv(envVars, "PRIMARY_METRIC_1", safe(project.getPrimaryMetric1()));
-    addEnv(envVars, "PRIMARY_METRIC_2", safe(project.getPrimaryMetric2()));
-    addEnv(envVars, "PRIMARY_METRIC_3", safe(project.getPrimaryMetric3()));
-    addEnv(envVars, "DIRECTION", safe(experiment.getDirection()));
+        addEnv(envVars, "RUN_NAME", safe(experiment.getExperimentName()));
+        addEnv(envVars, "PROJECT_NAME", safe(project.getName()));
+        addEnv(envVars, "PROJECT_ID", String.valueOf(project.getId()));
+        addEnv(envVars, "SPRING_EXPERIMENT_ID", String.valueOf(experiment.getId()));
 
-    /*
-     * Type de projet
-     */
-    addEnv(envVars, "PROJECT_TYPE", safe(project.getProjectType()));
-    addEnv(envVars, "PROBLEM_TYPE", safe(project.getProjectType()));
+        addEnv(envVars, "PRIMARY_METRIC", safe(experiment.getPrimaryMetric()));
+        addEnv(envVars, "PRIMARY_METRIC_1", safe(project.getPrimaryMetric1()));
+        addEnv(envVars, "PRIMARY_METRIC_2", safe(project.getPrimaryMetric2()));
+        addEnv(envVars, "PRIMARY_METRIC_3", safe(project.getPrimaryMetric3()));
+        addEnv(envVars, "DIRECTION", safe(experiment.getDirection()));
 
-    String targetColumn = firstNonBlank(
-            safe(experiment.getTargetColumn()),
-            safe(project.getTargetColumn())
-    );
+        addEnv(envVars, "PROJECT_TYPE", safe(project.getProjectType()));
+        addEnv(envVars, "PROBLEM_TYPE", safe(project.getProjectType()));
 
-    addEnv(envVars, "TARGET_COLUMN", targetColumn);
-    addEnv(envVars, "ML_TARGET_COLUMN", targetColumn);
+        String targetColumn = firstNonBlank(
+                safe(experiment.getTargetColumn()),
+                safe(project.getTargetColumn())
+        );
 
-    /*
-     * Script utilisateur / workspace
-     */
-    addEnv(envVars, "USER_SCRIPT", "train.py");
-    addEnv(envVars, "WORKSPACE_DIR", "/workspace");
+        addEnv(envVars, "TARGET_COLUMN", targetColumn);
+        addEnv(envVars, "ML_TARGET_COLUMN", targetColumn);
 
-    /*
-     * Runtime
-     */
-    addEnv(envVars, "RUNTIME_MODE", safe(experiment.getRuntimeMode()));
-    addEnv(envVars, "MLOPS_CUSTOM_IMAGE_URI", safe(experiment.getCustomImageUri()));
-    addEnv(envVars, "MLOPS_EXPERIMENT_NAME", safe(experiment.getExperimentName()));
+        addEnv(envVars, "USER_SCRIPT", "train.py");
+        addEnv(envVars, "WORKSPACE_DIR", "/workspace");
 
-    /*
-     * Nouvelle logique intelligente de sauvegarde modèle.
-     *
-     * Ces variables ne cassent rien :
-     * - si le script utilisateur les ignore, le run continue normalement.
-     * - plus tard, notre service de packaging les utilisera.
-     */
-    addEnv(envVars, "MLOPS_AUTO_MODEL_DISCOVERY", "true");
+        addEnv(envVars, "RUNTIME_MODE", safe(experiment.getRuntimeMode()));
+        addEnv(envVars, "MLOPS_CUSTOM_IMAGE_URI", safe(experiment.getCustomImageUri()));
+        addEnv(envVars, "MLOPS_EXPERIMENT_NAME", safe(experiment.getExperimentName()));
 
-    /*
-     * Dossier standard recommandé par la plateforme.
-     */
-    addEnv(envVars, "MLOPS_DEFAULT_OUTPUT_DIR", "/workspace/outputs");
+        addEnv(envVars, "MLOPS_AUTO_MODEL_DISCOVERY", "true");
+        addEnv(envVars, "MLOPS_DEFAULT_OUTPUT_DIR", "/workspace/outputs");
 
-    /*
-     * Dossiers acceptés.
-     * Si l'utilisateur sauvegarde dans l'un de ces dossiers,
-     * la plateforme pourra détecter le modèle automatiquement.
-     */
-    addEnv(envVars, "MLOPS_ACCEPTED_MODEL_DIRS",
-            "/workspace/outputs,"
-                    + "/workspace/output,"
-                    + "/workspace/artifacts,"
-                    + "/workspace/artifact,"
-                    + "/workspace/model,"
-                    + "/workspace/models,"
-                    + "/workspace/saved_model,"
-                    + "/workspace/checkpoints,"
-                    + "/workspace"
-    );
+        addEnv(envVars, "MLOPS_ACCEPTED_MODEL_DIRS",
+                "/workspace/outputs,"
+                        + "/workspace/output,"
+                        + "/workspace/artifacts,"
+                        + "/workspace/artifact,"
+                        + "/workspace/model,"
+                        + "/workspace/models,"
+                        + "/workspace/saved_model,"
+                        + "/workspace/checkpoints,"
+                        + "/workspace"
+        );
 
-    /*
-     * Extensions acceptées pour les modèles.
-     */
-    addEnv(envVars, "MLOPS_ACCEPTED_MODEL_EXTENSIONS",
-            ".pkl,.joblib,.sav,.cbm,.pt,.pth,.h5,.keras,.onnx"
-    );
+        addEnv(envVars, "MLOPS_ACCEPTED_MODEL_EXTENSIONS",
+                ".pkl,.joblib,.sav,.cbm,.pt,.pth,.h5,.keras,.onnx"
+        );
 
-    /*
-     * Noms prioritaires.
-     * Si plusieurs fichiers existent, la plateforme choisira d'abord ceux-ci.
-     */
-    addEnv(envVars, "MLOPS_PREFERRED_MODEL_FILENAMES",
-            "MLmodel,best_model.pkl,final_model.pkl,model.pkl,"
-                    + "best_model.joblib,final_model.joblib,model.joblib,"
-                    + "best_model.cbm,final_model.cbm,model.cbm"
-    );
+        addEnv(envVars, "MLOPS_PREFERRED_MODEL_FILENAMES",
+                "MLmodel,best_model.pkl,final_model.pkl,model.pkl,"
+                        + "best_model.joblib,final_model.joblib,model.joblib,"
+                        + "best_model.cbm,final_model.cbm,model.cbm"
+        );
 
-    return envVars;
-}
+        return envVars;
+    }
+
     private void addEnv(List<EnvVar> envVars, String name, String value) {
         envVars.add(
                 new EnvVarBuilder()

@@ -18,16 +18,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Service de réconciliation automatique Production -> Deployment.
- *
- * Correction importante :
- * - Le standardizer reste prioritaire pour les modèles fichier (.pkl, .joblib, etc.).
- * - Si le standardizer échoue MAIS que le modèle existe déjà dans MLflow Registry
- *   avec l'alias production, on autorise le déploiement.
- * - Cela rend la plateforme flexible : train.py peut logger un modèle MLflow natif
- *   sans forcément produire un fichier .pkl local.
- */
 @Service
 public class AutoProductionDeploymentReconcilerService {
 
@@ -44,7 +34,7 @@ public class AutoProductionDeploymentReconcilerService {
     @Value("${app.mlops.production-reconciler.enabled:true}")
     private boolean reconcilerEnabled;
 
-    @Value("${mlflow.tracking.uri:http://127.0.0.1:5000}")
+    @Value("${app.mlflow.tracking-uri:${mlflow.tracking.uri:http://mlflow-service:5000}}")
     private String localMlflowTrackingUri;
 
     public AutoProductionDeploymentReconcilerService(
@@ -164,15 +154,6 @@ public class AutoProductionDeploymentReconcilerService {
         }
     }
 
-    /**
-     * Barrière avant auto-deployment.
-     *
-     * Nouvelle logique :
-     * 1. On essaie la standardisation normale.
-     * 2. Si elle réussit, on déploie.
-     * 3. Si elle échoue, on vérifie si MLflow Registry contient déjà models:/model@production.
-     * 4. Si oui, on déploie quand même.
-     */
     private MlExperiment prepareCandidateForDeployment(MlExperiment candidate) {
         if (candidate == null || candidate.getId() == null) {
             return null;
@@ -318,6 +299,8 @@ public class AutoProductionDeploymentReconcilerService {
             return false;
         }
 
+        registeredModelName = registeredModelName.trim();
+
         if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
             System.out.println("[PRODUCTION_RECONCILER] Native MLflow Registry fallback skipped because experiment is not COMPLETED. "
                     + "experimentId=" + experiment.getId()
@@ -334,6 +317,8 @@ public class AutoProductionDeploymentReconcilerService {
                     + ", reason=" + reason);
             return false;
         }
+
+        productionVersion = productionVersion.trim();
 
         experiment.setRegisteredModelName(registeredModelName);
         experiment.setModelName(registeredModelName);
@@ -384,7 +369,7 @@ public class AutoProductionDeploymentReconcilerService {
             String url = localMlflowTrackingUri;
 
             if (!hasText(url)) {
-                url = "http://127.0.0.1:5000";
+                url = "http://mlflow-service:5000";
             }
 
             if (url.endsWith("/")) {
@@ -438,7 +423,7 @@ public class AutoProductionDeploymentReconcilerService {
                     + ", version=" + version
                     + ", ready=" + hasText(version));
 
-            return hasText(version) ? version : null;
+            return hasText(version) ? version.trim() : null;
 
         } catch (Exception e) {
             System.out.println("[PRODUCTION_RECONCILER] Registry alias check failed. "
@@ -447,6 +432,168 @@ public class AutoProductionDeploymentReconcilerService {
 
             return null;
         }
+    }
+
+    private boolean isEligibleProductionExperiment(MlExperiment experiment) {
+        if (experiment == null || experiment.getId() == null) {
+            return false;
+        }
+
+        if (experiment.getProject() == null || experiment.getProject().getId() == null) {
+            System.out.println("[PRODUCTION_RECONCILER] Experiment ignored: no project. "
+                    + "experimentId=" + experiment.getId());
+            return false;
+        }
+
+        if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
+            return false;
+        }
+
+        if (!hasText(experiment.getMlflowRunId())) {
+            System.out.println("[PRODUCTION_RECONCILER] Experiment ignored: missing mlflowRunId. "
+                    + "experimentId=" + experiment.getId());
+            return false;
+        }
+
+        String registeredModelName = resolveRegisteredModelName(experiment);
+
+        if (!hasText(registeredModelName)) {
+            System.out.println("[PRODUCTION_RECONCILER] Experiment ignored: missing registered model name. "
+                    + "experimentId=" + experiment.getId());
+            return false;
+        }
+
+        registeredModelName = registeredModelName.trim();
+
+        String runtimeMode = experiment.getRuntimeMode() == null
+                ? ""
+                : experiment.getRuntimeMode().trim().toUpperCase();
+
+        String modelVersion = experiment.getModelVersion();
+        String productionVersion = experiment.getProductionVersion();
+
+        boolean markedProduction = Boolean.TRUE.equals(experiment.getProduction());
+
+        boolean versionMatchesProduction =
+                hasText(modelVersion)
+                        && hasText(productionVersion)
+                        && productionVersion.trim().equalsIgnoreCase(modelVersion.trim());
+
+        if (markedProduction || versionMatchesProduction) {
+            System.out.println("[PRODUCTION_RECONCILER] Eligible production experiment. "
+                    + "experimentId=" + experiment.getId()
+                    + ", model=" + registeredModelName
+                    + ", modelVersion=" + modelVersion
+                    + ", productionVersion=" + productionVersion
+                    + ", runtimeMode=" + runtimeMode);
+
+            return true;
+        }
+
+        boolean customDockerRuntime =
+                "CUSTOM_DOCKERFILE".equals(runtimeMode)
+                        || "CUSTOM_DOCKER".equals(runtimeMode)
+                        || "CUSTOM_IMAGE".equals(runtimeMode)
+                        || "CUSTOM_IMAGE_RUNTIME".equals(runtimeMode)
+                        || "DOCKER_PERSONALIZED".equals(runtimeMode)
+                        || "PERSONALIZED".equals(runtimeMode);
+
+        if (customDockerRuntime) {
+            String registryProductionVersion =
+                    getProductionVersionFromRegistryAlias(registeredModelName);
+
+            if (!hasText(registryProductionVersion)) {
+                System.out.println("[PRODUCTION_RECONCILER][CUSTOM] Custom experiment ignored: no MLflow production alias. "
+                        + "experimentId=" + experiment.getId()
+                        + ", model=" + registeredModelName
+                        + ", modelVersion=" + modelVersion
+                        + ", productionVersion=" + productionVersion);
+
+                return false;
+            }
+
+            registryProductionVersion = registryProductionVersion.trim();
+
+            experiment.setRegisteredModelName(registeredModelName);
+            experiment.setModelName(registeredModelName);
+            experiment.setModelVersion(registryProductionVersion);
+            experiment.setProductionVersion(registryProductionVersion);
+            experiment.setProduction(true);
+            experiment.setErrorMessage(null);
+
+            experiment.setMessage(
+                    appendSafeMessage(
+                            experiment.getMessage(),
+                            "CUSTOM_DOCKERFILE production state recovered from MLflow Registry. "
+                                    + "Using models:/"
+                                    + registeredModelName
+                                    + "/"
+                                    + registryProductionVersion
+                                    + " for automatic deployment."
+                    )
+            );
+
+            mlExperimentRepository.saveAndFlush(experiment);
+
+            System.out.println("[PRODUCTION_RECONCILER][CUSTOM] Eligible custom docker experiment from MLflow Registry. "
+                    + "experimentId=" + experiment.getId()
+                    + ", model=" + registeredModelName
+                    + ", productionVersion=" + registryProductionVersion
+                    + ", mlflowRunId=" + experiment.getMlflowRunId());
+
+            return true;
+        }
+
+        System.out.println("[PRODUCTION_RECONCILER] Experiment ignored: not production candidate. "
+                + "experimentId=" + experiment.getId()
+                + ", model=" + registeredModelName
+                + ", modelVersion=" + modelVersion
+                + ", productionVersion=" + productionVersion
+                + ", production=" + experiment.getProduction()
+                + ", runtimeMode=" + runtimeMode);
+
+        return false;
+    }
+
+    private String buildCandidateKey(MlExperiment experiment) {
+        if (experiment == null) {
+            return "null|null|null";
+        }
+
+        Long projectId = experiment.getProject() != null
+                ? experiment.getProject().getId()
+                : null;
+
+        String modelName = resolveRegisteredModelName(experiment);
+
+        String version = hasText(experiment.getProductionVersion())
+                ? experiment.getProductionVersion()
+                : experiment.getModelVersion();
+
+        return String.valueOf(projectId)
+                + "|"
+                + clean(modelName)
+                + "|"
+                + clean(version);
+    }
+
+    private boolean isNewer(MlExperiment left, MlExperiment right) {
+        LocalDateTime leftDate = left.getUpdatedAt() != null ? left.getUpdatedAt() : left.getCreatedAt();
+        LocalDateTime rightDate = right.getUpdatedAt() != null ? right.getUpdatedAt() : right.getCreatedAt();
+
+        if (leftDate == null && rightDate == null) {
+            return left.getId() != null && right.getId() != null && left.getId() > right.getId();
+        }
+
+        if (leftDate != null && rightDate == null) {
+            return true;
+        }
+
+        if (leftDate == null) {
+            return false;
+        }
+
+        return leftDate.isAfter(rightDate);
     }
 
     private String resolveRegisteredModelName(MlExperiment experiment) {
@@ -493,71 +640,6 @@ public class AutoProductionDeploymentReconcilerService {
         System.out.println("[PRODUCTION_RECONCILER] Artifact not ready. Deployment blocked. "
                 + "experimentId=" + experiment.getId()
                 + ", reason=" + reason);
-    }
-
-    private boolean isEligibleProductionExperiment(MlExperiment experiment) {
-        if (experiment == null || experiment.getId() == null) {
-            return false;
-        }
-
-        if (experiment.getProject() == null || experiment.getProject().getId() == null) {
-            return false;
-        }
-
-        if (!hasText(experiment.getRegisteredModelName())
-                && !hasText(experiment.getModelName())) {
-            return false;
-        }
-
-        if (!hasText(experiment.getModelVersion())
-                && !hasText(experiment.getProductionVersion())) {
-            return false;
-        }
-
-        if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
-            return false;
-        }
-
-        if (!hasText(experiment.getMlflowRunId())) {
-            return false;
-        }
-
-        boolean markedProduction = Boolean.TRUE.equals(experiment.getProduction());
-
-        boolean versionMatchesProduction =
-                hasText(experiment.getProductionVersion())
-                        && experiment.getProductionVersion()
-                        .trim()
-                        .equalsIgnoreCase(experiment.getModelVersion().trim());
-
-        return markedProduction || versionMatchesProduction;
-    }
-
-    private String buildCandidateKey(MlExperiment experiment) {
-        return experiment.getProject().getId()
-                + "|"
-                + clean(resolveRegisteredModelName(experiment))
-                + "|"
-                + clean(firstNonBlank(experiment.getModelVersion(), experiment.getProductionVersion()));
-    }
-
-    private boolean isNewer(MlExperiment left, MlExperiment right) {
-        LocalDateTime leftDate = left.getUpdatedAt() != null ? left.getUpdatedAt() : left.getCreatedAt();
-        LocalDateTime rightDate = right.getUpdatedAt() != null ? right.getUpdatedAt() : right.getCreatedAt();
-
-        if (leftDate == null && rightDate == null) {
-            return left.getId() != null && right.getId() != null && left.getId() > right.getId();
-        }
-
-        if (leftDate != null && rightDate == null) {
-            return true;
-        }
-
-        if (leftDate == null) {
-            return false;
-        }
-
-        return leftDate.isAfter(rightDate);
     }
 
     private String safeExperimentId(MlExperiment experiment) {
