@@ -699,7 +699,8 @@ public ModelDeploymentResponse deployProductionModel(DeployModelRequestDto reque
      * On ne recrée pas la ligne et on ne relance pas Kubernetes.
      */
    if (existingSameVersion != null
-        && DeploymentStatus.DEPLOYING.equals(existingSameVersion.getDeploymentStatus())) {
+            && (DeploymentStatus.DEPLOYING.equals(existingSameVersion.getDeploymentStatus())
+            || DeploymentStatus.OUT_OF_SYNC.equals(existingSameVersion.getDeploymentStatus()))) {
 
     boolean resourcesExist = false;
 
@@ -709,7 +710,7 @@ public ModelDeploymentResponse deployProductionModel(DeployModelRequestDto reque
                 existingSameVersion.getServiceName()
         );
     } catch (Exception e) {
-        System.out.println("[MODEL_DEPLOYMENT] Could not verify DEPLOYING Kubernetes resources. "
+        System.out.println("[MODEL_DEPLOYMENT] Could not verify DEPLOYING/OUT_OF_SYNC Kubernetes resources. "
                 + "model=" + registeredModelName
                 + ", version=" + modelVersion
                 + ", deploymentId=" + existingSameVersion.getId()
@@ -1117,10 +1118,17 @@ public void reconcileDeploymentsWithKubernetes() {
         /*
          * Candidate DEPLOYING devenue prête : switch blue/green ici.
          */
-        if (DeploymentStatus.DEPLOYING.equals(deployment.getDeploymentStatus())) {
+        if (DeploymentStatus.DEPLOYING.equals(deployment.getDeploymentStatus())
+                || DeploymentStatus.OUT_OF_SYNC.equals(deployment.getDeploymentStatus())) {
             boolean readyInKubernetes = isDeploymentReallyReadyInKubernetes(deployment);
 
             if (!readyInKubernetes) {
+                if (DeploymentStatus.DEPLOYING.equals(deployment.getDeploymentStatus())) {
+                    System.out.println("[DEPLOY_SYNC] Candidate deployment still not ready. "
+                            + "model=" + deployment.getRegisteredModelName()
+                            + ", version=" + deployment.getModelVersion()
+                            + ", deploymentId=" + deployment.getId());
+                }
                 continue;
             }
 

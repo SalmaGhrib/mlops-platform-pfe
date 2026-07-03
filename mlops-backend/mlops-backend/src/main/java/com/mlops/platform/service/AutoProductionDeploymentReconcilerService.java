@@ -76,6 +76,13 @@ public class AutoProductionDeploymentReconcilerService {
             System.out.println("[PRODUCTION_RECONCILER] Start Production -> Deployment check");
             System.out.println("[PRODUCTION_RECONCILER] ===================================");
 
+            try {
+                modelDeploymentService.reconcileDeploymentsWithKubernetes();
+                System.out.println("[PRODUCTION_RECONCILER] Deployment status reconciliation completed before candidate evaluation.");
+            } catch (Exception e) {
+                System.out.println("[PRODUCTION_RECONCILER] Deployment reconciliation failed before candidate evaluation: " + e.getMessage());
+            }
+
             List<MlExperiment> experiments = mlExperimentRepository.findAll();
 
             if (experiments == null || experiments.isEmpty()) {

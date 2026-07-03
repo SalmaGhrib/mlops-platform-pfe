@@ -3,6 +3,7 @@ package com.mlops.platform.service;
 import io.fabric8.kubernetes.api.model.ContainerBuilder;
 import io.fabric8.kubernetes.api.model.ContainerPortBuilder;
 import io.fabric8.kubernetes.api.model.EnvVarBuilder;
+import io.fabric8.kubernetes.api.model.Endpoints;
 import io.fabric8.kubernetes.api.model.IntOrString;
 import io.fabric8.kubernetes.api.model.ServiceBuilder;
 import io.fabric8.kubernetes.api.model.ServicePortBuilder;
@@ -279,6 +280,7 @@ public class KubernetesModelServingService {
             boolean serviceExists = service != null;
             String serviceBaseUrl = buildServiceBaseUrl(cleanServiceName);
             boolean healthyEndpoint = serviceExists && isServiceHealthy(serviceBaseUrl);
+            boolean serviceEndpointsReady = serviceExists && isServiceEndpointReady(cleanServiceName);
 
             System.out.println("[K8S_SERVING] Readiness check: deployment="
                     + cleanDeploymentName
@@ -290,10 +292,12 @@ public class KubernetesModelServingService {
                     + replicas
                     + ", serviceExists="
                     + serviceExists
+                    + ", serviceEndpointsReady="
+                    + serviceEndpointsReady
                     + ", healthyEndpoint="
                     + healthyEndpoint);
 
-            return (deploymentReady && serviceExists) || healthyEndpoint;
+            return (deploymentReady && serviceExists && serviceEndpointsReady) || healthyEndpoint;
 
         } catch (Exception e) {
             System.out.println("[K8S_SERVING] Readiness check failed for deployment="
@@ -371,8 +375,16 @@ public class KubernetesModelServingService {
                 .withName(cleanServiceName)
                 .get();
 
+        var endpoints = kubernetesClient.endpoints()
+                .inNamespace(namespace)
+                .withName(cleanServiceName)
+                .get();
+
         boolean deploymentExists = deployment != null;
         boolean serviceExists = service != null;
+        boolean endpointsExist = endpoints != null
+                && endpoints.getSubsets() != null
+                && !endpoints.getSubsets().isEmpty();
 
         System.out.println("[K8S_SERVING] Resources existence check: deployment="
                 + cleanDeploymentName
@@ -381,9 +393,11 @@ public class KubernetesModelServingService {
                 + ", service="
                 + cleanServiceName
                 + ", serviceExists="
-                + serviceExists);
+                + serviceExists
+                + ", endpointsExist="
+                + endpointsExist);
 
-        return deploymentExists && serviceExists;
+        return deploymentExists && serviceExists && endpointsExist;
 
     } catch (Exception e) {
         System.out.println("[K8S_SERVING] Resources existence check failed: deployment="
@@ -399,6 +413,36 @@ public class KubernetesModelServingService {
 
     private String buildServiceBaseUrl(String cleanServiceName) {
         return "http://" + cleanServiceName + "." + namespace + ".svc.cluster.local:8000";
+    }
+
+    private boolean isServiceEndpointReady(String cleanServiceName) {
+        if (cleanServiceName == null || cleanServiceName.isBlank()) {
+            return false;
+        }
+
+        try {
+            Endpoints endpoints = kubernetesClient.endpoints()
+                    .inNamespace(namespace)
+                    .withName(cleanServiceName.trim())
+                    .get();
+
+            boolean ready = endpoints != null
+                    && endpoints.getSubsets() != null
+                    && !endpoints.getSubsets().isEmpty();
+
+            System.out.println("[K8S_SERVING] Endpoint readiness check: service="
+                    + cleanServiceName
+                    + ", ready="
+                    + ready);
+
+            return ready;
+        } catch (Exception e) {
+            System.out.println("[K8S_SERVING] Endpoint readiness check failed: service="
+                    + cleanServiceName
+                    + ", reason="
+                    + e.getMessage());
+            return false;
+        }
     }
 
     private boolean isServiceHealthy(String serviceBaseUrl) {

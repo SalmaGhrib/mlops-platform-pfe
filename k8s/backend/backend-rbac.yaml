@@ -11,7 +11,7 @@ metadata:
   namespace: mlops
 rules:
   - apiGroups: [""]
-    resources: ["pods", "pods/log", "services", "configmaps", "secrets", "persistentvolumeclaims"]
+    resources: ["pods", "pods/log", "services", "endpoints", "configmaps", "secrets", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets"]
