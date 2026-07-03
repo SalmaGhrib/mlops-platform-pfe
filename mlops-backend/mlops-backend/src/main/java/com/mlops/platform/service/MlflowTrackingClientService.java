@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mlops.platform.dto.MetricPriorityDto;
 import com.mlops.platform.dto.MlflowModelVersionDto;
+import com.mlops.platform.entity.ExperimentStatus;
 import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.MlExperimentMetric;
 import com.mlops.platform.repository.MlExperimentMetricRepository;
@@ -1912,6 +1913,13 @@ public boolean deleteMlflowExperimentByName(String experimentName) {
 
     public void syncModelRegistryForExperiment(MlExperiment experiment) {
         if (experiment == null || experiment.getRegisteredModelName() == null || experiment.getRegisteredModelName().isBlank()) {
+            return;
+        }
+
+        if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
+            System.out.println("[MLFLOW_REGISTRY_SYNC] Skipping registry sync for non-COMPLETED experiment. experimentId="
+                    + (experiment.getId() != null ? experiment.getId() : "null")
+                    + ", status=" + experiment.getStatus());
             return;
         }
 

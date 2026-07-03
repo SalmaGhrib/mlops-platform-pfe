@@ -9,7 +9,10 @@ import io.fabric8.kubernetes.api.model.ServicePortBuilder;
 import io.fabric8.kubernetes.api.model.apps.DeploymentBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -24,6 +27,12 @@ public class KubernetesModelServingService {
 
     @Value("${app.mlflow.tracking-uri:http://mlflow-service.mlops.svc.cluster.local:5000}")
     private String mlflowTrackingUri;
+
+    @Value("${app.kubernetes.service-health-path:/health}")
+    private String serviceHealthPath;
+
+    @Value("${app.kubernetes.service-health-timeout-ms:2000}")
+    private int serviceHealthTimeoutMs;
 
     public KubernetesModelServingService(KubernetesClient kubernetesClient) {
         this.kubernetesClient = kubernetesClient;
@@ -268,6 +277,8 @@ public class KubernetesModelServingService {
                     .get();
 
             boolean serviceExists = service != null;
+            String serviceBaseUrl = buildServiceBaseUrl(cleanServiceName);
+            boolean healthyEndpoint = serviceExists && isServiceHealthy(serviceBaseUrl);
 
             System.out.println("[K8S_SERVING] Readiness check: deployment="
                     + cleanDeploymentName
@@ -278,9 +289,11 @@ public class KubernetesModelServingService {
                     + ", replicas="
                     + replicas
                     + ", serviceExists="
-                    + serviceExists);
+                    + serviceExists
+                    + ", healthyEndpoint="
+                    + healthyEndpoint);
 
-            return deploymentReady && serviceExists;
+            return (deploymentReady && serviceExists) || healthyEndpoint;
 
         } catch (Exception e) {
             System.out.println("[K8S_SERVING] Readiness check failed for deployment="
@@ -383,4 +396,65 @@ public class KubernetesModelServingService {
         return false;
     }
 }
+
+    private String buildServiceBaseUrl(String cleanServiceName) {
+        return "http://" + cleanServiceName + "." + namespace + ".svc.cluster.local:8000";
+    }
+
+    private boolean isServiceHealthy(String serviceBaseUrl) {
+        if (serviceBaseUrl == null || serviceBaseUrl.isBlank()) {
+            return false;
+        }
+
+        String healthUrl = normalizeBaseUrl(serviceBaseUrl) + normalizeHealthPath(serviceHealthPath);
+
+        try {
+            SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+            requestFactory.setConnectTimeout(serviceHealthTimeoutMs);
+            requestFactory.setReadTimeout(serviceHealthTimeoutMs);
+
+            RestTemplate healthTemplate = new RestTemplate(requestFactory);
+            ResponseEntity<String> response = healthTemplate.getForEntity(healthUrl, String.class);
+
+            boolean healthy = response != null
+                    && response.getStatusCode().is2xxSuccessful();
+
+            System.out.println("[K8S_SERVING] Health endpoint check: url="
+                    + healthUrl
+                    + ", status="
+                    + (response != null ? response.getStatusCodeValue() : "null")
+                    + ", healthy="
+                    + healthy);
+
+            return healthy;
+        } catch (Exception e) {
+            System.out.println("[K8S_SERVING] Health endpoint check failed: url="
+                    + healthUrl
+                    + ", reason="
+                    + e.getMessage());
+            return false;
+        }
+    }
+
+    private String normalizeBaseUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return "";
+        }
+        String clean = url.trim();
+        if (clean.endsWith("/")) {
+            clean = clean.substring(0, clean.length() - 1);
+        }
+        return clean;
+    }
+
+    private String normalizeHealthPath(String healthPath) {
+        if (healthPath == null || healthPath.isBlank()) {
+            return "/health";
+        }
+        String clean = healthPath.trim();
+        if (!clean.startsWith("/")) {
+            clean = "/" + clean;
+        }
+        return clean;
+    }
 }

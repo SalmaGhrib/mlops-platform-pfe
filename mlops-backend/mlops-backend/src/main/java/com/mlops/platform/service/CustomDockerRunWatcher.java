@@ -66,11 +66,13 @@ public class CustomDockerRunWatcher {
             return;
         }
 
+        System.out.println("[CUSTOM-DOCKER] Found " + experiments.size() + " CUSTOM_DOCKERFILE experiments to inspect.");
+
         for (MlExperiment experiment : experiments) {
             try {
                 processExperiment(experiment);
             } catch (Exception e) {
-                System.out.println("[CUSTOM-DOCKER-WATCHER] Error while processing experiment id="
+                System.out.println("[CUSTOM-DOCKER] Error while processing experiment id="
                         + safeExperimentId(experiment)
                         + " : "
                         + e.getMessage());
@@ -92,6 +94,17 @@ public class CustomDockerRunWatcher {
             if (ExperimentStatus.COMPLETED.equals(experiment.getStatus())) {
                 tryStandardizeModelArtifactIfPossible(experiment, "terminal-completed");
             }
+            return;
+        }
+
+        if (!hasText(experiment.getCustomImageUri()) && !hasText(experiment.getDockerfilePath())) {
+            markFailed(
+                    experiment,
+                    "VALIDATION",
+                    "Dockerfile or custom image is required for CUSTOM_DOCKERFILE."
+            );
+            System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
+                    + " failed validation: missing Dockerfile and custom image.");
             return;
         }
 
@@ -166,6 +179,17 @@ public class CustomDockerRunWatcher {
             return;
         }
 
+        if (!hasText(experiment.getDockerfilePath())) {
+            markFailed(
+                    experiment,
+                    "VALIDATION",
+                    "Dockerfile path is required to build custom Docker image."
+            );
+            System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
+                    + " cannot launch build: dockerfile_path is missing.");
+            return;
+        }
+
         try {
             KubernetesBuildService.BuildJobResult result =
                     kubernetesBuildService.launchImageBuildJob(project, experiment);
@@ -181,12 +205,18 @@ public class CustomDockerRunWatcher {
             );
             experiment.setMessage("Custom Docker image build started with Kaniko.");
 
+            System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
+                    + " launched Kaniko build job=" + result.getBuildJobName()
+                    + " image=" + result.getImageUri());
+
             mlExperimentRepository.saveAndFlush(experiment);
 
         } catch (Exception e) {
             String logs = safe(e.getMessage());
             experiment.setBuildLogs(logs);
             markFailedWithAnalyzer(experiment, logs);
+            System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
+                    + " failed to launch build job: " + logs);
         }
     }
 
@@ -258,6 +288,9 @@ public class CustomDockerRunWatcher {
         }
 
         try {
+            System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
+                    + " launching custom image training job with image=" + experiment.getCustomImageUri());
+
             String jobName = kubernetesJobService.launchCustomImageTrainingJob(
                     project,
                     experiment,
@@ -274,10 +307,16 @@ public class CustomDockerRunWatcher {
             experiment.setMessage("Custom Docker training job launched: " + jobName);
             experiment.setErrorMessage(null);
 
+            System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
+                    + " launched training job=" + jobName);
+
             mlExperimentRepository.saveAndFlush(experiment);
 
         } catch (Exception e) {
             String error = safe(e.getMessage());
+
+            System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
+                    + " failed to launch custom image training job: " + error);
 
             experiment.setStatus(ExperimentStatus.FAILED);
             experiment.setBuildStatus("CUSTOM_IMAGE_JOB_FAILED");

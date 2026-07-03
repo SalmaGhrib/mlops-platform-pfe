@@ -970,6 +970,20 @@ if (experimentToSave == null) {
                 ExperimentStatus previousStatus = experimentToSave.getStatus();
 
                 ExperimentStatus importedStatus = mapMlflowStatusToExperimentStatus(runDetails.getStatus());
+
+                ExperimentStatus mappedKubeflowStatus =
+                        mapKubeflowStatusToExperimentStatus(experimentToSave.getKubeflowStatus());
+
+                if (mappedKubeflowStatus == ExperimentStatus.FAILED
+                        || mappedKubeflowStatus == ExperimentStatus.CANCELLED) {
+                    importedStatus = mappedKubeflowStatus;
+                }
+
+                if (experimentToSave.getStatus() == ExperimentStatus.FAILED
+                        || experimentToSave.getStatus() == ExperimentStatus.CANCELLED) {
+                    importedStatus = experimentToSave.getStatus();
+                }
+
                 experimentToSave.setStatus(importedStatus);
                 applyExecutionTimestampsForStatus(experimentToSave, importedStatus);
                 experimentToSave.setRegisteredModelName(registeredModelName);
@@ -991,11 +1005,16 @@ if (experimentToSave == null) {
                     experimentToSave.setProductionVersion(productionVersion);
                 }
 
-                experimentToSave.setProduction(
-                        experimentToSave.getProductionVersion() != null
-                                && experimentToSave.getModelVersion() != null
-                                && experimentToSave.getProductionVersion().equals(experimentToSave.getModelVersion())
-                );
+                boolean eligibleForProduction = experimentToSave.getStatus() == ExperimentStatus.COMPLETED
+                        && experimentToSave.getProductionVersion() != null
+                        && experimentToSave.getModelVersion() != null
+                        && experimentToSave.getProductionVersion().equals(experimentToSave.getModelVersion());
+
+                experimentToSave.setProduction(eligibleForProduction);
+
+                if (!eligibleForProduction) {
+                    experimentToSave.setProduction(false);
+                }
 
                 if (metrics != null && !metrics.isEmpty()) {
                     updatePrimaryMetricFromProjectPriority(project, experimentToSave, metrics);

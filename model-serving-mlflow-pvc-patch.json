@@ -1,0 +1,28 @@
+{
+  "spec": {
+    "template": {
+      "spec": {
+        "volumes": [
+          {
+            "name": "mlflow-storage",
+            "persistentVolumeClaim": {
+              "claimName": "mlflow-pvc"
+            }
+          }
+        ],
+        "containers": [
+          {
+            "name": "model-server",
+            "volumeMounts": [
+              {
+                "name": "mlflow-storage",
+                "mountPath": "/mlflow",
+                "readOnly": true
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

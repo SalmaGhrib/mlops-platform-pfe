@@ -311,6 +311,13 @@ public class AutoProductionDeploymentReconcilerService {
             return false;
         }
 
+        if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
+            System.out.println("[PRODUCTION_RECONCILER] Native MLflow Registry fallback skipped because experiment is not COMPLETED. "
+                    + "experimentId=" + experiment.getId()
+                    + ", status=" + experiment.getStatus());
+            return false;
+        }
+
         String productionVersion = getProductionVersionFromRegistryAlias(registeredModelName);
 
         if (!hasText(productionVersion)) {

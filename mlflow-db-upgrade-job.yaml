@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mlflow-db-upgrade
+  namespace: mlops
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mlflow-db-upgrade
+          image: ghcr.io/mlflow/mlflow:v3.1.1
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Backup old MLflow DB..."
+              cp /mlflow/mlflow.db /mlflow/mlflow.db.backup.$(date +%Y%m%d%H%M%S) || true
+              echo "Running MLflow DB upgrade..."
+              mlflow db upgrade sqlite:////mlflow/mlflow.db
+              echo "MLflow DB upgrade completed."
+          volumeMounts:
+            - name: mlflow-storage
+              mountPath: /mlflow
+      volumes:
+        - name: mlflow-storage
+          persistentVolumeClaim:
+            claimName: mlflow-pvc
