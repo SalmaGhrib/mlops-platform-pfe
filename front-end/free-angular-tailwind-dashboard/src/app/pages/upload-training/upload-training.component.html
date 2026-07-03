@@ -281,7 +281,7 @@
                 </h4>
 
                 <p class="mt-1 text-sm leading-6 text-purple-700 dark:text-purple-300">
-                  Ce mode utilise l’environnement fourni par l’utilisateur. 
+                  Ce mode utilise l’environnement fourni par l’utilisateur.
                   Le script doit imprimer les métriques sous forme <strong>accuracy=...</strong>, <strong>f1_score=...</strong>, <strong>rmse=...</strong>
                   et sauvegarder le modèle dans <strong>outputs/model.pkl</strong>.
                 </p>
@@ -380,7 +380,7 @@
 
               @if (runtimeAnalysis !== null) {
                 <div>
-                  @if (runtimeAnalysis.runtimeCompatible) {
+                  @if (runtimeAnalysis?.runtimeCompatible) {
                     <span class="inline-flex rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700 dark:bg-green-900/30 dark:text-green-300">
                       Compatible avec le Runtime standard
                     </span>
@@ -403,11 +403,11 @@
               <div class="space-y-5">
                 <div
                   class="rounded-2xl border p-4"
-                  [ngClass]="runtimeAnalysis.runtimeCompatible
+                  [ngClass]="runtimeAnalysis?.runtimeCompatible
                     ? 'border-green-200 bg-green-50 dark:border-green-900/40 dark:bg-green-900/10'
                     : 'border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-900/10'"
                 >
-                  @if (runtimeAnalysis.runtimeCompatible) {
+                  @if (runtimeAnalysis?.runtimeCompatible) {
                     <p class="text-sm font-semibold text-green-700 dark:text-green-300">
                       ✓ Le script est compatible avec le Runtime standard.
                     </p>
@@ -420,9 +420,9 @@
                     </p>
                   }
 
-                  @if (runtimeAnalysis.recommendation) {
+                  @if (runtimeAnalysis?.recommendation) {
                     <p class="mt-3 text-xs text-gray-600 dark:text-gray-400">
-                      {{ runtimeAnalysis.recommendation }}
+                      {{ runtimeAnalysis?.recommendation }}
                     </p>
                   }
                 </div>
@@ -435,12 +435,12 @@
                       </h4>
 
                       <span class="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                        {{ runtimeAnalysis!.detectedModules.length }} module(s)
+                        {{ (runtimeAnalysis?.detectedModules || []).length }} module(s)
                       </span>
                     </div>
 
                     <div class="grid gap-3 sm:grid-cols-2">
-                      @for (module of runtimeAnalysis!.detectedModules; track formatModuleName(module)) {
+                      @for (module of (runtimeAnalysis?.detectedModules || []); track formatModuleName(module)) {
                         <div
                           class="rounded-2xl border px-4 py-3 text-sm"
                           [ngClass]="isModuleSupported(module)
@@ -495,7 +495,7 @@
                       Imports détectés
                     </h4>
                     <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                      {{ runtimeAnalysis!.detectedImports.join(', ') }}
+                      {{ (runtimeAnalysis?.detectedImports || []).join(', ') || '-' }}
                     </p>
                   </div>
                 }
@@ -506,7 +506,7 @@
                       Bibliothèques détectées
                     </h4>
                     <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                      {{ runtimeAnalysis!.detectedLibraries.map(formatLibraryName).join(', ') }}
+                      {{ ((runtimeAnalysis?.detectedLibraries || []).map(formatLibraryName)).join(', ') || '-' }}
                     </p>
                   </div>
                 }
@@ -517,7 +517,7 @@
                       Métriques détectées
                     </h4>
                     <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                      {{ runtimeAnalysis!.detectedMetrics.join(', ') }}
+                      {{ (runtimeAnalysis?.detectedMetrics || []).join(', ') || '-' }}
                     </p>
                   </div>
                 }
@@ -528,7 +528,7 @@
                       Dépendances manquantes
                     </h4>
                     <p class="mt-2 text-sm text-yellow-800 dark:text-yellow-200">
-                      {{ runtimeAnalysis!.missingDependencies.join(', ') }}
+                      {{ (runtimeAnalysis?.missingDependencies || []).join(', ') || '-' }}
                     </p>
                   </div>
                 }
@@ -541,12 +541,12 @@
                       </h4>
 
                       <span class="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
-                        {{ runtimeAnalysis!.detectedAlgorithms.length }} composant(s)
+                        {{ (runtimeAnalysis?.detectedAlgorithms || []).length }} composant(s)
                       </span>
                     </div>
 
                     <div class="space-y-3">
-                      @for (item of runtimeAnalysis!.detectedAlgorithms; track item.name) {
+                      @for (item of (runtimeAnalysis?.detectedAlgorithms || []); track item.name) {
                         <div class="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900/40">
                           <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div>
@@ -614,7 +614,7 @@
                     </summary>
 
                     <ul class="mt-3 list-disc space-y-1 pl-5 text-sm text-yellow-800 dark:text-yellow-200">
-                      @for (warning of runtimeAnalysis!.warnings; track warning) {
+                      @for (warning of (runtimeAnalysis?.warnings || []); track warning) {
                         <li>{{ warning }}</li>
                       }
                     </ul>
@@ -661,7 +661,6 @@
             <h3 class="text-lg font-bold text-gray-900 dark:text-white">
               Expériences du projet sélectionné
             </h3>
-
           </div>
 
           <div class="flex flex-wrap gap-2">
@@ -672,8 +671,6 @@
             >
               Actualiser
             </button>
-
-            
           </div>
         </div>
       </div>
@@ -703,38 +700,14 @@
               <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
                 <thead class="bg-gray-50 dark:bg-gray-900">
                   <tr>
-                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      Expérience
-                    </th>
-
-                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      Statut
-                    </th>
-
-                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      Modèle
-                    </th>
-
-                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      Métrique principale
-                    </th>
-
-                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      Score global
-                    </th>
-
-                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      Registry
-                    </th>
-
-
-                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      IDs
-                    </th>
-
-                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      Date
-                    </th>
+                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Expérience</th>
+                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Statut</th>
+                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Modèle</th>
+                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Métrique principale</th>
+                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Score global</th>
+                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Registry</th>
+                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">IDs</th>
+                    <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Date</th>
                   </tr>
                 </thead>
 
