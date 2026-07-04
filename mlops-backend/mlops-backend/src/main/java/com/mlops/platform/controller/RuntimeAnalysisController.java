@@ -4,7 +4,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.LinkedMultiValueMap;
@@ -17,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -35,10 +35,11 @@ public class RuntimeAnalysisController {
 
     @GetMapping("/health")
     public ResponseEntity<Map<String, Object>> health() {
-        return ResponseEntity.ok(Map.of(
-                "status", "ok",
-                "service", "runtime-analysis-proxy"
-        ));
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("status", "ok");
+        response.put("service", "runtime-analysis-proxy");
+
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping(
@@ -55,12 +56,15 @@ public class RuntimeAnalysisController {
         MultipartFile selectedFile = firstNonEmpty(scriptFile, file, scriptFileCamel, modelFile);
 
         if (selectedFile == null || selectedFile.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "runtimeCompatible", false,
-                    "runtime_compatible", false,
-                    "message", "No script file provided.",
-                    "recommendation", "Upload a Python script file."
-            ));
+            Map<String, Object> errorResponse = new LinkedHashMap<>();
+            errorResponse.put("runtimeCompatible", false);
+            errorResponse.put("runtime_compatible", false);
+            errorResponse.put("compatible", false);
+            errorResponse.put("status", "error");
+            errorResponse.put("message", "No script file provided.");
+            errorResponse.put("recommendation", "Upload a Python script file.");
+
+            return ResponseEntity.badRequest().body(errorResponse);
         }
 
         try {
@@ -72,9 +76,12 @@ public class RuntimeAnalysisController {
                 @Override
                 public String getFilename() {
                     String originalName = selectedFile.getOriginalFilename();
-                    return originalName == null || originalName.isBlank()
-                            ? "script.py"
-                            : originalName;
+
+                    if (originalName == null || originalName.isBlank()) {
+                        return "script.py";
+                    }
+
+                    return originalName;
                 }
             };
 
@@ -105,29 +112,73 @@ public class RuntimeAnalysisController {
             System.out.println("[RUNTIME_ANALYSIS_PROXY] Runtime analyzer unavailable.");
             System.out.println("[RUNTIME_ANALYSIS_PROXY] Reason: " + e.getMessage());
 
-            return ResponseEntity.ok(Map.of(
-                    "runtimeCompatible", true,
-                    "runtime_compatible", true,
-                    "compatible", true,
-                    "status", "success",
-                    "detectedImports", List.of(),
-                    "supportedImports", List.of(),
-                    "unsupportedImports", List.of(),
-                    "detectedModules", List.of(),
-                    "supportedModules", List.of(),
-                    "unsupportedModules", List.of(),
-                    "detectedLibraries", List.of(),
-                    "supportedLibraries", List.of(),
-                    "unsupportedLibraries", List.of(),
-                    "missingDependencies", List.of(),
-                    "detectedMetrics", List.of(),
-                    "detectedAlgorithms", List.of(),
-                    "warnings", List.of(
-                            "Runtime analyzer unavailable. Continuing with STANDARD_RUNTIME fallback."
-                    ),
-                    "message", "Runtime analysis unavailable. The platform will continue with STANDARD_RUNTIME.",
-                    "recommendation", "Check runtime analyzer service configuration in AKS."
+            Map<String, Object> fallbackResponse = new LinkedHashMap<>();
+
+            fallbackResponse.put("runtimeCompatible", true);
+            fallbackResponse.put("runtime_compatible", true);
+            fallbackResponse.put("compatible", true);
+            fallbackResponse.put("supported", true);
+            fallbackResponse.put("status", "success");
+
+            fallbackResponse.put("detectedImports", List.of());
+            fallbackResponse.put("detected_imports", List.of());
+
+            fallbackResponse.put("supportedImports", List.of());
+            fallbackResponse.put("supported_imports", List.of());
+
+            fallbackResponse.put("unsupportedImports", List.of());
+            fallbackResponse.put("unsupported_imports", List.of());
+
+            fallbackResponse.put("detectedModules", List.of());
+            fallbackResponse.put("detected_modules", List.of());
+
+            fallbackResponse.put("supportedModules", List.of());
+            fallbackResponse.put("supported_modules", List.of());
+
+            fallbackResponse.put("unsupportedModules", List.of());
+            fallbackResponse.put("unsupported_modules", List.of());
+
+            fallbackResponse.put("detectedLibraries", List.of());
+            fallbackResponse.put("detected_libraries", List.of());
+
+            fallbackResponse.put("supportedLibraries", List.of());
+            fallbackResponse.put("supported_libraries", List.of());
+
+            fallbackResponse.put("unsupportedLibraries", List.of());
+            fallbackResponse.put("unsupported_libraries", List.of());
+
+            fallbackResponse.put("missingDependencies", List.of());
+            fallbackResponse.put("missing_dependencies", List.of());
+
+            fallbackResponse.put("detectedMetrics", List.of());
+            fallbackResponse.put("detected_metrics", List.of());
+
+            fallbackResponse.put("detectedAlgorithms", List.of());
+            fallbackResponse.put("detected_algorithms", List.of());
+
+            fallbackResponse.put("replaceableAlgorithms", List.of());
+            fallbackResponse.put("replaceable_algorithms", List.of());
+
+            fallbackResponse.put("warnings", List.of(
+                    "Runtime analyzer unavailable. Continuing with STANDARD_RUNTIME fallback."
             ));
+
+            fallbackResponse.put(
+                    "message",
+                    "Runtime analysis unavailable. The platform will continue with STANDARD_RUNTIME."
+            );
+
+            fallbackResponse.put(
+                    "summary",
+                    "Runtime analysis unavailable. STANDARD_RUNTIME fallback enabled."
+            );
+
+            fallbackResponse.put(
+                    "recommendation",
+                    "Check runtime analyzer service configuration in AKS."
+            );
+
+            return ResponseEntity.ok(fallbackResponse);
         }
     }
 
