@@ -125,14 +125,15 @@ private String uploadsMountPath;
         Map<String, String> buildContextFiles = buildContextFiles(project, experiment);
         System.out.println("[KubernetesBuildService] Build context contains files=" + buildContextFiles.keySet());
 
-        // Log checks required for custom docker builds
+        assertConfigMapKeysAreSafe(buildContextFiles);
+ 
+        System.out.println("[CUSTOM-DOCKER] ConfigMap keys are Kubernetes-safe=" + areConfigMapKeysKubernetesSafe(buildContextFiles));
         System.out.println("[CUSTOM-DOCKER] build context contains platform_runner.py=" + buildContextFiles.containsKey(STANDARD_PLATFORM_RUNNER_FILE));
-        System.out.println("[CUSTOM-DOCKER] build context contains src/custom_models/generic_pyfunc_wrapper.py=" + buildContextFiles.containsKey("src/custom_models/generic_pyfunc_wrapper.py"));
+        System.out.println("[CUSTOM-DOCKER] build context contains src__custom_models__generic_pyfunc_wrapper.py=" + buildContextFiles.containsKey("src__custom_models__generic_pyfunc_wrapper.py"));
         String dockerfileForCheck = buildContextFiles.get(STANDARD_DOCKERFILE) == null ? "" : buildContextFiles.get(STANDARD_DOCKERFILE).toLowerCase(Locale.ROOT);
         System.out.println("[CUSTOM-DOCKER] Dockerfile contains COPY src /workspace/src=" + dockerfileForCheck.contains("copy src") );
         System.out.println("[CUSTOM-DOCKER] Dockerfile contains ENV PYTHONPATH=/workspace=" + dockerfileForCheck.contains("pythonpath=/workspace") );
-
-        assertConfigMapSafeSize(buildContextFiles, configMapName);
+        System.out.println("[CUSTOM-DOCKER] Reconstructed build context will contain src/custom_models/generic_pyfunc_wrapper.py=" + buildContextFiles.containsKey("src__custom_models__generic_pyfunc_wrapper.py"));
 
         try {
             validateBuildContextAgainstDockerfile(buildContextFiles, buildContextFiles.get(STANDARD_DOCKERFILE));
@@ -417,10 +418,10 @@ private String uploadsMountPath;
         );
 
         // Inject minimal platform runtime package so user image can `import src...`
-        files.put("src/__init__.py", "");
-        files.put("src/custom_models/__init__.py", "");
+files.put("src__init__.py", "");
+        files.put("src__custom_models__init__.py", "");
         files.put(
-            "src/custom_models/generic_pyfunc_wrapper.py",
+                "src__custom_models__generic_pyfunc_wrapper.py",
             readRequiredPlatformFile("src/custom_models/generic_pyfunc_wrapper.py")
         );
 
@@ -2392,6 +2393,36 @@ if __name__ == "__main__":
         }
     }
 
+    private void assertConfigMapKeysAreSafe(Map<String, String> buildContextFiles) {
+        if (buildContextFiles == null) {
+            return;
+        }
+
+        for (String key : buildContextFiles.keySet()) {
+            if (key != null && key.contains("/")) {
+                throw new RuntimeException(
+                        "Invalid ConfigMap key for build context: '" + key + "'. "
+                                + "Kubernetes ConfigMap keys cannot contain '/'. "
+                                + "Use '__' instead of '/'."
+                );
+            }
+        }
+    }
+
+    private boolean areConfigMapKeysKubernetesSafe(Map<String, String> buildContextFiles) {
+        if (buildContextFiles == null) {
+            return true;
+        }
+
+        for (String key : buildContextFiles.keySet()) {
+            if (key != null && key.contains("/")) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private ConfigMap buildConfigMap(String configMapName, Map<String, String> buildContextFiles) {
         return new ConfigMapBuilder()
                 .withNewMetadata()
@@ -2465,7 +2496,15 @@ if __name__ == "__main__":
                                 .withCommand(
                                         "sh",
                                         "-c",
-                                        "cp -L /configmap-src/* /kaniko-context/ && ls -la /kaniko-context"
+                                        "mkdir -p /kaniko-context/src/custom_models && "
+                                                + "cp -L /configmap-src/Dockerfile /kaniko-context/Dockerfile && "
+                                                + "cp -L /configmap-src/requirements.txt /kaniko-context/requirements.txt && "
+                                                + "cp -L /configmap-src/platform_runner.py /kaniko-context/platform_runner.py && "
+                                                + "cp -L /configmap-src/train.py /kaniko-context/train.py && "
+                                                + "cp -L /configmap-src/src__init__.py /kaniko-context/src/__init__.py && "
+                                                + "cp -L /configmap-src/src__custom_models__init__.py /kaniko-context/src/custom_models/__init__.py && "
+                                                + "cp -L /configmap-src/src__custom_models__generic_pyfunc_wrapper.py /kaniko-context/src/custom_models/generic_pyfunc_wrapper.py && "
+                                                + "ls -laR /kaniko-context"
                                 )
                                 .addNewVolumeMount()
                                     .withName("build-context-configmap")
