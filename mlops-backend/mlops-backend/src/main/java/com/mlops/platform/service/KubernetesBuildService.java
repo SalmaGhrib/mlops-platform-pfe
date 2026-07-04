@@ -413,22 +413,26 @@ private String uploadsMountPath;
         files.put(STANDARD_REQUIREMENTS_FILE, enrichRequirements(requirementsContent));
         // Load the platform runner from the mini-mlops runtime to ensure PLATFORM_RECOVERY logic is present
         files.put(
-            STANDARD_PLATFORM_RUNNER_FILE,
-            loadPlatformRunnerSource()
+                STANDARD_PLATFORM_RUNNER_FILE,
+                loadPlatformRunnerSource()
         );
 
         // Inject minimal platform runtime package so user image can `import src...`
-files.put("src__init__.py", "");
+        files.put("src__init__.py", "");
         files.put("src__custom_models__init__.py", "");
         files.put(
                 "src__custom_models__generic_pyfunc_wrapper.py",
-            readRequiredPlatformFile("src/custom_models/generic_pyfunc_wrapper.py")
+                readRequiredPlatformFile("src/custom_models/generic_pyfunc_wrapper.py")
+        );
+        files.put(
+                "src__custom_models__import_detector.py",
+                readRequiredPlatformFile("src/custom_models/import_detector.py")
         );
 
         if (modelFile != null
                 && modelFile.getFilePath() != null
+                && !modelFile.getFilePath().isBlank()
                 && Files.exists(Path.of(modelFile.getFilePath()))) {
-
             String modelContent = readFile(modelFile.getFilePath());
 
             files.put(STANDARD_TRAIN_FILE, modelContent);
@@ -2504,6 +2508,7 @@ if __name__ == "__main__":
                                                 + "cp -L /configmap-src/src__init__.py /kaniko-context/src/__init__.py && "
                                                 + "cp -L /configmap-src/src__custom_models__init__.py /kaniko-context/src/custom_models/__init__.py && "
                                                 + "cp -L /configmap-src/src__custom_models__generic_pyfunc_wrapper.py /kaniko-context/src/custom_models/generic_pyfunc_wrapper.py && "
+                                                + "cp -L /configmap-src/src__custom_models__import_detector.py /kaniko-context/src/custom_models/import_detector.py && "
                                                 + "ls -laR /kaniko-context"
                                 )
                                 .addNewVolumeMount()
