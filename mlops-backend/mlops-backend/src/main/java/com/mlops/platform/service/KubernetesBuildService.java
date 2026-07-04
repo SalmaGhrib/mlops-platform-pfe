@@ -70,6 +70,9 @@ private String uploadsMountPath;
     @Value("${app.platform-runner.path:/app/mini-mlops/src/custom_models/platform_runner.py}")
     private String platformRunnerPath;
 
+    @Value("${app.platform-runtime-root:/app/mini-mlops}")
+    private String platformRuntimeRoot;
+
     public static class BuildJobResult {
         private String buildJobName;
         private String buildConfigMapName;
@@ -121,6 +124,13 @@ private String uploadsMountPath;
 
         Map<String, String> buildContextFiles = buildContextFiles(project, experiment);
         System.out.println("[KubernetesBuildService] Build context contains files=" + buildContextFiles.keySet());
+
+        // Log checks required for custom docker builds
+        System.out.println("[CUSTOM-DOCKER] build context contains platform_runner.py=" + buildContextFiles.containsKey(STANDARD_PLATFORM_RUNNER_FILE));
+        System.out.println("[CUSTOM-DOCKER] build context contains src/custom_models/generic_pyfunc_wrapper.py=" + buildContextFiles.containsKey("src/custom_models/generic_pyfunc_wrapper.py"));
+        String dockerfileForCheck = buildContextFiles.get(STANDARD_DOCKERFILE) == null ? "" : buildContextFiles.get(STANDARD_DOCKERFILE).toLowerCase(Locale.ROOT);
+        System.out.println("[CUSTOM-DOCKER] Dockerfile contains COPY src /workspace/src=" + dockerfileForCheck.contains("copy src") );
+        System.out.println("[CUSTOM-DOCKER] Dockerfile contains ENV PYTHONPATH=/workspace=" + dockerfileForCheck.contains("pythonpath=/workspace") );
 
         assertConfigMapSafeSize(buildContextFiles, configMapName);
 
@@ -406,6 +416,14 @@ private String uploadsMountPath;
             loadPlatformRunnerSource()
         );
 
+        // Inject minimal platform runtime package so user image can `import src...`
+        files.put("src/__init__.py", "");
+        files.put("src/custom_models/__init__.py", "");
+        files.put(
+            "src/custom_models/generic_pyfunc_wrapper.py",
+            readRequiredPlatformFile("src/custom_models/generic_pyfunc_wrapper.py")
+        );
+
         if (modelFile != null
                 && modelFile.getFilePath() != null
                 && Files.exists(Path.of(modelFile.getFilePath()))) {
@@ -508,6 +526,35 @@ private String uploadsMountPath;
                         + "Expected path: /app/mini-mlops/src/custom_models/platform_runner.py. "
                         + "Make sure mini-mlops is copied into the backend Docker image."
         );
+    }
+
+    private String readRequiredPlatformFile(String relativePath) {
+        List<java.nio.file.Path> candidates = new ArrayList<>();
+
+        if (platformRuntimeRoot != null && !platformRuntimeRoot.isBlank()) {
+            try {
+                candidates.add(java.nio.file.Path.of(platformRuntimeRoot).resolve(relativePath));
+            } catch (Exception ignored) {
+            }
+        }
+
+        candidates.add(java.nio.file.Path.of("/app/mini-mlops").resolve(relativePath));
+        candidates.add(java.nio.file.Path.of("mini-mlops").resolve(relativePath));
+        candidates.add(java.nio.file.Path.of("..", "mini-mlops").resolve(relativePath));
+
+        for (java.nio.file.Path path : candidates) {
+            try {
+                if (Files.exists(path) && Files.isRegularFile(path)) {
+                    String content = Files.readString(path, StandardCharsets.UTF_8);
+                    System.out.println("[CUSTOM-DOCKER] Runtime file loaded: " + path.toAbsolutePath());
+                    return content;
+                }
+            } catch (Exception e) {
+                System.out.println("[CUSTOM-DOCKER] Failed to read runtime file: " + path + ", reason=" + e.getMessage());
+            }
+        }
+
+        throw new IllegalStateException("Required platform runtime file not found: " + relativePath);
     }
 
     private void putIfSafeAndDifferent(
@@ -739,10 +786,12 @@ COPY requirements.txt %1$s/requirements.txt
 RUN python -m pip install --no-cache-dir -r %1$s/requirements.txt
 
 COPY platform_runner.py %1$s/platform_runner.py
+COPY src %1$s/src
 COPY train.py %1$s/train.py
 
 WORKDIR %1$s
-
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=%1$s
 ENV OUTPUT_DIR=%1$s/outputs
 ENV ML_OUTPUT_DIR=/opt/ml/model
 ENV MODEL_OUTPUT_DIR=/opt/ml/model
