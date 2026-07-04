@@ -277,6 +277,48 @@ def find_user_created_mlflow_model(
         return None
 
 
+def set_platform_production_alias(
+    registered_model_name: str,
+    model_version: str,
+) -> None:
+    """
+    Met à jour l'alias MLflow "production" pour le modèle officiel de la plateforme.
+
+    Cette fonction ne doit jamais casser l'exécution du runner : si MLflow ne supporte pas
+    les alias ou si l'appel échoue, on garde le modèle enregistré et on affiche seulement
+    un warning exploitable dans les logs.
+    """
+    if not registered_model_name or not str(registered_model_name).strip():
+        return
+
+    if not model_version or not str(model_version).strip():
+        return
+
+    try:
+        client = MlflowClient()
+        client.set_registered_model_alias(
+            name=str(registered_model_name).strip(),
+            alias="production",
+            version=str(model_version).strip(),
+        )
+
+        print(f"registered_model_name={registered_model_name}")
+        print(f"model_version={model_version}")
+        print(f"production_version={model_version}")
+        print(f"model_uri=models:/{registered_model_name}/{model_version}")
+        print(f"model_alias_uri=models:/{registered_model_name}@production")
+        print(
+            "[PLATFORM_MODEL] Production alias updated: "
+            f"{registered_model_name}@production -> v{model_version}"
+        )
+
+    except Exception as exc:
+        print(
+            "[PLATFORM_MODEL] Could not set production alias for "
+            f"{registered_model_name} v{model_version}: {exc}"
+        )
+
+
 def register_user_mlflow_model_as_platform_model(
     candidate: UserMlflowModelCandidate,
     platform_registered_model_name: str,
@@ -307,6 +349,11 @@ def register_user_mlflow_model_as_platform_model(
             f"models:/{platform_registered_model_name}/{model_version.version}"
         )
 
+        set_platform_production_alias(
+            registered_model_name=platform_registered_model_name,
+            model_version=str(model_version.version),
+        )
+
         print(
             "[PLATFORM_MODEL] Platform model registered successfully: "
             f"{platform_registered_model_name} v{model_version.version}"
@@ -318,6 +365,7 @@ def register_user_mlflow_model_as_platform_model(
         mlflow.log_param("user_model_run_id", candidate.run_id or "")
         mlflow.log_param("platform_registered_model_name", platform_registered_model_name)
         mlflow.log_param("platform_model_uri", platform_model_uri)
+        mlflow.log_param("platform_model_version", str(model_version.version))
 
         return platform_model_uri
 
@@ -402,6 +450,55 @@ def format_error_info(stderr: str) -> Optional[Dict[str, Any]]:
         "cause": "erreur inconnue",
         "message": "Le script a échoué pendant son exécution.",
         "details": stderr.strip().splitlines()[-5:],
+    }
+
+
+
+USER_MLFLOW_FAILURE_PATTERNS = (
+    "mlflow registration failed",
+    "mlflow.exceptions.mlflowexception",
+    "mlflow.pyfunc.log_model",
+    "mlflow.sklearn.log_model",
+    "mlflow registration",
+    "expected examples to be list",
+    "input_example",
+    "registered model",
+    "set_registered_model_alias",
+    "register_pyfunc_model",
+)
+
+
+def is_recoverable_user_mlflow_error(stderr: str, stdout: str) -> bool:
+    """
+    Détecte les cas où le script utilisateur a bien entraîné/sauvegardé un modèle,
+    mais a échoué uniquement parce qu'il a essayé de gérer MLflow lui-même.
+
+    Dans ce cas, la plateforme peut récupérer le modèle local, le logger, l'enregistrer
+    dans MLflow Registry et considérer le run comme réussi avec warning.
+    """
+    text = f"{stdout or ''}\n{stderr or ''}".lower()
+    return any(pattern in text for pattern in USER_MLFLOW_FAILURE_PATTERNS)
+
+
+def build_recovered_mlflow_warning(
+    result: subprocess.CompletedProcess,
+    model_artifacts: List[Path],
+) -> Dict[str, Any]:
+    return {
+        "phase": "USER_SCRIPT_MLFLOW_RECOVERY",
+        "cause": "user_mlflow_registration_failed_but_model_was_found",
+        "message": (
+            "Le script utilisateur a échoué pendant sa propre logique MLflow, "
+            "mais la plateforme a trouvé un modèle local et peut assurer "
+            "l'enregistrement MLflow automatiquement."
+        ),
+        "original_return_code": result.returncode,
+        "model_artifacts": [str(path) for path in model_artifacts],
+        "suggestion": (
+            "L'utilisateur n'a pas besoin d'écrire du code MLflow. "
+            "Il suffit de sauvegarder un modèle dans outputs/model.pkl, "
+            "outputs/model.joblib ou un format supporté."
+        ),
     }
 
 
@@ -730,7 +827,21 @@ def run_standard_runtime(
     model_artifacts = find_model_artifacts(workspace)
 
     logged_model_uri: Optional[str] = None
+    platform_model_registered = False
+    platform_model_version: Optional[str] = None
+
+    recoverable_user_mlflow_failure = (
+        result.returncode != 0
+        and bool(model_artifacts)
+        and is_recoverable_user_mlflow_error(result.stderr, result.stdout)
+    )
+
     error_info = format_error_info(result.stderr) if result.returncode != 0 else None
+    recovery_warning = (
+        build_recovered_mlflow_warning(result, model_artifacts)
+        if recoverable_user_mlflow_failure
+        else None
+    )
 
     with mlflow.start_run(run_name=run_name):
         mlflow.log_param("entrypoint", script_path.name)
@@ -741,6 +852,11 @@ def run_standard_runtime(
             mlflow.log_param("dataset_path", str(dataset_path))
 
         mlflow.log_metric("return_code", float(result.returncode))
+        mlflow.log_param("original_return_code", str(result.returncode))
+        mlflow.log_param(
+            "recoverable_user_mlflow_failure",
+            str(bool(recoverable_user_mlflow_failure)).lower(),
+        )
 
         mlflow.log_text(result.stdout or "", artifact_file="logs/stdout.log")
         mlflow.log_text(result.stderr or "", artifact_file="logs/stderr.log")
@@ -749,6 +865,19 @@ def run_standard_runtime(
             mlflow.log_text(
                 json.dumps(error_info, indent=2, ensure_ascii=False, default=str),
                 artifact_file="logs/error_summary.json",
+            )
+
+        if recovery_warning:
+            print("[PLATFORM_RECOVERY] User script failed during its own MLflow logic.")
+            print("[PLATFORM_RECOVERY] Local model artifact found. Platform will try to register it.")
+            mlflow.log_text(
+                json.dumps(
+                    recovery_warning,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                ),
+                artifact_file="logs/recovered_user_mlflow_failure.json",
             )
 
         if metrics:
@@ -785,9 +914,17 @@ def run_standard_runtime(
                         "platform_model_source_type",
                         "LOCAL_MODEL_FILE",
                     )
+                    platform_model_registered = True
+                    platform_model_version = str(registered_version.version)
+
                     mlflow.log_param(
                         "platform_model_version",
-                        str(registered_version.version),
+                        platform_model_version,
+                    )
+
+                    set_platform_production_alias(
+                        registered_model_name=platform_registered_model_name,
+                        model_version=platform_model_version,
                     )
 
                     print(
@@ -825,6 +962,9 @@ def run_standard_runtime(
                     platform_registered_model_name=platform_registered_model_name,
                 )
 
+                if logged_model_uri:
+                    platform_model_registered = True
+
                 mlflow.log_text(
                     json.dumps(
                         {
@@ -850,15 +990,41 @@ def run_standard_runtime(
                     artifact_file="logs/model_artifacts.json",
                 )
 
+    recovered_success = (
+        recoverable_user_mlflow_failure
+        and bool(logged_model_uri)
+        and platform_model_registered
+    )
+
+    final_success = result.returncode == 0 or recovered_success
+    final_status = "SUCCESS" if final_success else "FAILED"
+    effective_return_code = 0 if final_success else result.returncode
+
+    if recovered_success:
+        print(
+            "[PLATFORM_RECOVERY] Recovery completed successfully. "
+            "The user script failed only in its own MLflow logic, "
+            "but the platform registered the detected model."
+        )
+        if platform_model_version:
+            print(f"registered_model_name={platform_registered_model_name}")
+            print(f"model_version={platform_model_version}")
+            print(f"production_version={platform_model_version}")
+            print(
+                "model_uri="
+                f"models:/{platform_registered_model_name}/{platform_model_version}"
+            )
+            print(f"model_alias_uri=models:/{platform_registered_model_name}@production")
+
     return RunResult(
-        status="SUCCESS" if result.returncode == 0 else "FAILED",
-        return_code=result.returncode,
+        status=final_status,
+        return_code=effective_return_code,
         stdout=result.stdout,
         stderr=result.stderr,
         metrics=metrics,
         model_paths=[str(path) for path in model_artifacts],
         logged_model_uri=logged_model_uri,
-        error=error_info,
+        error=None if final_success else error_info,
         analysis=analysis,
     )
 
