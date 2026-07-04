@@ -269,7 +269,31 @@ public class KubernetesJobService {
                 .withName("custom-training")
                 .withImage(imageUri)
                 .withImagePullPolicy(resolveImagePullPolicy(imageUri))
-                .withEnv(envVars);
+                .withEnv(envVars)
+                .withCommand("sh", "-c")
+                .withArgs("set -e\n"
+                        + "echo \"[CUSTOM-TRAINING] Starting platform runner\"\n"
+                        + "echo \"[CUSTOM-TRAINING] USER_SCRIPT=${USER_SCRIPT}\"\n"
+                        + "echo \"[CUSTOM-TRAINING] DATASET_PATH=${DATASET_PATH}\"\n"
+                        + "echo \"[CUSTOM-TRAINING] MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}\"\n"
+                        + "echo \"[CUSTOM-TRAINING] MLFLOW_EXPERIMENT_NAME=${MLFLOW_EXPERIMENT_NAME}\"\n"
+                        + "echo \"[CUSTOM-TRAINING] RUN_NAME=${RUN_NAME}\"\n"
+                        + "echo \"[CUSTOM-TRAINING] REGISTERED_MODEL_NAME=${REGISTERED_MODEL_NAME}\"\n"
+                        + "RUNNER_PATH=\"/app/platform_runner.py\"\n"
+                        + "WORKSPACE_DIR=\"/app\"\n"
+                        + "if [ ! -f \"$RUNNER_PATH\" ]; then\n"
+                        + "  RUNNER_PATH=\"/workspace/platform_runner.py\"\n"
+                        + "  WORKSPACE_DIR=\"/workspace\"\n"
+                        + "fi\n"
+                        + "SCRIPT_NAME=\"${USER_SCRIPT:-train.py}\"\n"
+                        + "python \"$RUNNER_PATH\" \\\n\n"
+                        + "  --script \"$SCRIPT_NAME\" \\\n\n"
+                        + "  --tracking-uri \"${MLFLOW_TRACKING_URI:-http://mlflow-service:5000}\" \\\n\n"
+                        + "  --experiment-name \"${MLFLOW_EXPERIMENT_NAME:-custom_training}\" \\\n\n"
+                        + "  --run-name \"${RUN_NAME:-custom_run}\" \\\n\n"
+                        + "  --registered-model-name \"${REGISTERED_MODEL_NAME:-custom_model}\" \\\n\n"
+                        + "  --dataset-path \"${DATASET_PATH:-}\" \\\n\n"
+                        + "  --workspace \"$WORKSPACE_DIR\"\n");
 
         if (attachUploadsPvc) {
             trainingContainerBuilder
