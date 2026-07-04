@@ -23,6 +23,8 @@ import java.util.Locale;
 @Service
 public class KubernetesJobService {
 
+    private static final String UPLOADS_VOLUME_NAME = "mlops-uploads";
+
     @Value("${app.kubernetes.namespace:mlops}")
     private String namespace;
 
@@ -40,6 +42,23 @@ public class KubernetesJobService {
 
     @Value("${app.docker.image-pull-secret:dockerhub-secret}")
     private String imagePullSecret;
+
+    /*
+     * Shared uploads PVC.
+     *
+     * This is required for scalable custom Docker runs:
+     * - datasets are NOT copied into the Kaniko ConfigMap
+     * - datasets remain under /app/uploads/...
+     * - the custom training job must mount the same PVC at /app/uploads
+     */
+    @Value("${app.uploads.pvc-enabled:true}")
+    private boolean uploadsPvcEnabled;
+
+    @Value("${app.uploads.pvc-name:mlops-uploads-pvc}")
+    private String uploadsPvcName;
+
+    @Value("${app.uploads.mount-path:/app/uploads}")
+    private String uploadsMountPath;
 
     public String launchCustomImageTrainingJob(
             MlProject project,
@@ -71,12 +90,27 @@ public class KubernetesJobService {
                         + "' not found in namespace '" + namespace + "'. Training job will be created without it.");
             }
 
+            boolean attachUploadsPvc = shouldAttachUploadsPvc();
+
+            if (attachUploadsPvc) {
+                validateUploadsPvcExists(client);
+
+                System.out.println("[KubernetesJobService] Shared uploads PVC will be mounted. "
+                        + "pvc=" + uploadsPvcName
+                        + ", mountPath=" + uploadsMountPath
+                        + ", jobName=" + jobName);
+            } else {
+                System.out.println("[KubernetesJobService] Shared uploads PVC mount is disabled or not configured. "
+                        + "Large external datasets under /app/uploads may not be visible to the training job.");
+            }
+
             Job job = buildJob(
                     jobName,
                     project,
                     experiment,
                     customImageUri.trim(),
-                    attachImagePullSecret
+                    attachImagePullSecret,
+                    attachUploadsPvc
             );
 
             client.batch()
@@ -90,7 +124,8 @@ public class KubernetesJobService {
                     + "jobName=" + jobName
                     + ", experimentId=" + experiment.getId()
                     + ", projectId=" + project.getId()
-                    + ", image=" + customImageUri);
+                    + ", image=" + customImageUri
+                    + ", uploadsPvcMounted=" + attachUploadsPvc);
 
             return jobName;
 
@@ -225,21 +260,41 @@ public class KubernetesJobService {
             MlProject project,
             MlExperiment experiment,
             String imageUri,
-            boolean attachImagePullSecret
+            boolean attachImagePullSecret,
+            boolean attachUploadsPvc
     ) {
         List<EnvVar> envVars = buildEnvironmentVariables(project, experiment);
 
-        Container trainingContainer = new ContainerBuilder()
+        ContainerBuilder trainingContainerBuilder = new ContainerBuilder()
                 .withName("custom-training")
                 .withImage(imageUri)
                 .withImagePullPolicy(resolveImagePullPolicy(imageUri))
-                .withEnv(envVars)
-                .build();
+                .withEnv(envVars);
+
+        if (attachUploadsPvc) {
+            trainingContainerBuilder
+                    .addNewVolumeMount()
+                        .withName(UPLOADS_VOLUME_NAME)
+                        .withMountPath(normalizeMountPath(uploadsMountPath))
+                    .endVolumeMount();
+        }
+
+        Container trainingContainer = trainingContainerBuilder.build();
 
         PodSpecBuilder podSpecBuilder = new PodSpecBuilder()
                 .withRestartPolicy("Never")
                 .withServiceAccountName(serviceAccountName)
                 .withContainers(trainingContainer);
+
+        if (attachUploadsPvc) {
+            podSpecBuilder
+                    .addNewVolume()
+                        .withName(UPLOADS_VOLUME_NAME)
+                        .withNewPersistentVolumeClaim()
+                            .withClaimName(uploadsPvcName.trim())
+                        .endPersistentVolumeClaim()
+                    .endVolume();
+        }
 
         if (attachImagePullSecret && hasText(imagePullSecret)) {
             podSpecBuilder
@@ -316,6 +371,27 @@ public class KubernetesJobService {
         }
     }
 
+    private boolean shouldAttachUploadsPvc() {
+        return uploadsPvcEnabled
+                && hasText(uploadsPvcName)
+                && hasText(uploadsMountPath);
+    }
+
+    private void validateUploadsPvcExists(KubernetesClient client) {
+        try {
+            if (client.persistentVolumeClaims()
+                    .inNamespace(namespace)
+                    .withName(uploadsPvcName.trim())
+                    .get() == null) {
+                throw new RuntimeException("Shared uploads PVC '" + uploadsPvcName
+                        + "' not found in namespace '" + namespace + "'.");
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to validate shared uploads PVC '"
+                    + uploadsPvcName + "': " + e.getMessage(), e);
+        }
+    }
+
     private List<EnvVar> buildEnvironmentVariables(MlProject project, MlExperiment experiment) {
         List<EnvVar> envVars = new ArrayList<>();
 
@@ -358,6 +434,15 @@ public class KubernetesJobService {
         addEnv(envVars, "RUNTIME_MODE", safe(experiment.getRuntimeMode()));
         addEnv(envVars, "MLOPS_CUSTOM_IMAGE_URI", safe(experiment.getCustomImageUri()));
         addEnv(envVars, "MLOPS_EXPERIMENT_NAME", safe(experiment.getExperimentName()));
+
+        /*
+         * Inform the platform runner and user scripts where shared uploads are mounted.
+         * The actual DATASET_PATH is injected in the custom image by KubernetesBuildService,
+         * but these variables make the runtime self-describing and easier to debug.
+         */
+        addEnv(envVars, "APP_UPLOAD_DIR", normalizeMountPath(uploadsMountPath));
+        addEnv(envVars, "MLOPS_UPLOADS_MOUNT_PATH", normalizeMountPath(uploadsMountPath));
+        addEnv(envVars, "MLOPS_UPLOADS_PVC_NAME", safe(uploadsPvcName));
 
         addEnv(envVars, "MLOPS_AUTO_MODEL_DISCOVERY", "true");
         addEnv(envVars, "MLOPS_DEFAULT_OUTPUT_DIR", "/workspace/outputs");
@@ -457,6 +542,16 @@ public class KubernetesJobService {
         }
 
         return "";
+    }
+
+    private String normalizeMountPath(String value) {
+        String clean = firstNonBlank(value, "/app/uploads").replace("\\", "/").trim();
+
+        if (clean.endsWith("/") && clean.length() > 1) {
+            clean = clean.substring(0, clean.length() - 1);
+        }
+
+        return clean;
     }
 
     private boolean hasText(String value) {
