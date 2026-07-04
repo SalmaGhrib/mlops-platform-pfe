@@ -58,8 +58,17 @@ public class KubernetesBuildService {
     @Value("${app.kubernetes.custom-job.backoff-limit:0}")
     private Integer backoffLimit;
 
+    @Value("${app.uploads.pvc-name:mlops-uploads-pvc}")
+private String uploadsPvcName;
+
+@Value("${app.uploads.mount-path:/app/uploads}")
+private String uploadsMountPath;
+
     @Value("${app.kaniko.docker-config-secret:kaniko-docker-config}")
     private String kanikoDockerConfigSecret;
+
+    @Value("${app.platform-runner.path:/app/mini-mlops/src/custom_models/platform_runner.py}")
+    private String platformRunnerPath;
 
     public static class BuildJobResult {
         private String buildJobName;
@@ -391,9 +400,10 @@ public class KubernetesBuildService {
         }
 
         files.put(STANDARD_REQUIREMENTS_FILE, enrichRequirements(requirementsContent));
+        // Load the platform runner from the mini-mlops runtime to ensure PLATFORM_RECOVERY logic is present
         files.put(
-                STANDARD_PLATFORM_RUNNER_FILE,
-                buildPlatformRunnerContent(project, experiment, datasetProvided, datasetRuntimePath)
+            STANDARD_PLATFORM_RUNNER_FILE,
+            loadPlatformRunnerSource()
         );
 
         if (modelFile != null
@@ -455,6 +465,49 @@ public class KubernetesBuildService {
         }
 
         return value.substring(0, 3000) + "\n...[truncated]...";
+    }
+
+    private String loadPlatformRunnerSource() {
+        List<Path> candidates = new ArrayList<>();
+
+        if (platformRunnerPath != null && !platformRunnerPath.isBlank()) {
+            candidates.add(Path.of(platformRunnerPath));
+        }
+
+        candidates.add(Path.of("/app/mini-mlops/src/custom_models/platform_runner.py"));
+        candidates.add(Path.of("mini-mlops/src/custom_models/platform_runner.py"));
+        candidates.add(Path.of("../mini-mlops/src/custom_models/platform_runner.py"));
+
+        for (Path path : candidates) {
+            try {
+                if (Files.exists(path) && Files.isRegularFile(path)) {
+                    String content = Files.readString(path, StandardCharsets.UTF_8);
+
+                    if (!content.contains("PLATFORM_RECOVERY")
+                            || !content.contains("USER_MLFLOW_FAILURE_PATTERNS")
+                            || !content.contains("Recovery completed successfully")) {
+                        throw new IllegalStateException(
+                                "platform_runner.py found but it does not contain PLATFORM_RECOVERY logic. path=" + path
+                        );
+                    }
+
+                    System.out.println("[KubernetesBuildService] Using platform_runner.py from: " + path.toAbsolutePath());
+                    System.out.println("[KubernetesBuildService] platform_runner.py size=" + content.length());
+                    System.out.println("[KubernetesBuildService] platform_runner.py contains PLATFORM_RECOVERY=true");
+
+                    return content;
+                }
+            } catch (Exception e) {
+                System.out.println("[KubernetesBuildService] Failed to read platform_runner candidate: "
+                        + path + ", reason=" + e.getMessage());
+            }
+        }
+
+        throw new IllegalStateException(
+                "No valid platform_runner.py with PLATFORM_RECOVERY found. "
+                        + "Expected path: /app/mini-mlops/src/custom_models/platform_runner.py. "
+                        + "Make sure mini-mlops is copied into the backend Docker image."
+        );
     }
 
     private void putIfSafeAndDifferent(
