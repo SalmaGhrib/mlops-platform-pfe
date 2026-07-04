@@ -1857,7 +1857,6 @@ public ModelDeploymentResponse markAsFailed(Long deploymentId, String errorMessa
 
         modelDeploymentRepository.flush();
     }
-
 private String resolveServingImageForRuntime(
         MlExperiment experiment,
         String registeredModelName,
@@ -1884,16 +1883,6 @@ private String resolveServingImageForRuntime(
             ? dataType.trim().toUpperCase()
             : "TABULAR";
 
-    /*
-     * Image générique de serving.
-     *
-     * Cette image doit être utilisée pour :
-     * - STANDARD_RUNTIME
-     * - CUSTOM_DOCKERFILE quand le modèle est déjà enregistré dans MLflow Registry
-     *
-     * En AKS, le backend ne doit pas dépendre de Docker Desktop.
-     * Donc le serving dédié ne doit pas bloquer le déploiement.
-     */
     if (!hasText(defaultDockerImage)) {
         throw new RuntimeException(
                 "Default serving image is empty. Please configure app.deployment.default-docker-image "
@@ -1904,12 +1893,12 @@ private String resolveServingImageForRuntime(
     String genericServingImage = defaultDockerImage.trim();
 
     /*
-     * Cas 1 : runtime standard.
-     * On garde le comportement existant : image générique standard.
+     * STANDARD_RUNTIME :
+     * on utilise toujours l'image générique.
      */
     if (isStandardRuntimeMode(runtimeMode)) {
         System.out.println("[SERVING_IMAGE_RESOLVER] STANDARD runtime detected. "
-                + "Using generic standard serving image. "
+                + "Using generic model server. "
                 + "experimentId=" + experiment.getId()
                 + ", runtimeMode=" + runtimeMode
                 + ", model=" + registeredModelName
@@ -1921,98 +1910,67 @@ private String resolveServingImageForRuntime(
     }
 
     /*
-     * Cas 2 : runtime Docker custom.
+     * CUSTOM_DOCKERFILE :
+     * on ne doit PAS utiliser l'image générique.
      *
-     * Important :
-     * L'image custom générée par Kaniko sert à l'entraînement.
-     * Elle ne doit pas forcément être utilisée comme image de serving.
+     * Pourquoi ?
+     * Le modèle custom peut avoir des dépendances différentes :
+     * numpy, pandas, mlflow, torch, tensorflow, xgboost...
      *
-     * Pour stabiliser AKS, on utilise par défaut le generic model server :
-     * MODEL_URI=models:/model/version
-     * MLFLOW_TRACKING_URI=http://mlflow-service:5000
-     *
-     * Si dedicatedServingImageEnabled=true, on tente de construire une image dédiée.
-     * Mais si ça échoue, on ne bloque pas le déploiement : fallback vers image générique.
+     * Donc on construit une image de serving dédiée avec Kaniko,
+     * en se basant sur l'image custom training quand elle existe.
      */
     if (isCustomDockerRuntimeMode(runtimeMode)) {
-        String modelUriForDependencies =
+        if (!dedicatedServingImageEnabled) {
+            throw new RuntimeException(
+                    "CUSTOM_DOCKERFILE requires a dedicated serving image. "
+                            + "Generic model server cannot safely load custom model dependencies. "
+                            + "Please set APP_SERVING_DEDICATED_IMAGE_ENABLED=true. "
+                            + "experimentId=" + experiment.getId()
+            );
+        }
+
+        String modelUriForServing =
                 "models:/" + registeredModelName.trim() + "/" + modelVersion.trim();
 
-        if (!dedicatedServingImageEnabled) {
-            System.out.println("[SERVING_IMAGE_RESOLVER] CUSTOM DOCKER runtime detected. "
-                    + "Dedicated serving image disabled. "
-                    + "Using generic MLflow model server. "
-                    + "experimentId=" + experiment.getId()
-                    + ", runtimeMode=" + runtimeMode
-                    + ", modelUri=" + modelUriForDependencies
-                    + ", dataType=" + normalizedDataType
-                    + ", image=" + genericServingImage);
+        System.out.println("[SERVING_IMAGE_RESOLVER] CUSTOM_DOCKERFILE runtime detected. "
+                + "Building dedicated serving image with Kaniko. "
+                + "experimentId=" + experiment.getId()
+                + ", runtimeMode=" + runtimeMode
+                + ", modelUri=" + modelUriForServing
+                + ", dataType=" + normalizedDataType
+                + ", customTrainingImage=" + experiment.getCustomImageUri());
 
-            return genericServingImage;
-        }
+        String dedicatedImage = modelServingImageBuildService.buildServingImageForModel(
+                experiment,
+                registeredModelName.trim(),
+                modelVersion.trim(),
+                modelUriForServing,
+                normalizedDataType
+        );
 
-        try {
-            System.out.println("[SERVING_IMAGE_RESOLVER] CUSTOM DOCKER runtime detected. "
-                    + "Dedicated serving image enabled. "
-                    + "Trying to build dedicated serving image. "
-                    + "experimentId=" + experiment.getId()
-                    + ", runtimeMode=" + runtimeMode
-                    + ", modelUri=" + modelUriForDependencies
-                    + ", dataType=" + normalizedDataType);
-
-            String dedicatedImage = modelServingImageBuildService.buildServingImageForModel(
-                    registeredModelName.trim(),
-                    modelVersion.trim(),
-                    modelUriForDependencies,
-                    normalizedDataType
+        if (!hasText(dedicatedImage)) {
+            throw new RuntimeException(
+                    "Dedicated serving image build returned empty image URI. "
+                            + "experimentId=" + experiment.getId()
             );
-
-            if (hasText(dedicatedImage)) {
-                System.out.println("[SERVING_IMAGE_RESOLVER] Dedicated serving image selected. "
-                        + "experimentId=" + experiment.getId()
-                        + ", runtimeMode=" + runtimeMode
-                        + ", image=" + dedicatedImage.trim());
-
-                return dedicatedImage.trim();
-            }
-
-            System.out.println("[SERVING_IMAGE_RESOLVER] Dedicated serving image build returned empty image. "
-                    + "Fallback to generic MLflow model server. "
-                    + "experimentId=" + experiment.getId()
-                    + ", image=" + genericServingImage);
-
-            return genericServingImage;
-
-        } catch (Exception e) {
-            System.out.println("[SERVING_IMAGE_RESOLVER] Dedicated serving image build failed. "
-                    + "Fallback to generic MLflow model server. "
-                    + "experimentId=" + experiment.getId()
-                    + ", model=" + registeredModelName
-                    + ", version=" + modelVersion
-                    + ", reason=" + e.getMessage()
-                    + ", fallbackImage=" + genericServingImage);
-
-            return genericServingImage;
         }
+
+        System.out.println("[SERVING_IMAGE_RESOLVER] Dedicated serving image selected. "
+                + "experimentId=" + experiment.getId()
+                + ", runtimeMode=" + runtimeMode
+                + ", model=" + registeredModelName
+                + ", version=" + modelVersion
+                + ", image=" + dedicatedImage.trim());
+
+        return dedicatedImage.trim();
     }
 
-    /*
-     * Cas 3 : runtime inconnu.
-     * Pour éviter de bloquer tout le cycle de déploiement, on utilise l'image générique
-     * tant que le modèle existe dans MLflow Registry.
-     */
-    System.out.println("[SERVING_IMAGE_RESOLVER] Unknown runtime mode. "
-            + "Fallback to generic MLflow model server. "
-            + "experimentId=" + experiment.getId()
-            + ", runtimeMode=" + runtimeMode
-            + ", model=" + registeredModelName
-            + ", version=" + modelVersion
-            + ", dataType=" + normalizedDataType
-            + ", image=" + genericServingImage);
-
-    return genericServingImage;
+    throw new RuntimeException(
+            "Unsupported runtimeMode=" + runtimeMode
+                    + " for experimentId=" + experiment.getId()
+    );
 }
-
 private String safeRuntimeMode(MlExperiment experiment) {
     if (experiment == null || !hasText(experiment.getRuntimeMode())) {
         return "STANDARD_RUNTIME";
@@ -2020,33 +1978,35 @@ private String safeRuntimeMode(MlExperiment experiment) {
 
     return experiment.getRuntimeMode().trim().toUpperCase();
 }
-    private boolean isStandardRuntimeMode(String runtimeMode) {
-        if (!hasText(runtimeMode)) {
-            return true;
-        }
 
-        String clean = runtimeMode.trim().toUpperCase();
-
-        return clean.equals("STANDARD")
-                || clean.equals("STANDARD_RUNTIME")
-                || clean.equals("STANDARD_IMAGE")
-                || clean.equals("DEFAULT");
+private boolean isStandardRuntimeMode(String runtimeMode) {
+    if (!hasText(runtimeMode)) {
+        return true;
     }
 
-    private boolean isCustomDockerRuntimeMode(String runtimeMode) {
-        if (!hasText(runtimeMode)) {
-            return false;
-        }
+    String clean = runtimeMode.trim().toUpperCase();
 
-        String clean = runtimeMode.trim().toUpperCase();
+    return clean.equals("STANDARD")
+            || clean.equals("STANDARD_RUNTIME")
+            || clean.equals("STANDARD_IMAGE")
+            || clean.equals("DEFAULT");
+}
 
-        return clean.equals("CUSTOM_DOCKERFILE")
-                || clean.equals("CUSTOM_DOCKER")
-                || clean.equals("DOCKER_PERSONALIZED")
-                || clean.equals("PERSONALIZED")
-                || clean.equals("CUSTOM_IMAGE")
-                || clean.equals("CUSTOM_IMAGE_RUNTIME");
+
+private boolean isCustomDockerRuntimeMode(String runtimeMode) {
+    if (!hasText(runtimeMode)) {
+        return false;
     }
+
+    String clean = runtimeMode.trim().toUpperCase();
+
+    return clean.equals("CUSTOM_DOCKERFILE")
+            || clean.equals("CUSTOM_DOCKER")
+            || clean.equals("DOCKER_PERSONALIZED")
+            || clean.equals("PERSONALIZED")
+            || clean.equals("CUSTOM_IMAGE")
+            || clean.equals("CUSTOM_IMAGE_RUNTIME");
+}
 
 
     private boolean modelRequiresDedicatedServingImage(MlExperiment experiment) {

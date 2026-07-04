@@ -10,6 +10,16 @@ import java.nio.file.*;
 import java.time.LocalDateTime;
 import java.util.*;
 
+import com.mlops.platform.entity.MlExperiment;
+import io.fabric8.kubernetes.api.model.ConfigMap;
+import io.fabric8.kubernetes.api.model.ConfigMapBuilder;
+import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.batch.v1.Job;
+import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
+import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
+import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.KubernetesClientBuilder;
+
 @Service
 public class ModelServingImageBuildService {
 
@@ -56,8 +66,29 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow-service.mlops.svc.cluster.local:5000").strip()
-DEFAULT_MODEL_NAME = os.getenv("DEFAULT_MODEL_NAME", "").strip()
-DEFAULT_MODEL_ALIAS = os.getenv("DEFAULT_MODEL_ALIAS", "production").strip()
+MODEL_URI = os.getenv("MODEL_URI", "").strip()
+MODEL_NAME_ENV = os.getenv("MODEL_NAME", "").strip()
+REGISTERED_MODEL_NAME_ENV = os.getenv("REGISTERED_MODEL_NAME", "").strip()
+
+def extract_model_name_from_uri(model_uri: str) -> str:
+    if model_uri is None:
+        return ""
+    model_uri = str(model_uri).strip()
+    if not model_uri.startswith("models:/"):
+        return ""
+    clean = model_uri.replace("models:/", "", 1)
+    if "@" in clean:
+        return clean.split("@", 1)[0].strip()
+    parts = clean.split("/")
+    return parts[0].strip() if parts else ""
+
+DEFAULT_MODEL_NAME = (
+    os.getenv("DEFAULT_MODEL_NAME", "").strip()
+    or MODEL_NAME_ENV
+    or REGISTERED_MODEL_NAME_ENV
+    or extract_model_name_from_uri(MODEL_URI)
+)
+DEFAULT_MODEL_ALIAS = os.getenv("DEFAULT_MODEL_ALIAS", os.getenv("MODEL_ALIAS", "production")).strip() or "production"
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
@@ -441,12 +472,12 @@ def predict(request: PredictionRequest):
     return {"status": "success", "model_uri": model_uri, "model_name": model_name, "model_alias": model_alias, "model_type": loaded.get("type"), "torch_model_kind": loaded.get("torch_model_kind"), "version_info": version_info, "prediction_mode": prediction_mode, "rows_count": len(model_input), "input_columns": input_columns, "predictions": predictions}
 
 @app.post("/predict-image")
-async def predict_image(image_file: UploadFile = File(...), model_name: str = Form(...), model_alias: str = Form("production"), image_size: int = Form(28), grayscale: bool = Form(True), auto_invert: bool = Form(True)):
+async def predict_image(image_file: UploadFile = File(...), model_name: str = Form(None), model_alias: str = Form("production"), image_size: int = Form(28), grayscale: bool = Form(True), auto_invert: bool = Form(True)):
     try:
-        model_name = normalize_text(model_name)
-        model_alias = normalize_text(model_alias) or "production"
+        model_name = normalize_text(model_name) or DEFAULT_MODEL_NAME
+        model_alias = normalize_text(model_alias) or DEFAULT_MODEL_ALIAS or "production"
         if not model_name:
-            raise ValueError("model_name is required.")
+            raise ValueError("model_name is required because DEFAULT_MODEL_NAME is not configured.")
         if image_size <= 0:
             raise ValueError("image_size must be positive.")
         content = await image_file.read()
@@ -503,185 +534,219 @@ def clear_cache():
     return {"status": "success", "message": "Model cache cleared successfully.", "loaded_models_count": len(loaded_models)}
             """;
 
-    @Value("${app.serving.template-dir:C:/Users/ASUS/OneDrive - ESPRIT/Bureau/Pfe/cours esprit/mini-mlops/serving-template}")
-    private String servingTemplateDir;
 
-    @Value("${app.serving.build-dir:C:/Users/ASUS/OneDrive - ESPRIT/Bureau/Pfe/cours esprit/mini-mlops/generated-serving-images}")
-    private String servingBuildDir;
+@Value("${app.kubernetes.namespace:mlops}")
+private String namespace;
+
+@Value("${app.serving.template-dir:/tmp/mlops/serving-template}")
+private String servingTemplateDir;
+
+@Value("${app.serving.build-dir:/tmp/mlops/generated-serving-images}")
+private String servingBuildDir;
+
+@Value("${app.mlflow.tracking-uri:${mlflow.tracking.uri:http://mlflow-service:5000}}")
+private String localMlflowTrackingUrl;
+
+@Value("${app.serving.reuse-image-if-same-requirements:false}")
+private boolean reuseImageIfSameRequirements;
+
+@Value("${app.serving.compatible-pyarrow-version:17.0.0}")
+private String compatiblePyarrowVersion;
+
+@Value("${app.kaniko.image:gcr.io/kaniko-project/executor:latest}")
+private String kanikoImage;
+
+@Value("${app.kaniko.docker-config-secret:kaniko-docker-config}")
+private String kanikoDockerConfigSecret;
+
+@Value("${app.kaniko.cache-repo:docker.io/salmaghrib2003/mlops-kaniko-cache-v2}")
+private String kanikoCacheRepo;
+
+@Value("${app.serving.kaniko.timeout-seconds:1200}")
+private long servingKanikoTimeoutSeconds;
+    
 
     @Value("${app.docker.registry:docker.io/salmaghrib2003}")
     private String dockerRegistry;
 
-    @Value("${app.mlflow.tracking-url:http://127.0.0.1:5000}")
-    private String localMlflowTrackingUrl;
-
-    @Value("${app.serving.local-docker-build.enabled:true}")
-    private boolean localDockerBuildEnabled;
-
-    @Value("${app.serving.reuse-image-if-same-requirements:true}")
-    private boolean reuseImageIfSameRequirements;
-
-    @Value("${app.serving.compatible-pyarrow-version:17.0.0}")
-    private String compatiblePyarrowVersion;
-
     public String buildServingImageForModel(
-            String registeredModelName,
-            String modelVersion,
-            String modelUri,
-            String dataType
-    ) {
-        if (!localDockerBuildEnabled) {
-            throw new IllegalStateException("Local Docker build is disabled.");
+        String registeredModelName,
+        String modelVersion,
+        String modelUri,
+        String dataType
+) {
+    return buildServingImageForModel(
+            null,
+            registeredModelName,
+            modelVersion,
+            modelUri,
+            dataType
+    );
+}
+
+public String buildServingImageForModel(
+        MlExperiment experiment,
+        String registeredModelName,
+        String modelVersion,
+        String modelUri,
+        String dataType
+) {
+    validateInputs(registeredModelName, modelVersion, modelUri);
+
+    String safeModelName = sanitizeForDockerName(registeredModelName);
+    String safeVersion = sanitizeForDockerName(modelVersion);
+
+    String imageTag = safeModelName.replace("_", "-") + "-v" + safeVersion;
+
+    String imageName = dockerRegistry.trim()
+            + "/mlops-serving:"
+            + imageTag;
+
+    String baseImage = resolveServingBaseImage(experiment);
+
+    Path templateDir = Paths.get(servingTemplateDir).toAbsolutePath().normalize();
+    Path buildRoot = Paths.get(servingBuildDir).toAbsolutePath().normalize();
+
+    Path finalBuildContext = buildRoot.resolve("serving-" + safeModelName + "-v" + safeVersion);
+
+    Path tempBuildContext = buildRoot.resolve(
+            "serving-" + safeModelName + "-v" + safeVersion + "-tmp-" + System.currentTimeMillis()
+    );
+
+    String configMapName = buildServingConfigMapName(safeModelName, safeVersion);
+    String jobName = buildServingKanikoJobName(safeModelName, safeVersion);
+
+    try {
+        System.out.println("[SERVING_IMAGE] =======================================");
+        System.out.println("[SERVING_IMAGE] Building dedicated serving image with Kaniko");
+        System.out.println("[SERVING_IMAGE] model=" + registeredModelName);
+        System.out.println("[SERVING_IMAGE] version=" + modelVersion);
+        System.out.println("[SERVING_IMAGE] modelUri=" + modelUri);
+        System.out.println("[SERVING_IMAGE] dataType=" + dataType);
+        System.out.println("[SERVING_IMAGE] baseImage=" + baseImage);
+        System.out.println("[SERVING_IMAGE] destinationImage=" + imageName);
+        System.out.println("[SERVING_IMAGE] configMap=" + configMapName);
+        System.out.println("[SERVING_IMAGE] kanikoJob=" + jobName);
+        System.out.println("[SERVING_IMAGE] buildContext=" + finalBuildContext);
+        System.out.println("[SERVING_IMAGE] =======================================");
+
+        Files.createDirectories(buildRoot);
+
+        if (Files.exists(tempBuildContext)) {
+            deleteDirectory(tempBuildContext);
         }
 
-        validateInputs(registeredModelName, modelVersion, modelUri);
+        Files.createDirectories(tempBuildContext);
 
-        String safeModelName = sanitizeForDockerName(registeredModelName);
-        String safeVersion = sanitizeForDockerName(modelVersion);
+        /*
+         * Important :
+         * Pour CUSTOM_DOCKERFILE, on part de l'image custom training.
+         * Cette image contient déjà les dépendances exactes du modèle.
+         *
+         * Exemple :
+         * FROM docker.io/salmaghrib2003/mlops-custom:aks1-exp-11
+         */
+        copyTemplateFiles(tempBuildContext, baseImage);
 
-        String imageName = dockerRegistry
-                + "/mlops-serving-"
-                + safeModelName.replace("_", "-")
-                + "-v"
-                + safeVersion
-                + ":latest";
-
-        Path templateDir = Paths.get(servingTemplateDir).toAbsolutePath().normalize();
-        Path buildRoot = Paths.get(servingBuildDir).toAbsolutePath().normalize();
-        Path finalBuildContext = buildRoot.resolve(safeModelName + "-v" + safeVersion);
-
-        Path tempBuildContext = buildRoot.resolve(
-                safeModelName + "-v" + safeVersion + "-tmp-" + System.currentTimeMillis()
+        List<String> finalRequirements = generateServingRequirementsForBaseImage(
+                baseImage,
+                modelUri,
+                templateDir
         );
 
+        writeRequirements(tempBuildContext, finalRequirements);
+
+        String requirementsHash = computeRequirementsHash(finalRequirements);
+
+        writeBuildMetadata(
+                tempBuildContext,
+                registeredModelName,
+                modelVersion,
+                modelUri,
+                dataType,
+                imageName,
+                finalRequirements,
+                requirementsHash
+        );
+
+        validateBuildContext(tempBuildContext);
+
+        if (Files.exists(finalBuildContext)) {
+            deleteDirectory(finalBuildContext);
+        }
+
+        Files.move(tempBuildContext, finalBuildContext, StandardCopyOption.REPLACE_EXISTING);
+
+        System.out.println("[SERVING_IMAGE] Build context ready: " + finalBuildContext);
+
+        try (KubernetesClient client = new KubernetesClientBuilder().build()) {
+            ensureKanikoDockerSecretExists(client);
+
+            deleteExistingKanikoJobIfExists(client, jobName);
+            deleteExistingConfigMapIfExists(client, configMapName);
+
+            createServingBuildContextConfigMap(
+                    client,
+                    configMapName,
+                    finalBuildContext,
+                    registeredModelName,
+                    modelVersion,
+                    imageName
+            );
+
+            Job job = buildServingKanikoJob(
+                    jobName,
+                    configMapName,
+                    imageName,
+                    modelUri
+            );
+
+            client.batch()
+                    .v1()
+                    .jobs()
+                    .inNamespace(namespace)
+                    .resource(job)
+                    .create();
+
+            System.out.println("[SERVING_IMAGE_KANIKO] Kaniko job created. "
+                    + "jobName=" + jobName
+                    + ", image=" + imageName);
+
+            waitForKanikoJobCompletion(client, jobName);
+
+            System.out.println("[SERVING_IMAGE_KANIKO] Kaniko build completed successfully. "
+                    + "jobName=" + jobName
+                    + ", image=" + imageName);
+
+            return imageName;
+        }
+
+    } catch (Exception e) {
         try {
-            System.out.println("[SERVING_IMAGE] =======================================");
-            System.out.println("[SERVING_IMAGE] Building dedicated serving image");
-            System.out.println("[SERVING_IMAGE] model=" + registeredModelName);
-            System.out.println("[SERVING_IMAGE] version=" + modelVersion);
-            System.out.println("[SERVING_IMAGE] modelUri=" + modelUri);
-            System.out.println("[SERVING_IMAGE] dataType=" + dataType);
-            System.out.println("[SERVING_IMAGE] image=" + imageName);
-            System.out.println("[SERVING_IMAGE] templateDir=" + templateDir);
-            System.out.println("[SERVING_IMAGE] safeTemplateVersion=" + SAFE_SERVING_TEMPLATE_VERSION);
-            System.out.println("[SERVING_IMAGE] finalBuildContext=" + finalBuildContext);
-            System.out.println("[SERVING_IMAGE] tempBuildContext=" + tempBuildContext);
-            System.out.println("[SERVING_IMAGE] =======================================");
-
-            validateTemplate(templateDir);
-            Files.createDirectories(buildRoot);
-
             if (Files.exists(tempBuildContext)) {
                 deleteDirectory(tempBuildContext);
             }
-
-            Files.createDirectories(tempBuildContext);
-            copyTemplateFiles(templateDir, tempBuildContext);
-
-            List<String> finalRequirements = generateFinalRequirements(modelUri, templateDir);
-
-            if (finalRequirements == null || finalRequirements.isEmpty()) {
-                finalRequirements = fallbackRequirements();
-            }
-
-            String requirementsHash = computeRequirementsHash(finalRequirements);
-
-            if (reuseImageIfSameRequirements) {
-                Optional<String> reusableImage = findReusableImageWithSameRequirements(
-                        buildRoot,
-                        safeModelName,
-                        safeVersion,
-                        requirementsHash
-                );
-
-                if (reusableImage.isPresent()) {
-                    System.out.println("[SERVING_IMAGE] =======================================");
-                    System.out.println("[SERVING_IMAGE] Reusing existing serving image.");
-                    System.out.println("[SERVING_IMAGE] model=" + registeredModelName);
-                    System.out.println("[SERVING_IMAGE] version=" + modelVersion);
-                    System.out.println("[SERVING_IMAGE] requirementsHash=" + requirementsHash);
-                    System.out.println("[SERVING_IMAGE] reusedImage=" + reusableImage.get());
-                    System.out.println("[SERVING_IMAGE] Docker build/push skipped.");
-                    System.out.println("[SERVING_IMAGE] =======================================");
-
-                    return reusableImage.get();
-                }
-            }
-
-            writeRequirements(tempBuildContext, finalRequirements);
-
-            writeBuildMetadata(
-                    tempBuildContext,
-                    registeredModelName,
-                    modelVersion,
-                    modelUri,
-                    dataType,
-                    imageName,
-                    finalRequirements,
-                    requirementsHash
-            );
-
-            validateBuildContext(tempBuildContext);
-
-            if (Files.exists(finalBuildContext)) {
-                deleteDirectory(finalBuildContext);
-            }
-
-            Files.move(tempBuildContext, finalBuildContext, StandardCopyOption.REPLACE_EXISTING);
-
-            System.out.println("[SERVING_IMAGE] Build context ready: " + finalBuildContext);
-
-            runCommand(
-                    List.of(
-                            "docker",
-                            "build",
-                            "--pull",
-                            "-t",
-                            imageName,
-                            "."
-                    ),
-                    finalBuildContext
-            );
-
-            runCommand(
-                    List.of(
-                            "docker",
-                            "push",
-                            imageName
-                    ),
-                    finalBuildContext
-            );
-
-            System.out.println("[SERVING_IMAGE] Image built and pushed successfully: " + imageName);
-
-            return imageName;
-
-        } catch (Exception e) {
-            try {
-                if (Files.exists(tempBuildContext)) {
-                    deleteDirectory(tempBuildContext);
-                }
-            } catch (Exception cleanupException) {
-                System.out.println("[SERVING_IMAGE] Failed to clean temp folder: " + cleanupException.getMessage());
-            }
-
-            String fullMessage = buildFullErrorMessage(e);
-
-            System.out.println("[SERVING_IMAGE] Failed to build serving image.");
-            System.out.println("[SERVING_IMAGE] Reason: " + fullMessage);
-            e.printStackTrace();
-
-            throw new RuntimeException(
-                    "Failed to build serving image for model "
-                            + registeredModelName
-                            + " version "
-                            + modelVersion
-                            + ". Reason: "
-                            + fullMessage,
-                    e
-            );
+        } catch (Exception cleanupException) {
+            System.out.println("[SERVING_IMAGE] Failed to clean temp folder: " + cleanupException.getMessage());
         }
+
+        String fullMessage = buildFullErrorMessage(e);
+
+        System.out.println("[SERVING_IMAGE] Failed to build serving image with Kaniko.");
+        System.out.println("[SERVING_IMAGE] Reason: " + fullMessage);
+        e.printStackTrace();
+
+        throw new RuntimeException(
+                "Failed to build dedicated serving image for model "
+                        + registeredModelName
+                        + " version "
+                        + modelVersion
+                        + ". Reason: "
+                        + fullMessage,
+                e
+        );
     }
+}
 
     private void validateInputs(String registeredModelName, String modelVersion, String modelUri) {
         if (registeredModelName == null || registeredModelName.isBlank()) {
@@ -715,33 +780,516 @@ def clear_cache():
         System.out.println("[SERVING_IMAGE] Embedded safe FastAPI Dockerfile/main.py will be used. Old template Dockerfile/main.py will be ignored.");
     }
 
-    private void copyTemplateFiles(Path templateDir, Path buildContext) throws Exception {
-        Path targetDockerfile = buildContext.resolve("Dockerfile");
-        Path targetMainPy = buildContext.resolve("main.py");
+    private void copyTemplateFiles(Path buildContext, String baseImage) throws Exception {
+    Path targetDockerfile = buildContext.resolve("Dockerfile");
+    Path targetMainPy = buildContext.resolve("main.py");
 
-        Files.writeString(
-                targetDockerfile,
-                SAFE_DOCKERFILE_TEMPLATE,
-                StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.TRUNCATE_EXISTING
-        );
+    String dockerfile = buildSafeServingDockerfile(baseImage);
 
-        Files.writeString(
-                targetMainPy,
-                SAFE_MAIN_PY_TEMPLATE,
-                StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.TRUNCATE_EXISTING
-        );
+    Files.writeString(
+            targetDockerfile,
+            dockerfile,
+            StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING
+    );
 
-        assertFileExistsAndNotEmpty(targetDockerfile, "generated safe Dockerfile");
-        assertFileExistsAndNotEmpty(targetMainPy, "generated safe main.py");
+    Files.writeString(
+            targetMainPy,
+            SAFE_MAIN_PY_TEMPLATE,
+            StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING
+    );
 
-        System.out.println("[SERVING_IMAGE] Safe Dockerfile generated at: " + targetDockerfile);
-        System.out.println("[SERVING_IMAGE] Safe main.py generated at: " + targetMainPy);
-        System.out.println("[SERVING_IMAGE] Serving template version=" + SAFE_SERVING_TEMPLATE_VERSION);
+    assertFileExistsAndNotEmpty(targetDockerfile, "generated safe Dockerfile");
+    assertFileExistsAndNotEmpty(targetMainPy, "generated safe main.py");
+
+    System.out.println("[SERVING_IMAGE] Safe Dockerfile generated at: " + targetDockerfile);
+    System.out.println("[SERVING_IMAGE] Safe main.py generated at: " + targetMainPy);
+    System.out.println("[SERVING_IMAGE] Serving template version=" + SAFE_SERVING_TEMPLATE_VERSION);
+}
+
+private String buildSafeServingDockerfile(String baseImage) {
+    String cleanBaseImage = hasText(baseImage)
+            ? baseImage.trim()
+            : "python:3.10-slim";
+
+    return """
+FROM %s
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY requirements.txt /app/requirements-serving.txt
+
+RUN python -m pip install --upgrade pip \\
+    && python -m pip install --no-cache-dir -r /app/requirements-serving.txt
+
+COPY main.py /app/main.py
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+            """.formatted(cleanBaseImage);
+}
+
+private String resolveServingBaseImage(MlExperiment experiment) {
+    if (experiment != null && hasText(experiment.getCustomImageUri())) {
+        String customImage = experiment.getCustomImageUri().trim();
+
+        System.out.println("[SERVING_IMAGE] Using custom training image as serving base image. "
+                + "experimentId=" + experiment.getId()
+                + ", customImageUri=" + customImage);
+
+        return customImage;
     }
+
+    System.out.println("[SERVING_IMAGE] No custom training image found. "
+            + "Fallback to python:3.10-slim base image.");
+
+    return "python:3.10-slim";
+}
+
+private List<String> generateServingRequirementsForBaseImage(
+        String baseImage,
+        String modelUri,
+        Path templateDir
+) {
+    /*
+     * Si on part de l'image custom training, elle contient déjà les dépendances du modèle :
+     * numpy, pandas, mlflow, sklearn, torch, etc.
+     *
+     * Donc on n'installe que les dépendances nécessaires au serveur FastAPI.
+     * Cela évite d'écraser numpy/pandas/mlflow avec de mauvaises versions.
+     */
+    if (hasText(baseImage) && !baseImage.trim().startsWith("python:")) {
+        List<String> servingOnly = servingOnlyRequirements();
+
+        System.out.println("[SERVING_IMAGE] Custom base image detected. "
+                + "Only serving API requirements will be installed.");
+
+        for (String req : servingOnly) {
+            System.out.println("[SERVING_IMAGE]   " + req);
+        }
+
+        return servingOnly;
+    }
+
+    /*
+     * Si on n'a pas d'image custom, on utilise l'ancienne logique :
+     * requirements MLflow + fallback.
+     */
+    List<String> finalRequirements = generateFinalRequirements(modelUri, templateDir);
+
+    if (finalRequirements == null || finalRequirements.isEmpty()) {
+        finalRequirements = fallbackRequirements();
+    }
+
+    return finalRequirements;
+}
+
+private List<String> servingOnlyRequirements() {
+    return List.of(
+            "fastapi==0.115.6",
+            "uvicorn[standard]==0.32.1",
+            "python-multipart==0.0.20",
+            "pydantic==2.10.4",
+            "pillow==10.4.0"
+    );
+}
+
+private void ensureKanikoDockerSecretExists(KubernetesClient client) {
+    if (!hasText(kanikoDockerConfigSecret)) {
+        throw new RuntimeException("Kaniko Docker config secret name is empty.");
+    }
+
+    boolean exists = client.secrets()
+            .inNamespace(namespace)
+            .withName(kanikoDockerConfigSecret.trim())
+            .get() != null;
+
+    if (!exists) {
+        throw new RuntimeException(
+                "Kaniko Docker config secret not found in namespace "
+                        + namespace
+                        + ": "
+                        + kanikoDockerConfigSecret
+                        + ". Please create the secret before building serving images."
+        );
+    }
+}
+
+private void createServingBuildContextConfigMap(
+        KubernetesClient client,
+        String configMapName,
+        Path buildContext,
+        String registeredModelName,
+        String modelVersion,
+        String imageName
+) throws Exception {
+    Map<String, String> data = new LinkedHashMap<>();
+
+    data.put("Dockerfile", Files.readString(buildContext.resolve("Dockerfile"), StandardCharsets.UTF_8));
+    data.put("main.py", Files.readString(buildContext.resolve("main.py"), StandardCharsets.UTF_8));
+    data.put("requirements.txt", Files.readString(buildContext.resolve("requirements.txt"), StandardCharsets.UTF_8));
+    data.put("serving-build-metadata.json", Files.readString(buildContext.resolve("serving-build-metadata.json"), StandardCharsets.UTF_8));
+
+    ConfigMap configMap = new ConfigMapBuilder()
+            .withNewMetadata()
+                .withName(configMapName)
+                .withNamespace(namespace)
+                .addToLabels("app", "mlops-serving-image-build")
+                .addToLabels("mlops.phase", "serving-image-build")
+                .addToLabels("mlops.model", sanitizeForKubernetesLabel(registeredModelName))
+                .addToLabels("mlops.model.version", sanitizeForKubernetesLabel(modelVersion))
+            .endMetadata()
+            .withData(data)
+            .build();
+
+    client.configMaps()
+            .inNamespace(namespace)
+            .resource(configMap)
+            .create();
+
+    System.out.println("[SERVING_IMAGE_KANIKO] Build context ConfigMap created. "
+            + "configMap=" + configMapName
+            + ", image=" + imageName);
+}
+
+private Job buildServingKanikoJob(
+        String jobName,
+        String configMapName,
+        String destinationImage,
+        String modelUri
+) {
+    List<String> args = new ArrayList<>();
+
+    args.add("--dockerfile=/kaniko-context/Dockerfile");
+    args.add("--context=dir:///kaniko-context");
+    args.add("--destination=" + destinationImage);
+    args.add("--push-retry=5");
+    args.add("--image-download-retry=3");
+    args.add("--image-fs-extract-retry=3");
+    args.add("--cache=true");
+    args.add("--cache-repo=" + kanikoCacheRepo);
+    args.add("--cache-ttl=168h");
+    args.add("--cache-copy-layers=true");
+    args.add("--build-arg=MODEL_URI=" + modelUri);
+    args.add("--build-arg=MLFLOW_TRACKING_URI=" + localMlflowTrackingUrl);
+
+    return new JobBuilder()
+            .withNewMetadata()
+                .withName(jobName)
+                .withNamespace(namespace)
+                .addToLabels("app", "mlops-serving-image-build")
+                .addToLabels("mlops.phase", "serving-image-build")
+            .endMetadata()
+            .withNewSpec()
+                .withBackoffLimit(0)
+                .withTtlSecondsAfterFinished(3600)
+                .withNewTemplate()
+                    .withNewMetadata()
+                        .addToLabels("app", "mlops-serving-image-build")
+                        .addToLabels("job-name", jobName)
+                        .addToLabels("mlops.phase", "serving-image-build")
+                    .endMetadata()
+                    .withNewSpec()
+                        .withRestartPolicy("Never")
+
+                        .addNewVolume()
+                            .withName("build-context-configmap")
+                            .withNewConfigMap()
+                                .withName(configMapName)
+                            .endConfigMap()
+                        .endVolume()
+
+                        .addNewVolume()
+                            .withName("build-context-workdir")
+                            .withNewEmptyDir()
+                            .endEmptyDir()
+                        .endVolume()
+
+                        .addNewVolume()
+                            .withName("kaniko-docker-config")
+                            .withNewSecret()
+                                .withSecretName(kanikoDockerConfigSecret)
+                            .endSecret()
+                        .endVolume()
+
+                        .addNewInitContainer()
+                            .withName("prepare-context")
+                            .withImage("busybox:1.36")
+                            .withCommand("sh", "-c")
+                            .withArgs("cp -L /config/Dockerfile /kaniko-context/Dockerfile && cp -L /config/main.py /kaniko-context/main.py && cp -L /config/requirements.txt /kaniko-context/requirements.txt && cp -L /config/serving-build-metadata.json /kaniko-context/serving-build-metadata.json && ls -la /kaniko-context")
+                            .addNewVolumeMount()
+                                .withName("build-context-configmap")
+                                .withMountPath("/config")
+                            .endVolumeMount()
+                            .addNewVolumeMount()
+                                .withName("build-context-workdir")
+                                .withMountPath("/kaniko-context")
+                            .endVolumeMount()
+                        .endInitContainer()
+
+                        .addNewContainer()
+                            .withName("kaniko")
+                            .withImage(kanikoImage)
+                            .withArgs(args)
+                            .addNewVolumeMount()
+                                .withName("build-context-workdir")
+                                .withMountPath("/kaniko-context")
+                            .endVolumeMount()
+                            .addNewVolumeMount()
+                                .withName("kaniko-docker-config")
+                                .withMountPath("/kaniko/.docker")
+                            .endVolumeMount()
+                        .endContainer()
+                    .endSpec()
+                .endTemplate()
+            .endSpec()
+            .build();
+}
+
+private void waitForKanikoJobCompletion(KubernetesClient client, String jobName) {
+    long timeoutAt = System.currentTimeMillis() + (servingKanikoTimeoutSeconds * 1000L);
+
+    while (System.currentTimeMillis() < timeoutAt) {
+        Job job = client.batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .withName(jobName)
+                .get();
+
+        if (job == null) {
+            throw new RuntimeException("Kaniko serving image build job disappeared: " + jobName);
+        }
+
+        String status = getJobStatus(job);
+
+        System.out.println("[SERVING_IMAGE_KANIKO] Waiting for Kaniko job. "
+                + "jobName=" + jobName
+                + ", status=" + status);
+
+        if ("COMPLETED".equals(status)) {
+            System.out.println("[SERVING_IMAGE_KANIKO] Job completed. jobName=" + jobName);
+            return;
+        }
+
+        if ("FAILED".equals(status)) {
+            String logs = getKanikoJobLogs(client, jobName);
+            throw new RuntimeException(
+                    "Kaniko serving image build failed. jobName="
+                            + jobName
+                            + ". Logs: "
+                            + limitForLog(logs, 6000)
+            );
+        }
+
+        try {
+            Thread.sleep(5000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while waiting for Kaniko job: " + jobName, e);
+        }
+    }
+
+    String logs = getKanikoJobLogs(client, jobName);
+
+    throw new RuntimeException(
+            "Timeout while waiting for Kaniko serving image build. jobName="
+                    + jobName
+                    + ", timeoutSeconds="
+                    + servingKanikoTimeoutSeconds
+                    + ". Logs: "
+                    + limitForLog(logs, 6000)
+    );
+}
+
+private String getJobStatus(Job job) {
+    if (job == null) {
+        return "UNKNOWN";
+    }
+
+    if (job.getStatus() != null && job.getStatus().getConditions() != null) {
+        for (JobCondition condition : job.getStatus().getConditions()) {
+            if (!"True".equalsIgnoreCase(condition.getStatus())) {
+                continue;
+            }
+
+            if ("Complete".equalsIgnoreCase(condition.getType())) {
+                return "COMPLETED";
+            }
+
+            if ("Failed".equalsIgnoreCase(condition.getType())) {
+                return "FAILED";
+            }
+        }
+    }
+
+    Integer succeeded = job.getStatus() != null ? job.getStatus().getSucceeded() : null;
+    Integer failed = job.getStatus() != null ? job.getStatus().getFailed() : null;
+    Integer active = job.getStatus() != null ? job.getStatus().getActive() : null;
+
+    if (succeeded != null && succeeded > 0) {
+        return "COMPLETED";
+    }
+
+    if (failed != null && failed > 0) {
+        return "FAILED";
+    }
+
+    if (active != null && active > 0) {
+        return "RUNNING";
+    }
+
+    return "PENDING";
+}
+
+private String getKanikoJobLogs(KubernetesClient client, String jobName) {
+    try {
+        List<Pod> pods = client.pods()
+                .inNamespace(namespace)
+                .withLabel("job-name", jobName)
+                .list()
+                .getItems();
+
+        if (pods == null || pods.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder logs = new StringBuilder();
+
+        for (Pod pod : pods) {
+            if (pod == null || pod.getMetadata() == null || pod.getMetadata().getName() == null) {
+                continue;
+            }
+
+            String podName = pod.getMetadata().getName();
+
+            logs.append("===== POD: ")
+                    .append(podName)
+                    .append(" =====\n");
+
+            try {
+                String podLogs = client.pods()
+                        .inNamespace(namespace)
+                        .withName(podName)
+                        .inContainer("kaniko")
+                        .getLog();
+
+                logs.append(podLogs != null ? podLogs : "");
+            } catch (Exception e) {
+                logs.append("Failed to read kaniko logs for pod ")
+                        .append(podName)
+                        .append(": ")
+                        .append(e.getMessage())
+                        .append("\n");
+            }
+
+            logs.append("\n");
+        }
+
+        return logs.toString();
+
+    } catch (Exception e) {
+        return "Failed to read Kaniko serving build logs: " + e.getMessage();
+    }
+}
+
+private void deleteExistingKanikoJobIfExists(KubernetesClient client, String jobName) {
+    try {
+        client.batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .withName(jobName)
+                .delete();
+    } catch (Exception ignored) {
+    }
+}
+
+private void deleteExistingConfigMapIfExists(KubernetesClient client, String configMapName) {
+    try {
+        client.configMaps()
+                .inNamespace(namespace)
+                .withName(configMapName)
+                .delete();
+    } catch (Exception ignored) {
+    }
+}
+
+private String buildServingConfigMapName(String safeModelName, String safeVersion) {
+    String name = "mlops-serving-context-" + safeModelName + "-" + safeVersion;
+    return sanitizeKubernetesName(name, 63);
+}
+
+private String buildServingKanikoJobName(String safeModelName, String safeVersion) {
+    String name = "mlops-serving-build-" + safeModelName + "-" + safeVersion;
+    return sanitizeKubernetesName(name, 63);
+}
+
+private String sanitizeKubernetesName(String value, int maxLength) {
+    String clean = value == null ? "mlops-job" : value.toLowerCase(Locale.ROOT).trim();
+
+    clean = clean.replaceAll("[^a-z0-9-]", "-");
+    clean = clean.replaceAll("-+", "-");
+    clean = clean.replaceAll("^-+", "");
+    clean = clean.replaceAll("-+$", "");
+
+    if (clean.isBlank()) {
+        clean = "mlops-job";
+    }
+
+    if (clean.length() > maxLength) {
+        clean = clean.substring(0, maxLength);
+        clean = clean.replaceAll("-+$", "");
+    }
+
+    if (clean.isBlank()) {
+        clean = "mlops-job";
+    }
+
+    return clean;
+}
+
+private String sanitizeForKubernetesLabel(String value) {
+    if (value == null || value.isBlank()) {
+        return "unknown";
+    }
+
+    String clean = value.trim()
+            .replaceAll("[^A-Za-z0-9_.-]", "-");
+
+    if (clean.length() > 63) {
+        clean = clean.substring(0, 63);
+    }
+
+    clean = clean.replaceAll("^-+", "");
+    clean = clean.replaceAll("-+$", "");
+
+    return clean.isBlank() ? "unknown" : clean;
+}
+
+private String limitForLog(String value, int maxLength) {
+    if (value == null) {
+        return "";
+    }
+
+    if (value.length() <= maxLength) {
+        return value;
+    }
+
+    return value.substring(0, maxLength) + "... [truncated]";
+}
+
+private boolean hasText(String value) {
+    return value != null && !value.isBlank();
+}
 
     private List<String> generateFinalRequirements(String modelUri, Path templateDir) {
         List<String> baseRequirements = readRequirementsFile(
