@@ -1,4 +1,29 @@
-*
+# Maven / Java
+target/classes
+target/generated-sources
+target/generated-test-sources
+target/maven-archiver
+target/maven-status
+target/surefire-reports
+target/test-classes
+
+# IDE
+.idea
+.vscode
+*.iml
+
+# Git
+.git
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Keep backend artifact and mini-mlops runtime
+!target/*.jar
 !Dockerfile
-!target/
-!target/**
+!mini-mlops/**
