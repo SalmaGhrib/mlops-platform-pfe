@@ -130,10 +130,12 @@ private String uploadsMountPath;
         System.out.println("[CUSTOM-DOCKER] ConfigMap keys are Kubernetes-safe=" + areConfigMapKeysKubernetesSafe(buildContextFiles));
         System.out.println("[CUSTOM-DOCKER] build context contains platform_runner.py=" + buildContextFiles.containsKey(STANDARD_PLATFORM_RUNNER_FILE));
         System.out.println("[CUSTOM-DOCKER] build context contains src__custom_models__generic_pyfunc_wrapper.py=" + buildContextFiles.containsKey("src__custom_models__generic_pyfunc_wrapper.py"));
+        System.out.println("[CUSTOM-DOCKER] build context contains src__custom_models__import_detector.py=" + buildContextFiles.containsKey("src__custom_models__import_detector.py"));
         String dockerfileForCheck = buildContextFiles.get(STANDARD_DOCKERFILE) == null ? "" : buildContextFiles.get(STANDARD_DOCKERFILE).toLowerCase(Locale.ROOT);
         System.out.println("[CUSTOM-DOCKER] Dockerfile contains COPY src /workspace/src=" + dockerfileForCheck.contains("copy src") );
         System.out.println("[CUSTOM-DOCKER] Dockerfile contains ENV PYTHONPATH=/workspace=" + dockerfileForCheck.contains("pythonpath=/workspace") );
         System.out.println("[CUSTOM-DOCKER] Reconstructed build context will contain src/custom_models/generic_pyfunc_wrapper.py=" + buildContextFiles.containsKey("src__custom_models__generic_pyfunc_wrapper.py"));
+        System.out.println("[CUSTOM-DOCKER] Reconstructed build context will contain src/custom_models/import_detector.py=" + buildContextFiles.containsKey("src__custom_models__import_detector.py"));
 
         try {
             validateBuildContextAgainstDockerfile(buildContextFiles, buildContextFiles.get(STANDARD_DOCKERFILE));
