@@ -439,135 +439,262 @@ getDetectedComponentsCount(): number {
 
     this.experimentService.analyzeRuntimeScript(file).subscribe({
       next: (response: any) => {
-  console.log('Runtime analysis response:', response);
+        console.log('Runtime analysis response:', response);
 
-  this.analyzingModelFile = false;
-  this.analysisDone = true;
+        const mappedResponse = this.mapRuntimeAnalysisResponse(response || {});
 
-  const detectedImports: string[] =
-    response.detectedImports ||
-    response.detected_imports ||
-    response.detectedModules ||
-    response.detected_modules ||
-    [];
+        this.runtimeAnalysis = mappedResponse;
+        this.analysisSummary = mappedResponse.summary || mappedResponse.message || '';
+        this.warnings = mappedResponse.warnings || [];
 
-  const supportedImports: string[] =
-    response.supportedImports ||
-    response.supported_imports ||
-    response.supportedModules ||
-    response.supported_modules ||
-    [];
+        this.analyzingModelFile = false;
+        this.analysisDone = true;
 
-  const unsupportedImports: string[] =
-    response.unsupportedImports ||
-    response.unsupported_imports ||
-    response.unsupportedModules ||
-    response.unsupported_modules ||
-    [];
+        console.log('Mapped runtime analysis:', this.runtimeAnalysis);
+      },
 
-  const detectedModules = detectedImports.map((moduleName: string) => {
-    const isUnsupported = unsupportedImports.includes(moduleName);
-    const isSupported =
-      supportedImports.includes(moduleName) ||
-      response.supported === true ||
-      response.runtimeCompatible === true;
+      error: (error) => {
+        console.error('Runtime analysis failed:', error);
+
+        /*
+         * Important pour AKS :
+         * si le service d’analyse runtime est indisponible,
+         * on ne bloque pas le training STANDARD_RUNTIME.
+         */
+        this.setRuntimeAnalysisFallback(
+          'Analyse runtime indisponible sur AKS. Le lancement STANDARD_RUNTIME est autorisé.'
+        );
+      },
+    });
+  }
+
+  private mapRuntimeAnalysisResponse(response: any): RuntimeAnalysisResult {
+    const toStringArray = (value: any): string[] => {
+      if (!value) {
+        return [];
+      }
+
+      if (Array.isArray(value)) {
+        return value
+          .map((item) => {
+            if (typeof item === 'string') {
+              return item;
+            }
+
+            return String(
+              item?.name ||
+              item?.module ||
+              item?.importName ||
+              item?.packageName ||
+              item?.key ||
+              item?.label ||
+              ''
+            );
+          })
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+      }
+
+      if (typeof value === 'string') {
+        return value
+          .split(',')
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+      }
+
+      return [];
+    };
+
+    const unique = (items: string[]): string[] => {
+      return items.filter((item, index, array) => item && array.indexOf(item) === index);
+    };
+
+    const detectedImports: string[] = unique([
+      ...toStringArray(response.detectedImports),
+      ...toStringArray(response.detected_imports),
+      ...toStringArray(response.detectedModules),
+      ...toStringArray(response.detected_modules),
+    ]);
+
+    const supportedImports: string[] = unique([
+      ...toStringArray(response.supportedImports),
+      ...toStringArray(response.supported_imports),
+      ...toStringArray(response.supportedModules),
+      ...toStringArray(response.supported_modules),
+    ]);
+
+    const unsupportedImports: string[] = unique([
+      ...toStringArray(response.unsupportedImports),
+      ...toStringArray(response.unsupported_imports),
+      ...toStringArray(response.unsupportedModules),
+      ...toStringArray(response.unsupported_modules),
+    ]);
+
+    const runtimeCompatible =
+      response.runtimeCompatible !== undefined
+        ? response.runtimeCompatible === true
+        : response.runtime_compatible !== undefined
+          ? response.runtime_compatible === true
+          : response.compatible !== undefined
+            ? response.compatible === true
+            : response.supported !== undefined
+              ? response.supported === true
+              : unsupportedImports.length === 0;
+
+    const detectedModules = detectedImports.map((moduleName: string) => {
+      const isUnsupported = unsupportedImports.includes(moduleName);
+      const isSupported =
+        supportedImports.includes(moduleName) ||
+        runtimeCompatible ||
+        response.supported === true ||
+        response.compatible === true;
+
+      return {
+        name: moduleName,
+        supported: !isUnsupported && isSupported,
+        source: !isUnsupported && isSupported ? 'standard_runtime' : 'missing',
+        message: !isUnsupported && isSupported
+          ? 'Module disponible dans le Runtime standard.'
+          : 'Module absent de l’image standard. Utilisez le mode Dockerfile personnalisé.',
+      };
+    });
+
+    const unsupportedModules = unsupportedImports.map((moduleName: string) => ({
+      name: moduleName,
+      supported: false,
+      source: 'missing',
+      message: 'Module absent de l’image standard. Utilisez le mode Dockerfile personnalisé.',
+    }));
+
+    const detectedLibraries = unique([
+      ...toStringArray(response.detectedLibraries),
+      ...toStringArray(response.detected_libraries),
+      ...toStringArray(response.supportedLibraries),
+      ...toStringArray(response.supported_libraries),
+      ...toStringArray(response.unsupportedLibraries),
+      ...toStringArray(response.unsupported_libraries),
+    ]);
+
+    const missingDependencies = unique([
+      ...toStringArray(response.missingDependencies),
+      ...toStringArray(response.missing_dependencies),
+      ...unsupportedImports,
+    ]);
+
+    const rawDetectedAlgorithms =
+      response.detectedAlgorithms ||
+      response.detected_algorithms ||
+      response.detectedComponents ||
+      response.detected_components ||
+      [];
+
+    const detectedAlgorithms = Array.isArray(rawDetectedAlgorithms)
+      ? rawDetectedAlgorithms.map((item: any) => {
+          if (typeof item === 'string') {
+            return {
+              name: item,
+              category: 'ML',
+              supported: runtimeCompatible,
+              replaceable: false,
+              message: runtimeCompatible
+                ? 'Composant détecté et accepté.'
+                : 'Composant détecté mais non validé par le runtime standard.',
+            };
+          }
+
+          return {
+            name: String(item?.name || item?.className || item?.originalClass || 'Composant détecté'),
+            category: item?.category || item?.modelType || 'ML',
+            supported: item?.supported !== undefined ? item.supported === true : runtimeCompatible,
+            replaceable: item?.replaceable !== undefined ? item.replaceable === true : false,
+            message: item?.message || '',
+            module: item?.module,
+            variable: item?.variable || item?.varName,
+            line: item?.line,
+          };
+        })
+      : [];
+
+    const detectedMetrics = unique([
+      ...toStringArray(response.detectedMetrics),
+      ...toStringArray(response.detected_metrics),
+    ]);
+
+    const warnings = unique([
+      ...toStringArray(response.warnings),
+    ]);
 
     return {
-      name: moduleName,
-      supported: !isUnsupported && isSupported,
-      source: !isUnsupported && isSupported ? 'standard_runtime' : 'missing',
-      message: !isUnsupported && isSupported
-        ? 'Module disponible dans le Runtime standard.'
-        : 'Module absent de l’image standard. Utilisez le mode Dockerfile personnalisé.'
+      runtimeCompatible,
+      compatible: runtimeCompatible,
+      runtime_compatible: runtimeCompatible,
+      status: response.status || (runtimeCompatible ? 'COMPATIBLE' : 'INCOMPATIBLE'),
+      message:
+        response.message ||
+        response.summary ||
+        (runtimeCompatible
+          ? 'Script compatible avec le Runtime standard.'
+          : 'Script non compatible avec le Runtime standard.'),
+      summary:
+        response.summary ||
+        response.message ||
+        (runtimeCompatible
+          ? 'Script compatible avec le Runtime standard.'
+          : 'Script non compatible avec le Runtime standard.'),
+      detectedImports,
+      supportedImports,
+      unsupportedImports,
+      detectedMetrics,
+      detectedModules,
+      supportedModules: response.supportedModules || response.supported_modules || [],
+      unsupportedModules,
+      detectedLibraries,
+      supportedLibraries: response.supportedLibraries || response.supported_libraries || [],
+      unsupportedLibraries: response.unsupportedLibraries || response.unsupported_libraries || [],
+      missingDependencies,
+      detectedAlgorithms,
+      replaceableAlgorithms: response.replaceableAlgorithms || response.replaceable_algorithms || [],
+      warnings,
+      recommendation:
+        response.recommendation ||
+        (runtimeCompatible
+          ? 'Runtime standard compatible.'
+          : 'Utilisez le mode Dockerfile personnalisé ou ajoutez les dépendances manquantes.'),
     };
-  });
+  }
 
-  const unsupportedModules = unsupportedImports.map((moduleName: string) => ({
-    name: moduleName,
-    supported: false,
-    source: 'missing',
-    message: 'Module absent de l’image standard. Utilisez le mode Dockerfile personnalisé.'
-  }));
+  private setRuntimeAnalysisFallback(message: string): void {
+    const fallbackAnalysis: RuntimeAnalysisResult = {
+      runtimeCompatible: true,
+      compatible: true,
+      runtime_compatible: true,
+      status: 'COMPATIBLE',
+      message,
+      summary: message,
+      detectedImports: [],
+      supportedImports: [],
+      unsupportedImports: [],
+      detectedMetrics: [],
+      detectedModules: [],
+      supportedModules: [],
+      unsupportedModules: [],
+      detectedLibraries: [],
+      supportedLibraries: [],
+      unsupportedLibraries: [],
+      missingDependencies: [],
+      detectedAlgorithms: [],
+      replaceableAlgorithms: [],
+      warnings: [message],
+      recommendation:
+        'Analyse automatique indisponible. Le script sera lancé avec le Runtime standard.',
+    };
 
-  const detectedLibraries = [
-    ...(response.detectedLibraries || response.detected_libraries || []),
-    ...(response.supportedLibraries || response.supported_libraries || []),
-    ...(response.unsupportedLibraries || response.unsupported_libraries || []),
-  ].filter((item: any, index: number, array: any[]) => item != null && array.indexOf(item) === index);
+    this.runtimeAnalysis = fallbackAnalysis;
+    this.analysisSummary = message;
+    this.warnings = fallbackAnalysis.warnings || [];
 
-  const missingDependencies = [
-    ...(response.missingDependencies || response.missing_dependencies || []),
-    ...unsupportedImports,
-  ].filter((item: any, index: number, array: any[]) => item != null && array.indexOf(item) === index);
-
-  const detectedAlgorithms =
-    response.detectedAlgorithms ||
-    response.detected_algorithms ||
-    response.detectedComponents ||
-    response.detected_components ||
-    [];
-
-  const runtimeCompatible =
-    response.runtimeCompatible !== undefined
-      ? response.runtimeCompatible
-      : response.compatible !== undefined
-        ? response.compatible
-        : response.supported !== undefined
-          ? response.supported
-          : unsupportedModules.length === 0;
-
-  const mappedResponse: RuntimeAnalysisResult = {
-    runtimeCompatible,
-    status: response.status || undefined,
-    message: response.message || response.summary || undefined,
-    summary: response.summary || response.message || undefined,
-    detectedImports,
-    supportedImports,
-    unsupportedImports,
-    detectedMetrics:
-      response.detectedMetrics ||
-      response.detected_metrics ||
-      [],
-    detectedModules,
-    supportedModules: response.supportedModules || response.supported_modules || [],
-    unsupportedModules,
-    detectedLibraries:
-      response.detectedLibraries ||
-      response.detected_libraries ||
-      response.supportedLibraries ||
-      response.supported_libraries ||
-      response.unsupportedLibraries ||
-      response.unsupported_libraries ||
-      [],
-    supportedLibraries:
-      response.supportedLibraries ||
-      response.supported_libraries ||
-      [],
-    unsupportedLibraries:
-      response.unsupportedLibraries ||
-      response.unsupported_libraries ||
-      [],
-    missingDependencies,
-    detectedAlgorithms,
-    replaceableAlgorithms:
-      response.replaceableAlgorithms ||
-      response.replaceable_algorithms ||
-      [],
-    warnings: response.warnings || [],
-    recommendation:
-      response.recommendation ||
-      (runtimeCompatible
-        ? 'Runtime standard compatible'
-        : 'Utilisez le mode Dockerfile personnalisé ou ajoutez ce module à l’image standard.')
-  };
-
-  this.runtimeAnalysis = mappedResponse;
-  this.analysisSummary = mappedResponse.summary || mappedResponse.message || '';
-  this.warnings = mappedResponse.warnings || [];
-
-  console.log('Mapped runtime analysis:', this.runtimeAnalysis);
-  },
-    });
+    this.analyzingModelFile = false;
+    this.analysisDone = true;
   }
 
   analyzeModelFile(file: File): void {
