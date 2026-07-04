@@ -14,6 +14,7 @@ import io.fabric8.kubernetes.client.KubernetesClientBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -30,6 +31,14 @@ public class KubernetesBuildService {
     private static final String STANDARD_REQUIREMENTS_FILE = "requirements.txt";
     private static final String STANDARD_DOCKERFILE = "Dockerfile";
     private static final String STANDARD_PLATFORM_RUNNER_FILE = "platform_runner.py";
+
+    /*
+     * Kubernetes ConfigMap limit is ~1 MiB.
+     * The build context ConfigMap must only contain small build files.
+     * Large files such as datasets must stay outside the ConfigMap
+     * and be mounted/read at training time from /app/uploads through a PVC.
+     */
+    private static final long CONFIGMAP_SAFE_MAX_BYTES = 900_000L;
 
     @Value("${app.kubernetes.namespace:mlops}")
     private String namespace;
@@ -103,6 +112,8 @@ public class KubernetesBuildService {
 
         Map<String, String> buildContextFiles = buildContextFiles(project, experiment);
         System.out.println("[KubernetesBuildService] Build context contains files=" + buildContextFiles.keySet());
+
+        assertConfigMapSafeSize(buildContextFiles, configMapName);
 
         try {
             validateBuildContextAgainstDockerfile(buildContextFiles, buildContextFiles.get(STANDARD_DOCKERFILE));
@@ -342,12 +353,33 @@ public class KubernetesBuildService {
                 && !datasetFile.getFilePath().isBlank()
                 && Files.exists(Path.of(datasetFile.getFilePath()));
 
-        String datasetPath = datasetProvided ? STANDARD_DATASET_FILE : "";
+        /*
+         * IMPORTANT SCALABILITY FIX:
+         * Do not put dataset content in the ConfigMap.
+         * The dataset remains in /app/uploads/... and must be made available to
+         * training pods through a shared PVC mounted at the same path.
+         */
+        String datasetRuntimePath = datasetProvided
+                ? normalizeContainerPath(datasetFile.getFilePath())
+                : "";
+
+        String originalDatasetFileName = datasetProvided
+                ? safeFileName(datasetFile.getOriginalFileName(), STANDARD_DATASET_FILE)
+                : STANDARD_DATASET_FILE;
 
         System.out.println("[KubernetesBuildService] originalModelFileName=" + originalModelFileName);
-        System.out.println("[KubernetesBuildService] datasetProvided=" + datasetProvided + ", datasetPath=" + datasetPath);
+        System.out.println("[KubernetesBuildService] datasetProvided=" + datasetProvided
+                + ", datasetRuntimePath=" + (datasetRuntimePath.isBlank() ? "-" : datasetRuntimePath)
+                + ", originalDatasetFileName=" + originalDatasetFileName);
 
-        dockerfileContent = forcePlatformRunnerCommand(dockerfileContent, originalModelFileName, datasetProvided);
+        dockerfileContent = forcePlatformRunnerCommand(
+                dockerfileContent,
+                originalModelFileName,
+                datasetProvided,
+                datasetRuntimePath,
+                originalDatasetFileName
+        );
+
         files.put(STANDARD_DOCKERFILE, dockerfileContent);
 
         String requirementsContent = "";
@@ -359,7 +391,10 @@ public class KubernetesBuildService {
         }
 
         files.put(STANDARD_REQUIREMENTS_FILE, enrichRequirements(requirementsContent));
-        files.put(STANDARD_PLATFORM_RUNNER_FILE, buildPlatformRunnerContent(project, experiment, datasetProvided, datasetPath));
+        files.put(
+                STANDARD_PLATFORM_RUNNER_FILE,
+                buildPlatformRunnerContent(project, experiment, datasetProvided, datasetRuntimePath)
+        );
 
         if (modelFile != null
                 && modelFile.getFilePath() != null
@@ -383,27 +418,31 @@ public class KubernetesBuildService {
         }
 
         if (datasetProvided) {
-            String datasetContent = readFile(datasetFile.getFilePath());
-
-            files.put(STANDARD_DATASET_FILE, datasetContent);
-
-            String originalDatasetFileName = safeFileName(
-                    datasetFile.getOriginalFileName(),
-                    STANDARD_DATASET_FILE
-            );
-
-            putIfSafeAndDifferent(
-                    files,
-                    originalDatasetFileName,
-                    STANDARD_DATASET_FILE,
-                    datasetContent
-            );
+            try {
+                long datasetSize = Files.size(Path.of(datasetFile.getFilePath()));
+                System.out.println("[KubernetesBuildService] Dataset kept outside ConfigMap. "
+                        + "path=" + datasetRuntimePath
+                        + ", sizeBytes=" + datasetSize
+                        + ". Training job must mount the shared uploads PVC at /app/uploads.");
+            } catch (Exception ignored) {
+                System.out.println("[KubernetesBuildService] Dataset kept outside ConfigMap. "
+                        + "path=" + datasetRuntimePath
+                        + ". Training job must mount the shared uploads PVC at /app/uploads.");
+            }
         }
 
         System.out.println("[KubernetesBuildService] Final build context file keys=" + files.keySet());
         System.out.println("[KubernetesBuildService] Dockerfile final injected content:\n" + truncateForLog(files.get(STANDARD_DOCKERFILE)));
 
         return files;
+    }
+
+    private String normalizeContainerPath(String path) {
+        if (path == null || path.isBlank()) {
+            return "";
+        }
+
+        return path.trim().replace("\\", "/");
     }
 
     private String truncateForLog(String value) {
@@ -535,7 +574,13 @@ public class KubernetesBuildService {
         return content + "\n" + requirement;
     }
 
-    private String forcePlatformRunnerCommand(String dockerfileContent, String originalModelFileName, boolean datasetProvided) {
+    private String forcePlatformRunnerCommand(
+            String dockerfileContent,
+            String originalModelFileName,
+            boolean datasetProvided,
+            String datasetRuntimePath,
+            String originalDatasetFileName
+    ) {
         String content = dockerfileContent == null ? "" : dockerfileContent.trim();
 
         try {
@@ -553,24 +598,47 @@ public class KubernetesBuildService {
 
                 for (String token : srcPart.split("\\s+")) {
                     String t = token.trim().replaceAll("^[\\\"']|[\\\"']$", "");
-                    String base = t.contains("/") ? t.substring(t.lastIndexOf('/') + 1) : t;
-                    String lowerBase = base.toLowerCase(Locale.ROOT);
 
-                    if (!datasetProvided && lowerBase.equals("dataset.csv")) {
-                        removeLine = true;
-                        break;
+                    if (t.isBlank() || t.startsWith("--")) {
+                        continue;
                     }
 
+                    String base = t.contains("/") ? t.substring(t.lastIndexOf('/') + 1) : t;
+                    String lowerBase = base.toLowerCase(Locale.ROOT);
+                    String lowerOriginalModel = originalModelFileName == null
+                            ? ""
+                            : originalModelFileName.toLowerCase(Locale.ROOT);
+                    String lowerOriginalDataset = originalDatasetFileName == null
+                            ? ""
+                            : originalDatasetFileName.toLowerCase(Locale.ROOT);
+
+                    /*
+                     * Remove user Python files from the original Dockerfile because the platform
+                     * injects the standardized script as train.py.
+                     */
                     if (lowerBase.endsWith(".py")) {
                         if (lowerBase.equals("train.py") || lowerBase.equals("platform_runner.py")) {
                             continue;
                         }
 
-                        if (originalModelFileName != null && lowerBase.equals(originalModelFileName.toLowerCase(Locale.ROOT))) {
+                        if (!lowerOriginalModel.isBlank() && lowerBase.equals(lowerOriginalModel)) {
                             removeLine = true;
                             break;
                         }
 
+                        removeLine = true;
+                        break;
+                    }
+
+                    /*
+                     * SCALABILITY FIX:
+                     * Never COPY datasets/CSV files into the image through ConfigMap.
+                     * Large datasets stay outside the image and are read from /app/uploads
+                     * at runtime through the shared uploads PVC.
+                     */
+                    if (lowerBase.equals("dataset.csv")
+                            || (!lowerOriginalDataset.isBlank() && lowerBase.equals(lowerOriginalDataset))
+                            || lowerBase.endsWith(".csv")) {
                         removeLine = true;
                         break;
                     }
@@ -599,8 +667,12 @@ public class KubernetesBuildService {
 
         System.out.println("[KubernetesBuildService] Detected WORKDIR='" + workdir + "', final WORKDIR='" + directory + "'");
 
-        String datasetCopy = datasetProvided
-                ? "COPY dataset.csv " + directory + "/dataset.csv\n"
+        String datasetEnvPath = datasetProvided && datasetRuntimePath != null && !datasetRuntimePath.isBlank()
+                ? datasetRuntimePath
+                : directory + "/dataset.csv";
+
+        String datasetComment = datasetProvided
+                ? "# Dataset is not copied into the image. It is read from the shared uploads PVC at runtime.\n"
                 : "";
 
         String platformInjection = """
@@ -609,31 +681,47 @@ public class KubernetesBuildService {
 # The user script is standardized as train.py.
 # The platform runner executes train.py, detects model artifacts,
 # logs metrics/artifacts to MLflow, and reports user script failures.
-
+%6$s
 COPY requirements.txt %1$s/requirements.txt
 RUN python -m pip install --no-cache-dir -r %1$s/requirements.txt
 
 COPY platform_runner.py %1$s/platform_runner.py
 COPY train.py %1$s/train.py
-%2$s
 
 WORKDIR %1$s
 
 ENV OUTPUT_DIR=%1$s/outputs
 ENV ML_OUTPUT_DIR=/opt/ml/model
 ENV MODEL_OUTPUT_DIR=/opt/ml/model
-ENV DATA_PATH=%1$s/dataset.csv
-ENV DATASET_PATH=%1$s/dataset.csv
+ENV DATA_PATH=%2$s
+ENV DATASET_PATH=%2$s
+ENV PLATFORM_DATASET_EXTERNAL=%3$s
+ENV PLATFORM_DATASET_SOURCE=%4$s
 
 RUN mkdir -p %1$s/outputs %1$s/artifacts /opt/ml/model
 
 CMD ["python", "platform_runner.py"]
-""".formatted(directory, datasetCopy);
+""".formatted(
+                directory,
+                dockerfileEnvValue(datasetEnvPath),
+                datasetProvided ? "true" : "false",
+                dockerfileEnvValue(datasetRuntimePath == null ? "" : datasetRuntimePath),
+                datasetProvided ? "true" : "false",
+                datasetComment
+        );
 
         content = content.replaceAll("(?im)^\\s*CMD\\s+.*$", "");
         content = content.replaceAll("(?im)^\\s*ENTRYPOINT\\s+.*$", "");
 
         return content.trim() + "\n" + platformInjection;
+    }
+
+    private String dockerfileEnvValue(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value.trim().replace("\\", "/").replace("\"", "\\\"");
     }
 
     private String detectLastWorkdir(String content) {
@@ -2159,6 +2247,47 @@ if __name__ == "__main__":
 
     private String pythonBooleanLiteral(boolean value) {
         return value ? "True" : "False";
+    }
+
+    private void assertConfigMapSafeSize(Map<String, String> data, String configMapName) {
+        long totalBytes = 0L;
+        Map<String, Long> sizes = new LinkedHashMap<>();
+
+        if (data != null) {
+            for (Map.Entry<String, String> entry : data.entrySet()) {
+                String key = entry.getKey() == null ? "" : entry.getKey();
+                String value = entry.getValue() == null ? "" : entry.getValue();
+
+                long keyBytes = key.getBytes(StandardCharsets.UTF_8).length;
+                long valueBytes = value.getBytes(StandardCharsets.UTF_8).length;
+                long entryBytes = keyBytes + valueBytes;
+
+                sizes.put(key, entryBytes);
+                totalBytes += entryBytes;
+            }
+        }
+
+        System.out.println("[KubernetesBuildService] ConfigMap estimated size for "
+                + configMapName
+                + " = "
+                + totalBytes
+                + " bytes, files="
+                + sizes);
+
+        if (totalBytes > CONFIGMAP_SAFE_MAX_BYTES) {
+            throw new RuntimeException(
+                    "Build context ConfigMap is too large: "
+                            + totalBytes
+                            + " bytes for "
+                            + configMapName
+                            + ". Kubernetes ConfigMaps are limited to about 1MiB. "
+                            + "Do not put datasets or large files in ConfigMap. "
+                            + "Keep only Dockerfile, requirements.txt, platform_runner.py and small train.py. "
+                            + "Datasets must be stored under /app/uploads and mounted in training pods using a shared PVC. "
+                            + "Current files="
+                            + sizes
+            );
+        }
     }
 
     private ConfigMap buildConfigMap(String configMapName, Map<String, String> buildContextFiles) {
