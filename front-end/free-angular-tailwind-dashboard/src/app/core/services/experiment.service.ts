@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Observable, of } from 'rxjs';
+import { Observable } from 'rxjs';
 
 export interface MlProjectResponse {
   id: number;
@@ -268,7 +268,7 @@ export interface UploadAndRunCustomModelRequest {
 export class ExperimentService {
   private readonly springApiUrl = '/api/experiments';
   private readonly projectApiUrl = '/api/projects';
-  private readonly fastApiUrl = 'http://127.0.0.1:8001';
+  private readonly runtimeApiUrl = '/api/runtime';
 
   constructor(private http: HttpClient) {}
 
@@ -430,43 +430,58 @@ export class ExperimentService {
   }
 
   analyzeModelFile(modelFile: File): Observable<AnalyzeModelFileResponse> {
-    const formData = new FormData();
+    const formData = this.buildScriptAnalysisFormData(modelFile);
 
-    formData.append('model_file', modelFile);
-    formData.append('file', modelFile);
-    formData.append('modelFile', modelFile);
-
+    /*
+     * Important pour AKS :
+     * ne jamais appeler http://127.0.0.1:8001 depuis Angular.
+     * Le navigateur doit appeler Spring Boot via Nginx : /api/runtime/...
+     */
     return this.http.post<AnalyzeModelFileResponse>(
-      `${this.fastApiUrl}/analyze-model-file`,
-      formData
+      `${this.runtimeApiUrl}/analyze-script`,
+      formData,
+      {
+        headers: this.getAuthHeaders()
+      }
     );
   }
 
   analyzeCustomModelFile(modelFile: File): Observable<AnalyzeModelFileResponse> {
-    const formData = new FormData();
-
-    formData.append('model_file', modelFile);
-    formData.append('file', modelFile);
-    formData.append('modelFile', modelFile);
+    const formData = this.buildScriptAnalysisFormData(modelFile);
 
     return this.http.post<AnalyzeModelFileResponse>(
-      `${this.fastApiUrl}/analyze-custom-model-file`,
-      formData
+      `${this.runtimeApiUrl}/analyze-script`,
+      formData,
+      {
+        headers: this.getAuthHeaders()
+      }
     );
   }
 
   analyzeRuntimeScript(file: File): Observable<RuntimeAnalysisResult> {
+    const formData = this.buildScriptAnalysisFormData(file);
+
+    return this.http.post<RuntimeAnalysisResult>(
+      `${this.runtimeApiUrl}/analyze-script`,
+      formData,
+      {
+        headers: this.getAuthHeaders()
+      }
+    );
+  }
+
+  private buildScriptAnalysisFormData(file: File): FormData {
     const formData = new FormData();
 
     formData.append('script_file', file);
     formData.append('file', file);
     formData.append('scriptFile', file);
+    formData.append('model_file', file);
+    formData.append('modelFile', file);
 
-    return this.http.post<RuntimeAnalysisResult>(
-      `${this.fastApiUrl}/api/runtime/analyze-script`,
-      formData
-    );
+    return formData;
   }
+
   uploadAndRunCustomModel(
     request: UploadAndRunCustomModelRequest
   ): Observable<MlExperimentResponse> {
