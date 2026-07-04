@@ -271,29 +271,7 @@ public class KubernetesJobService {
                 .withImagePullPolicy(resolveImagePullPolicy(imageUri))
                 .withEnv(envVars)
                 .withCommand("sh", "-c")
-                .withArgs("set -e\n"
-                        + "echo \"[CUSTOM-TRAINING] Starting platform runner\"\n"
-                        + "echo \"[CUSTOM-TRAINING] USER_SCRIPT=${USER_SCRIPT}\"\n"
-                        + "echo \"[CUSTOM-TRAINING] DATASET_PATH=${DATASET_PATH}\"\n"
-                        + "echo \"[CUSTOM-TRAINING] MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}\"\n"
-                        + "echo \"[CUSTOM-TRAINING] MLFLOW_EXPERIMENT_NAME=${MLFLOW_EXPERIMENT_NAME}\"\n"
-                        + "echo \"[CUSTOM-TRAINING] RUN_NAME=${RUN_NAME}\"\n"
-                        + "echo \"[CUSTOM-TRAINING] REGISTERED_MODEL_NAME=${REGISTERED_MODEL_NAME}\"\n"
-                        + "RUNNER_PATH=\"/app/platform_runner.py\"\n"
-                        + "WORKSPACE_DIR=\"/app\"\n"
-                        + "if [ ! -f \"$RUNNER_PATH\" ]; then\n"
-                        + "  RUNNER_PATH=\"/workspace/platform_runner.py\"\n"
-                        + "  WORKSPACE_DIR=\"/workspace\"\n"
-                        + "fi\n"
-                        + "SCRIPT_NAME=\"${USER_SCRIPT:-train.py}\"\n"
-                        + "python \"$RUNNER_PATH\" \\\n\n"
-                        + "  --script \"$SCRIPT_NAME\" \\\n\n"
-                        + "  --tracking-uri \"${MLFLOW_TRACKING_URI:-http://mlflow-service:5000}\" \\\n\n"
-                        + "  --experiment-name \"${MLFLOW_EXPERIMENT_NAME:-custom_training}\" \\\n\n"
-                        + "  --run-name \"${RUN_NAME:-custom_run}\" \\\n\n"
-                        + "  --registered-model-name \"${REGISTERED_MODEL_NAME:-custom_model}\" \\\n\n"
-                        + "  --dataset-path \"${DATASET_PATH:-}\" \\\n\n"
-                        + "  --workspace \"$WORKSPACE_DIR\"\n");
+                .withArgs(buildRunnerShellCommand());
 
         if (attachUploadsPvc) {
             trainingContainerBuilder
@@ -354,6 +332,89 @@ public class KubernetesJobService {
                     .endTemplate()
                 .endSpec()
                 .build();
+    }
+
+    private String buildRunnerShellCommand() {
+        return """
+                set -e
+
+                echo "[CUSTOM-TRAINING] Starting platform runner"
+                echo "[CUSTOM-TRAINING] USER_SCRIPT=${USER_SCRIPT}"
+                echo "[CUSTOM-TRAINING] DATASET_PATH=${DATASET_PATH}"
+                echo "[CUSTOM-TRAINING] DATA_PATH=${DATA_PATH}"
+                echo "[CUSTOM-TRAINING] MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}"
+                echo "[CUSTOM-TRAINING] MLFLOW_EXPERIMENT_NAME=${MLFLOW_EXPERIMENT_NAME}"
+                echo "[CUSTOM-TRAINING] RUN_NAME=${RUN_NAME}"
+                echo "[CUSTOM-TRAINING] REGISTERED_MODEL_NAME=${REGISTERED_MODEL_NAME}"
+
+                export PYTHONUNBUFFERED=1
+                export PYTHONPATH="/app:/workspace:${PYTHONPATH:-}"
+
+                RUNNER_PATH="/app/platform_runner.py"
+
+                if [ ! -f "$RUNNER_PATH" ]; then
+                  RUNNER_PATH="/workspace/platform_runner.py"
+                fi
+
+                if [ ! -f "$RUNNER_PATH" ]; then
+                  echo "[CUSTOM-TRAINING] ERROR: platform_runner.py not found in /app or /workspace"
+                  echo "[CUSTOM-TRAINING] /app content:"
+                  ls -la /app || true
+                  echo "[CUSTOM-TRAINING] /workspace content:"
+                  ls -la /workspace || true
+                  exit 1
+                fi
+
+                SCRIPT_NAME="${USER_SCRIPT:-train.py}"
+                SCRIPT_PATH="$SCRIPT_NAME"
+
+                if [ -f "/app/$SCRIPT_NAME" ]; then
+                  SCRIPT_PATH="/app/$SCRIPT_NAME"
+                elif [ -f "/workspace/$SCRIPT_NAME" ]; then
+                  SCRIPT_PATH="/workspace/$SCRIPT_NAME"
+                fi
+
+                if [ ! -f "$SCRIPT_PATH" ]; then
+                  echo "[CUSTOM-TRAINING] ERROR: user script not found: $SCRIPT_NAME"
+                  echo "[CUSTOM-TRAINING] Checked:"
+                  echo "  - $SCRIPT_PATH"
+                  echo "  - /app/$SCRIPT_NAME"
+                  echo "  - /workspace/$SCRIPT_NAME"
+                  echo "[CUSTOM-TRAINING] /app content:"
+                  ls -la /app || true
+                  echo "[CUSTOM-TRAINING] /workspace content:"
+                  ls -la /workspace || true
+                  exit 1
+                fi
+
+                WORKSPACE_RUNTIME="${WORKSPACE_DIR:-/workspace}"
+
+                if [ -z "$WORKSPACE_RUNTIME" ]; then
+                  WORKSPACE_RUNTIME="/workspace"
+                fi
+
+                mkdir -p "$WORKSPACE_RUNTIME"
+                mkdir -p "$WORKSPACE_RUNTIME/outputs"
+                mkdir -p "$WORKSPACE_RUNTIME/artifacts"
+                mkdir -p /opt/ml/model
+
+                DATASET_ARG="${DATASET_PATH:-}"
+
+                if [ -z "$DATASET_ARG" ]; then
+                  DATASET_ARG="${DATA_PATH:-}"
+                fi
+
+                echo "[CUSTOM-TRAINING] RUNNER_PATH=$RUNNER_PATH"
+                echo "[CUSTOM-TRAINING] SCRIPT_PATH=$SCRIPT_PATH"
+                echo "[CUSTOM-TRAINING] WORKSPACE_RUNTIME=$WORKSPACE_RUNTIME"
+                echo "[CUSTOM-TRAINING] DATASET_ARG=$DATASET_ARG"
+                echo "[CUSTOM-TRAINING] Final command:"
+                echo "python $RUNNER_PATH --script $SCRIPT_PATH --tracking-uri ${MLFLOW_TRACKING_URI:-http://mlflow-service:5000} --experiment-name ${MLFLOW_EXPERIMENT_NAME:-custom_training} --run-name ${RUN_NAME:-custom_run} --registered-model-name ${REGISTERED_MODEL_NAME:-custom_model} --dataset-path $DATASET_ARG --workspace $WORKSPACE_RUNTIME"
+
+                cd "$WORKSPACE_RUNTIME"
+
+                exec python "$RUNNER_PATH" --script "$SCRIPT_PATH" --tracking-uri "${MLFLOW_TRACKING_URI:-http://mlflow-service:5000}" --experiment-name "${MLFLOW_EXPERIMENT_NAME:-custom_training}" --run-name "${RUN_NAME:-custom_run}" --registered-model-name "${REGISTERED_MODEL_NAME:-custom_model}" --dataset-path "$DATASET_ARG" --workspace "$WORKSPACE_RUNTIME"
+                """;
     }
 
     private String resolveImagePullPolicy(String imageUri) {
@@ -452,6 +513,13 @@ public class KubernetesJobService {
         addEnv(envVars, "TARGET_COLUMN", targetColumn);
         addEnv(envVars, "ML_TARGET_COLUMN", targetColumn);
 
+        /*
+         * Do not set DATASET_PATH here.
+         *
+         * DATASET_PATH is injected into the generated Docker image by KubernetesBuildService.
+         * If we set DATASET_PATH here with an empty value, Kubernetes would override the image ENV
+         * and the dataset path would be lost.
+         */
         addEnv(envVars, "USER_SCRIPT", "train.py");
         addEnv(envVars, "WORKSPACE_DIR", "/workspace");
 
@@ -461,8 +529,6 @@ public class KubernetesJobService {
 
         /*
          * Inform the platform runner and user scripts where shared uploads are mounted.
-         * The actual DATASET_PATH is injected in the custom image by KubernetesBuildService,
-         * but these variables make the runtime self-describing and easier to debug.
          */
         addEnv(envVars, "APP_UPLOAD_DIR", normalizeMountPath(uploadsMountPath));
         addEnv(envVars, "MLOPS_UPLOADS_MOUNT_PATH", normalizeMountPath(uploadsMountPath));
@@ -480,7 +546,16 @@ public class KubernetesJobService {
                         + "/workspace/models,"
                         + "/workspace/saved_model,"
                         + "/workspace/checkpoints,"
-                        + "/workspace"
+                        + "/workspace,"
+                        + "/app/outputs,"
+                        + "/app/output,"
+                        + "/app/artifacts,"
+                        + "/app/artifact,"
+                        + "/app/model,"
+                        + "/app/models,"
+                        + "/app/saved_model,"
+                        + "/app/checkpoints,"
+                        + "/app"
         );
 
         addEnv(envVars, "MLOPS_ACCEPTED_MODEL_EXTENSIONS",
