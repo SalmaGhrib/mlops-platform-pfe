@@ -28,7 +28,7 @@ public class ModelServingImageBuildService {
      * Cette version empêche définitivement les images dédiées de repartir avec
      * un ancien main.py qui demande --config ou qui charge mal MLflow.
      */
-    private static final String SAFE_SERVING_TEMPLATE_VERSION = "2026-07-05-fastapi-image-pixel-columns-v3";
+    private static final String SAFE_SERVING_TEMPLATE_VERSION = "2026-07-05-fastapi-universal-prediction-v4";
 
     private static final String SAFE_DOCKERFILE_TEMPLATE = """
 FROM python:3.10-slim
@@ -95,7 +95,7 @@ mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 app = FastAPI(
     title="Mini MLOps Generic Prediction API",
     description="Generic prediction API for MLflow production models.",
-    version="6.1.0-image-pixel-columns",
+    version="6.2.0-universal-prediction",
 )
 
 loaded_models: Dict[str, Dict[str, Any]] = {}
@@ -514,40 +514,107 @@ def predict(request: PredictionRequest):
     return {"status": "success", "model_uri": model_uri, "model_name": model_name, "model_alias": model_alias, "model_type": loaded.get("type"), "torch_model_kind": loaded.get("torch_model_kind"), "version_info": version_info, "prediction_mode": prediction_mode, "rows_count": len(model_input), "input_columns": input_columns, "predictions": predictions}
 
 @app.post("/predict-image")
-async def predict_image(image_file: UploadFile = File(...), model_name: str = Form(None), model_alias: str = Form("production"), image_size: int = Form(28), grayscale: bool = Form(True), auto_invert: bool = Form(True)):
+async def predict_image(
+    image_file: UploadFile = File(...),
+    model_name: str = Form(None),
+    model_alias: str = Form("production"),
+    image_size: int = Form(28),
+    grayscale: bool = Form(True),
+    auto_invert: bool = Form(True)
+):
     try:
         model_name = normalize_text(model_name) or DEFAULT_MODEL_NAME
         model_alias = normalize_text(model_alias) or DEFAULT_MODEL_ALIAS or "production"
+
         if not model_name:
             raise ValueError("model_name is required because DEFAULT_MODEL_NAME is not configured.")
+
         if image_size <= 0:
             raise ValueError("image_size must be positive.")
+
         content = await image_file.read()
+
         if not content:
             raise ValueError("Uploaded image is empty.")
+
         image = Image.open(io.BytesIO(content))
+
         if grayscale:
             image = image.convert("L")
         else:
             image = image.convert("RGB")
+
         image = image.resize((image_size, image_size))
-        image_array = np.array(image).astype("float32") / 255.0
-        if auto_invert and grayscale and image_array.mean() > 0.5:
-            image_array = 1.0 - image_array
-        loaded, model_uri, version_info = load_model_from_registry(model_name=model_name, model_alias=model_alias)
+
+        raw_image_array = np.array(image).astype("float32")
+
+        # This server must preserve the same scale used during classical image training.
+        # For sklearn/pyfunc image models trained from CSV columns pixel_0..pixel_783,
+        # the expected values are generally raw pixels in [0, 255].
+        #
+        # Therefore:
+        # - pyfunc/sklearn image input receives pixel_0..pixel_783 with raw 0..255 values
+        # - torch image input receives "pixels" and is normalized later by prepare_torch_input_from_dataframe
+        if auto_invert and grayscale and raw_image_array.mean() > 127.5:
+            raw_image_array = 255.0 - raw_image_array
+
+        loaded, model_uri, version_info = load_model_from_registry(
+            model_name=model_name,
+            model_alias=model_alias
+        )
+
         if grayscale and image_size == 28:
-            pixels = image_array.reshape(-1).astype(float).tolist()
-            model_input, prediction_mode, input_columns = build_image_model_input_from_pixels(pixels, loaded)
+            pixels = raw_image_array.reshape(-1).astype(float).tolist()
+
+            if len(pixels) != 784:
+                raise ValueError(f"Expected 784 pixels after preprocessing, got {len(pixels)}.")
+
+            model_input, prediction_mode, input_columns = build_image_model_input_from_pixels(
+                pixels,
+                loaded
+            )
         else:
-            model_input = pd.DataFrame([{"image": image_array.tolist()}])
+            # Generic image input for non-MNIST image models.
+            # Keep a normalized nested image array because this format is usually expected
+            # by deep-learning image models that do not use pixel_0..pixel_N tabular columns.
+            normalized_image_array = raw_image_array
+
+            if normalized_image_array.size > 0 and normalized_image_array.max() > 1.0:
+                normalized_image_array = normalized_image_array / 255.0
+
+            model_input = pd.DataFrame([{"image": normalized_image_array.tolist()}])
             prediction_mode = "image_file"
             input_columns = ["image"]
+
         predictions = make_predictions(loaded, model_input)
-        return {"status": "success", "model_uri": model_uri, "model_name": model_name, "model_alias": model_alias, "model_type": loaded.get("type"), "torch_model_kind": loaded.get("torch_model_kind"), "version_info": version_info, "prediction_mode": prediction_mode, "image_filename": image_file.filename, "image_size": [image_size, image_size], "grayscale": grayscale, "auto_invert": auto_invert, "input_columns": input_columns, "predictions": predictions}
+
+        return {
+            "status": "success",
+            "model_uri": model_uri,
+            "model_name": model_name,
+            "model_alias": model_alias,
+            "model_type": loaded.get("type"),
+            "torch_model_kind": loaded.get("torch_model_kind"),
+            "version_info": version_info,
+            "prediction_mode": prediction_mode,
+            "image_filename": image_file.filename,
+            "image_size": [image_size, image_size],
+            "grayscale": grayscale,
+            "auto_invert": auto_invert,
+            "input_columns": input_columns,
+            "predictions": predictions
+        }
+
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=400, detail={"message": "Image prediction failed.", "error": str(exc)})
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Image prediction failed.",
+                "error": str(exc)
+            }
+        )
 
 @app.post("/predict-text")
 def predict_text(request: TextPredictionRequest):
