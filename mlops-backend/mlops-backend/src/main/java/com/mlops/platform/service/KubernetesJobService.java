@@ -394,8 +394,22 @@ public class KubernetesJobService {
             mkdir -p "$WORKSPACE_RUNTIME/artifacts"
             mkdir -p /opt/ml/model
 
-            echo "[CUSTOM-TRAINING] Copying user script to workspace"
-            cp "$SOURCE_SCRIPT" "$WORKSPACE_RUNTIME/train.py"
+            DEST_SCRIPT="$WORKSPACE_RUNTIME/train.py"
+
+            SOURCE_REAL="$(readlink -f "$SOURCE_SCRIPT" 2>/dev/null || echo "$SOURCE_SCRIPT")"
+            DEST_REAL="$(readlink -f "$DEST_SCRIPT" 2>/dev/null || echo "$DEST_SCRIPT")"
+
+            echo "[CUSTOM-TRAINING] SOURCE_SCRIPT=$SOURCE_SCRIPT"
+            echo "[CUSTOM-TRAINING] DEST_SCRIPT=$DEST_SCRIPT"
+            echo "[CUSTOM-TRAINING] SOURCE_REAL=$SOURCE_REAL"
+            echo "[CUSTOM-TRAINING] DEST_REAL=$DEST_REAL"
+
+            if [ "$SOURCE_REAL" = "$DEST_REAL" ]; then
+                echo "[CUSTOM-TRAINING] User script already exists in workspace. Skipping copy."
+            else
+                echo "[CUSTOM-TRAINING] Copying user script to workspace"
+                cp "$SOURCE_SCRIPT" "$DEST_SCRIPT"
+            fi
 
             if [ -d "/app/src" ]; then
               echo "[CUSTOM-TRAINING] Copying platform src package to workspace"
