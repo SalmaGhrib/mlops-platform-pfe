@@ -195,14 +195,7 @@ export class PredictionService {
       raw.is_deployed === true ||
       String(deploymentStatus || '').trim().toUpperCase() === 'DEPLOYED';
 
-    const dataType =
-      raw.dataType ??
-      raw.data_type ??
-      raw.inputType ??
-      raw.input_type ??
-      raw.projectDataType ??
-      raw.project_data_type ??
-      'TABULAR';
+    const dataType = this.resolveModelDataType(raw, predictionEndpoint);
 
     return {
       ...raw,
@@ -267,7 +260,7 @@ export class PredictionService {
         null,
 
       dataType,
-      inputType: raw.inputType ?? raw.input_type ?? dataType,
+      inputType: dataType,
 
       deployed,
 
@@ -327,6 +320,52 @@ export class PredictionService {
         raw.deployed_at ??
         null,
     };
+  }
+
+  private resolveModelDataType(raw: any, predictionEndpoint: string | null): PredictionInputType {
+    const endpoint = String(
+      predictionEndpoint ??
+        raw?.predictionEndpoint ??
+        raw?.prediction_endpoint ??
+        raw?.endpoint ??
+        ''
+    )
+      .trim()
+      .toLowerCase();
+
+    const rawType = String(
+      raw?.dataType ??
+        raw?.data_type ??
+        raw?.modelDataType ??
+        raw?.model_data_type ??
+        raw?.inputType ??
+        raw?.input_type ??
+        raw?.projectDataType ??
+        raw?.project_data_type ??
+        raw?.typeDonnees ??
+        raw?.data_type_name ??
+        ''
+    )
+      .trim()
+      .toUpperCase();
+
+    if (
+      rawType.includes('IMAGE') ||
+      rawType.includes('IMG') ||
+      endpoint.includes('/predict-image')
+    ) {
+      return 'IMAGE';
+    }
+
+    if (
+      rawType.includes('TEXT') ||
+      rawType.includes('NLP') ||
+      endpoint.includes('/predict-text')
+    ) {
+      return 'TEXT';
+    }
+
+    return 'TABULAR';
   }
 
   private isDeployedModel(model: ProductionModel): boolean {

@@ -297,10 +297,12 @@ public class PredictionService {
                     projectId != null ? "Project " + projectId : "-"
             );
 
-            String dataType = firstNonBlankString(
-                    extractStringValue(deployment, "getDataType"),
-                    "TABULAR"
+            String predictionEndpoint = extractStringValue(
+                    deployment,
+                    "getPredictionEndpoint"
             );
+
+            String dataType = resolveProductionDataType(deployment, predictionEndpoint);
 
             String projectType = firstNonBlankString(
                     extractStringValue(deployment, "getProjectType"),
@@ -340,6 +342,39 @@ public class PredictionService {
         }
 
         return new ArrayList<>(uniqueModels.values());
+    }
+
+    private String resolveProductionDataType(ModelDeploymentResponse deployment, String predictionEndpoint) {
+        String endpoint = predictionEndpoint == null ? "" : predictionEndpoint.trim().toLowerCase();
+
+        String rawType = firstNonBlankString(
+                extractStringValue(deployment, "getDataType"),
+                extractStringValue(deployment, "getModelDataType")
+        );
+
+        rawType = firstNonBlankString(
+                rawType,
+                extractStringValue(deployment, "getInputType")
+        );
+
+        rawType = firstNonBlankString(
+                rawType,
+                extractStringValue(deployment, "getProjectDataType")
+        );
+
+        String normalizedRawType = rawType == null ? "" : rawType.trim().toUpperCase();
+
+        if (normalizedRawType.contains("IMAGE") || normalizedRawType.contains("IMG")
+                || endpoint.contains("/predict-image")) {
+            return "IMAGE";
+        }
+
+        if (normalizedRawType.contains("TEXT") || normalizedRawType.contains("NLP")
+                || endpoint.contains("/predict-text")) {
+            return "TEXT";
+        }
+
+        return "TABULAR";
     }
 
     private PredictionResponseDto mapFastApiResponseToDto(Map<String, Object> body) {
