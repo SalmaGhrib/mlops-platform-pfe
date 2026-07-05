@@ -28,7 +28,7 @@ public class ModelServingImageBuildService {
      * Cette version empêche définitivement les images dédiées de repartir avec
      * un ancien main.py qui demande --config ou qui charge mal MLflow.
      */
-    private static final String SAFE_SERVING_TEMPLATE_VERSION = "2026-06-11-fastapi-mlflow-loader-v2";
+    private static final String SAFE_SERVING_TEMPLATE_VERSION = "2026-07-05-fastapi-image-pixel-columns-v3";
 
     private static final String SAFE_DOCKERFILE_TEMPLATE = """
 FROM python:3.10-slim
@@ -95,7 +95,7 @@ mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 app = FastAPI(
     title="Mini MLOps Generic Prediction API",
     description="Generic prediction API for MLflow production models.",
-    version="6.0.0-safe-loader",
+    version="6.1.0-image-pixel-columns",
 )
 
 loaded_models: Dict[str, Dict[str, Any]] = {}
@@ -319,6 +319,36 @@ def validate_pixels(pixels: Any) -> List[float]:
         validated_pixels.append(float(value))
     return validated_pixels
 
+def pixels_to_feature_row(pixels: Any) -> Dict[str, float]:
+    validated_pixels = validate_pixels(pixels)
+    return {f"pixel_{index}": float(value) for index, value in enumerate(validated_pixels)}
+
+def pixels_dataframe_to_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty or "pixels" not in df.columns:
+        return df
+
+    rows: List[Dict[str, float]] = []
+
+    for value in df["pixels"].tolist():
+        parsed_value = parse_possible_json(value)
+        rows.append(pixels_to_feature_row(parsed_value))
+
+    return pd.DataFrame(rows)
+
+def build_image_model_input_from_pixels(
+    pixels: Any,
+    loaded: Optional[Dict[str, Any]] = None
+) -> Tuple[pd.DataFrame, str, List[str]]:
+    validated_pixels = validate_pixels(pixels)
+    loaded_type = normalize_text((loaded or {}).get("type")).lower()
+
+    if loaded_type == "torch":
+        df = pd.DataFrame([{"pixels": validated_pixels}])
+        return df, "image_file_to_pixels", ["pixels"]
+
+    df = pd.DataFrame([pixels_to_feature_row(validated_pixels)])
+    return df, "image_file_to_pixel_columns", list(df.columns)
+
 def dataframe_from_rows(rows: List[Dict[str, Any]]) -> pd.DataFrame:
     if rows is None or len(rows) == 0:
         raise HTTPException(status_code=400, detail="rows must contain at least one input row.")
@@ -404,13 +434,25 @@ def make_predictions(loaded: Dict[str, Any], model_input: pd.DataFrame):
             predictions = model.predict(model_input)
             return normalize_prediction_output(predictions)
         except Exception as exc:
+            pixel_columns_retry_error = None
+
+            if isinstance(model_input, pd.DataFrame) and "pixels" in model_input.columns:
+                try:
+                    converted_input = pixels_dataframe_to_feature_columns(model_input)
+                    predictions = model.predict(converted_input)
+                    return normalize_prediction_output(predictions)
+                except Exception as retry_exc:
+                    pixel_columns_retry_error = str(retry_exc)
+
             error_detail = {
                 "message": "Prediction failed for MLflow pyfunc model.",
                 "error": str(exc),
-                "hint": "For tabular models, send rows with the same feature names used during training.",
+                "hint": "For image models trained with pixel_0..pixel_783 columns, /predict-image automatically converts uploaded images to pixel feature columns.",
             }
             if isinstance(model_input, pd.DataFrame):
                 error_detail["received_columns"] = list(model_input.columns)
+            if pixel_columns_retry_error:
+                error_detail["pixel_columns_retry_error"] = pixel_columns_retry_error
             raise HTTPException(status_code=400, detail=error_detail)
     if model_type == "torch":
         try:
@@ -495,9 +537,7 @@ async def predict_image(image_file: UploadFile = File(...), model_name: str = Fo
         loaded, model_uri, version_info = load_model_from_registry(model_name=model_name, model_alias=model_alias)
         if grayscale and image_size == 28:
             pixels = image_array.reshape(-1).astype(float).tolist()
-            model_input = pd.DataFrame([{"pixels": pixels}])
-            prediction_mode = "image_file_to_pixels"
-            input_columns = ["pixels"]
+            model_input, prediction_mode, input_columns = build_image_model_input_from_pixels(pixels, loaded)
         else:
             model_input = pd.DataFrame([{"image": image_array.tolist()}])
             prediction_mode = "image_file"
