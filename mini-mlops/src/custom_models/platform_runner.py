@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import pickle
 import re
@@ -196,6 +197,404 @@ def parse_metrics(stdout: str) -> Dict[str, float]:
                 break
 
     return metrics
+
+
+
+def _clean_env_value(value: Optional[str]) -> str:
+    value = str(value or "").strip()
+    if value.lower() in {"", "none", "null", "undefined", "-"}:
+        return ""
+    return value
+
+
+def _truthy_env(name: str, default: bool = True) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() not in {"false", "0", "no", "off"}
+
+
+def get_target_column_from_platform() -> str:
+    """
+    Colonne cible configurée côté plateforme.
+    L'utilisateur n'a pas besoin de la coder dans son script.
+    """
+    return _clean_env_value(
+        os.environ.get("TARGET_COLUMN")
+        or os.environ.get("ML_TARGET_COLUMN")
+        or os.environ.get("DATASET_TARGET_COLUMN")
+    )
+
+
+def get_project_type_from_platform() -> str:
+    value = _clean_env_value(
+        os.environ.get("PROJECT_TYPE")
+        or os.environ.get("PROBLEM_TYPE")
+        or os.environ.get("ML_PROBLEM_TYPE")
+    ).lower().replace("-", "_").replace(" ", "_")
+
+    if value in {"regression", "regressor"}:
+        return "regression"
+
+    if value in {"classification", "classifier", "image_classification", "sentiment", "sentiment_analysis"}:
+        return "classification"
+
+    return value
+
+
+def get_platform_metric_priorities() -> List[str]:
+    """
+    Ordre de priorité choisi dans la plateforme.
+    Le script utilisateur peut ne rien imprimer : la plateforme calcule les métriques
+    compatibles si elle connaît target_column + dataset.
+    """
+    raw_values = [
+        os.environ.get("PRIMARY_METRIC"),
+        os.environ.get("PRIMARY_METRIC_1"),
+        os.environ.get("PRIMARY_METRIC_2"),
+        os.environ.get("PRIMARY_METRIC_3"),
+        os.environ.get("ML_PRIMARY_METRIC"),
+    ]
+
+    priorities: List[str] = []
+    for raw in raw_values:
+        normalized = normalize_metric_name(_clean_env_value(raw))
+        if normalized and normalized not in priorities:
+            priorities.append(normalized)
+
+    if priorities:
+        return priorities
+
+    project_type = get_project_type_from_platform()
+    if project_type == "regression":
+        return ["rmse", "mae", "r2", "mse"]
+
+    return ["f1_score", "accuracy", "precision", "recall"]
+
+
+def merge_metrics(base: Dict[str, float], extra: Dict[str, float], overwrite: bool = False) -> Dict[str, float]:
+    merged: Dict[str, float] = dict(base or {})
+    for key, value in (extra or {}).items():
+        normalized = normalize_metric_name(str(key))
+        if not normalized:
+            continue
+        try:
+            numeric_value = float(value)
+        except Exception:
+            continue
+        if overwrite or normalized not in merged:
+            merged[normalized] = numeric_value
+    return merged
+
+
+def load_metrics_json(workspace: Path) -> Dict[str, float]:
+    """
+    Permet aux utilisateurs avancés de sauvegarder simplement un metrics.json,
+    sans écrire du code MLflow.
+    """
+    candidates = [
+        workspace / "metrics.json",
+        workspace / "outputs" / "metrics.json",
+        workspace / "artifacts" / "metrics.json",
+        workspace / "model" / "metrics.json",
+    ]
+
+    metrics: Dict[str, float] = {}
+
+    for path in candidates:
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                continue
+            parsed = {}
+            for key, value in data.items():
+                try:
+                    parsed[normalize_metric_name(str(key))] = float(value)
+                except Exception:
+                    pass
+            if parsed:
+                print(f"[PLATFORM_METRICS] metrics loaded from {path}: {parsed}")
+                metrics = merge_metrics(metrics, parsed)
+        except Exception as exc:
+            print(f"[PLATFORM_METRICS] could not read metrics file {path}: {exc}")
+
+    return metrics
+
+
+def find_dataset_for_auto_metrics(workspace: Path, dataset_path: Optional[Path]) -> Optional[Path]:
+    candidates: List[Path] = []
+
+    if dataset_path is not None:
+        candidates.append(dataset_path)
+
+    env_candidates = [
+        os.environ.get("DATASET_PATH"),
+        os.environ.get("DATA_PATH"),
+        os.environ.get("MLOPS_DATASET_PATH"),
+        os.environ.get("MLOPS_DATA_PATH"),
+    ]
+
+    for raw in env_candidates:
+        cleaned = _clean_env_value(raw)
+        if cleaned:
+            candidates.append(Path(cleaned))
+
+    candidates.extend([
+        workspace / "dataset.csv",
+        workspace / "data.csv",
+        workspace / "train.csv",
+        workspace / "input.csv",
+        workspace / "data" / "dataset.csv",
+        workspace / "data" / "iris.csv",
+    ])
+
+    for candidate in candidates:
+        try:
+            candidate = candidate.resolve()
+            if candidate.exists() and candidate.is_file():
+                return candidate
+        except Exception:
+            continue
+
+    try:
+        csv_files = sorted(workspace.rglob("*.csv"), key=lambda p: p.stat().st_size, reverse=True)
+        for csv_file in csv_files:
+            lower_name = csv_file.name.lower()
+            if lower_name in {"metrics.csv", "predictions.csv"}:
+                continue
+            return csv_file.resolve()
+    except Exception:
+        pass
+
+    return None
+
+
+def infer_target_column(df) -> Optional[str]:
+    configured = get_target_column_from_platform()
+    if configured:
+        if configured in df.columns:
+            return configured
+        print(f"[PLATFORM_METRICS] configured target column '{configured}' not found. Available columns={list(df.columns)}")
+        return None
+
+    if not _truthy_env("PLATFORM_AUTO_INFER_TARGET", True):
+        return None
+
+    common_targets = ["target", "label", "class", "y", "price", "output", "result"]
+    for name in common_targets:
+        if name in df.columns:
+            print(f"[PLATFORM_METRICS] target column auto-inferred: {name}")
+            return name
+
+    if len(df.columns) >= 2:
+        inferred = str(df.columns[-1])
+        print(f"[PLATFORM_METRICS] target column auto-inferred as last column: {inferred}")
+        return inferred
+
+    return None
+
+
+def infer_problem_type_from_data(y_true, metric_priorities: List[str]) -> str:
+    project_type = get_project_type_from_platform()
+    if project_type in {"regression", "classification"}:
+        return project_type
+
+    if any(metric in {"rmse", "mae", "mse", "r2"} for metric in metric_priorities):
+        return "regression"
+
+    if any(metric in {"accuracy", "precision", "recall", "f1_score", "f1"} for metric in metric_priorities):
+        return "classification"
+
+    try:
+        unique_count = y_true.nunique(dropna=True)
+        dtype_name = str(y_true.dtype).lower()
+        is_numeric = any(token in dtype_name for token in ["int", "float", "double"])
+        if is_numeric and unique_count > 20:
+            return "regression"
+    except Exception:
+        pass
+
+    return "classification"
+
+
+def load_pickle_or_joblib(path: Path) -> Any:
+    try:
+        return joblib.load(path)
+    except Exception:
+        with path.open("rb") as file:
+            return pickle.load(file)
+
+
+def _object_feature_names(obj: Any) -> Optional[List[str]]:
+    if obj is None:
+        return None
+    names = getattr(obj, "feature_names_in_", None)
+    if names is None:
+        return None
+    try:
+        return [str(name) for name in list(names)]
+    except Exception:
+        return None
+
+
+def _align_dataframe_for_object(X, obj: Any):
+    try:
+        import pandas as pd
+    except Exception:
+        return X
+
+    if not isinstance(X, pd.DataFrame):
+        return X
+
+    expected = _object_feature_names(obj)
+    if not expected:
+        return X
+
+    missing = [column for column in expected if column not in X.columns]
+    if missing:
+        raise ValueError("Missing columns for automatic evaluation: " + ", ".join(missing[:20]))
+
+    extra = [column for column in X.columns if column not in expected]
+    if extra:
+        print("[PLATFORM_METRICS] ignored extra columns: " + ", ".join(extra[:20]))
+
+    return X[expected]
+
+
+def _apply_transformer_if_present(transformer: Any, X, label: str):
+    if transformer is None:
+        return X
+    if hasattr(transformer, "transform"):
+        X = _align_dataframe_for_object(X, transformer)
+        print(f"[PLATFORM_METRICS] applying {label}.transform()")
+        return transformer.transform(X)
+    if callable(transformer):
+        print(f"[PLATFORM_METRICS] applying callable {label}")
+        return transformer(X)
+    return X
+
+
+def predict_with_artifacts_for_metrics(model_path: Path, companion_artifacts: Dict[str, str], X):
+    model = load_pickle_or_joblib(model_path)
+
+    preprocessor = None
+    vectorizer = None
+    scaler = None
+
+    if companion_artifacts.get("preprocessor_path"):
+        preprocessor = load_pickle_or_joblib(Path(companion_artifacts["preprocessor_path"]))
+    if companion_artifacts.get("vectorizer_path"):
+        vectorizer = load_pickle_or_joblib(Path(companion_artifacts["vectorizer_path"]))
+    if companion_artifacts.get("scaler_path"):
+        scaler = load_pickle_or_joblib(Path(companion_artifacts["scaler_path"]))
+
+    X_work = X.copy() if hasattr(X, "copy") else X
+
+    try:
+        X_work = _align_dataframe_for_object(X_work, model)
+        return model.predict(X_work)
+    except Exception as raw_error:
+        print(f"[PLATFORM_METRICS] direct model.predict failed, trying companion artifacts: {raw_error}")
+
+    X_work = X.copy() if hasattr(X, "copy") else X
+    X_work = _apply_transformer_if_present(preprocessor, X_work, "preprocessor")
+    X_work = _apply_transformer_if_present(vectorizer, X_work, "vectorizer")
+    X_work = _apply_transformer_if_present(scaler, X_work, "scaler")
+
+    if hasattr(model, "predict"):
+        return model.predict(X_work)
+
+    if callable(model):
+        return model(X_work)
+
+    raise ValueError("Model is neither callable nor has predict().")
+
+
+def auto_evaluate_metrics_from_platform(
+    workspace: Path,
+    dataset_path: Optional[Path],
+    primary_model_path: Optional[Path],
+    companion_artifacts: Optional[Dict[str, str]] = None,
+) -> Dict[str, float]:
+    """
+    Calcule automatiquement les métriques selon la configuration du projet.
+
+    Objectif : l'utilisateur n'a pas besoin d'écrire accuracy/rmse dans son script.
+    La plateforme utilise PROJECT_TYPE + TARGET_COLUMN + PRIMARY_METRIC_1/2/3.
+    """
+    if primary_model_path is None:
+        return {}
+
+    if primary_model_path.suffix.lower() not in {".pkl", ".joblib", ".pickle"}:
+        print(f"[PLATFORM_METRICS] automatic metrics skipped for non pickle/joblib model: {primary_model_path}")
+        return {}
+
+    dataset_for_metrics = find_dataset_for_auto_metrics(workspace, dataset_path)
+    if dataset_for_metrics is None:
+        print("[PLATFORM_METRICS] automatic metrics skipped: dataset not found.")
+        return {}
+
+    try:
+        import pandas as pd
+        from sklearn.metrics import (
+            accuracy_score,
+            f1_score,
+            mean_absolute_error,
+            mean_squared_error,
+            precision_score,
+            r2_score,
+            recall_score,
+        )
+
+        df = pd.read_csv(dataset_for_metrics)
+        if df.empty:
+            print("[PLATFORM_METRICS] automatic metrics skipped: dataset is empty.")
+            return {}
+
+        target_column = infer_target_column(df)
+        if not target_column:
+            print("[PLATFORM_METRICS] automatic metrics skipped: target column is not configured or inferable.")
+            return {}
+
+        X = df.drop(columns=[target_column])
+        y_true = df[target_column]
+
+        priorities = get_platform_metric_priorities()
+        problem_type = infer_problem_type_from_data(y_true, priorities)
+
+        y_pred = predict_with_artifacts_for_metrics(
+            model_path=primary_model_path,
+            companion_artifacts=companion_artifacts or {},
+            X=X,
+        )
+
+        metrics: Dict[str, float] = {}
+        if problem_type == "regression":
+            mse = float(mean_squared_error(y_true, y_pred))
+            metrics["mse"] = mse
+            metrics["rmse"] = float(math.sqrt(max(mse, 0.0)))
+            metrics["mae"] = float(mean_absolute_error(y_true, y_pred))
+            metrics["r2"] = float(r2_score(y_true, y_pred))
+        else:
+            metrics["accuracy"] = float(accuracy_score(y_true, y_pred))
+            metrics["precision"] = float(precision_score(y_true, y_pred, average="weighted", zero_division=0))
+            metrics["recall"] = float(recall_score(y_true, y_pred, average="weighted", zero_division=0))
+            metrics["f1_score"] = float(f1_score(y_true, y_pred, average="weighted", zero_division=0))
+
+        print(
+            "[PLATFORM_METRICS] automatic metrics computed. "
+            f"dataset={dataset_for_metrics}, target={target_column}, problem_type={problem_type}, priorities={priorities}"
+        )
+        for name, value in metrics.items():
+            print(f"[PLATFORM_METRIC_AUTO] {name}={value}")
+
+        return metrics
+
+    except Exception as exc:
+        print(f"[PLATFORM_METRICS] automatic metrics failed: {exc}")
+        return {}
 
 
 
@@ -1107,8 +1506,24 @@ def run_standard_runtime(
 
     script_end_time_ms = int(time.time() * 1000)
 
-    metrics = parse_metrics(result.stdout)
+    metrics = merge_metrics(parse_metrics(result.stdout), load_metrics_json(workspace))
     model_artifacts = find_model_artifacts(workspace)
+
+    # Métriques automatiques calculées par la plateforme.
+    # Elles complètent les métriques imprimées par le script, sans les écraser.
+    pre_primary_model_path = select_primary_model_artifact(model_artifacts)
+    pre_companion_artifacts = (
+        find_companion_artifacts(pre_primary_model_path, model_artifacts)
+        if pre_primary_model_path
+        else {}
+    )
+    auto_metrics = auto_evaluate_metrics_from_platform(
+        workspace=workspace,
+        dataset_path=dataset_path,
+        primary_model_path=pre_primary_model_path,
+        companion_artifacts=pre_companion_artifacts,
+    )
+    metrics = merge_metrics(metrics, auto_metrics, overwrite=False)
 
     logged_model_uri: Optional[str] = None
     platform_model_registered = False

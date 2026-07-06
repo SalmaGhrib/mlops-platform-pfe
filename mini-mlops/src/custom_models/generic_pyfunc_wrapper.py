@@ -214,6 +214,47 @@ class GenericPyFuncWrapper(mlflow.pyfunc.PythonModel):
 
         return X[expected]
 
+
+    def _align_dataframe_by_feature_count(self, X):
+        """
+        Fallback si l'objet n'a pas feature_names_in_ mais a n_features_in_.
+        Utile pour des modèles entraînés sur numpy arrays.
+        """
+        if not isinstance(X, pd.DataFrame):
+            return X
+
+        expected_count = None
+        for obj in [self.preprocessor, self.scaler, self.model]:
+            if obj is None:
+                continue
+            count = getattr(obj, "n_features_in_", None)
+            if count is not None:
+                try:
+                    expected_count = int(count)
+                    break
+                except Exception:
+                    pass
+
+        if expected_count is None:
+            return X
+
+        candidate = X.copy()
+        for target_like in ["target", "label", "class", "y", "price", "output", "result"]:
+            if target_like in candidate.columns and candidate.shape[1] > expected_count:
+                candidate = candidate.drop(columns=[target_like])
+
+        if candidate.shape[1] == expected_count:
+            return candidate
+
+        numeric_candidate = candidate.select_dtypes(include=["number", "bool"])
+        if numeric_candidate.shape[1] >= expected_count:
+            print(
+                f"[GENERIC_PYFUNC] selecting first {expected_count} numeric columns by feature count fallback."
+            )
+            return numeric_candidate.iloc[:, :expected_count]
+
+        return X
+
     def _apply_transformer(self, transformer, X, name: str):
         if transformer is None:
             return X
@@ -237,6 +278,7 @@ class GenericPyFuncWrapper(mlflow.pyfunc.PythonModel):
         # si un scaler/preprocessor a été entraîné sur un DataFrame,
         # il garde feature_names_in_. On réordonne donc les colonnes avant transform().
         X = self._align_dataframe_features(X)
+        X = self._align_dataframe_by_feature_count(X)
 
         # Ordre logique :
         # preprocessor -> vectorizer/scaler -> model
