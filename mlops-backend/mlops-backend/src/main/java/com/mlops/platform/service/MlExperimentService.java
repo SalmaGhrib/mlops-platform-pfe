@@ -210,10 +210,17 @@ public class MlExperimentService {
 
         String projectType = normalizeProjectType(project.getProjectType());
 
-        String projectPrimaryMetric = defaultValue(project.getPrimaryMetric1(), primaryMetric);
+        String projectPrimaryMetric = firstNotBlank(
+                project.getPrimaryMetric1(),
+                primaryMetric,
+                defaultPrimaryMetricForProject(project)
+        );
+
         if (projectPrimaryMetric == null || projectPrimaryMetric.isBlank()) {
-            projectPrimaryMetric = "accuracy";
+            projectPrimaryMetric = defaultPrimaryMetricForProject(project);
         }
+
+        projectPrimaryMetric = normalizeMetricKey(projectPrimaryMetric);
 
         String primaryMode = getDirectionFromMetric(projectPrimaryMetric);
 
@@ -910,10 +917,16 @@ experiment.setMessage(
                     continue;
                 }
 
-                String primaryMetric = project.getPrimaryMetric1();
+                String primaryMetric = firstNotBlank(
+                        project.getPrimaryMetric1(),
+                        defaultPrimaryMetricForProject(project)
+                );
+
                 if (primaryMetric == null || primaryMetric.isBlank()) {
-                    primaryMetric = "accuracy";
+                    primaryMetric = defaultPrimaryMetricForProject(project);
                 }
+
+                primaryMetric = normalizeMetricKey(primaryMetric);
 
                 Map<String, Double> metrics = runDetails.getMetrics();
 
@@ -924,11 +937,32 @@ experiment.setMessage(
                         runDetails.getTag("version")
                 );
 
+                MlflowTrackingClientService.ModelVersionInfo runVersionInfo =
+                        mlflowTrackingClientService.findModelVersionInfoByRunId(
+                                registeredModelName,
+                                mlflowRunId
+                        );
+
+                if (runVersionInfo != null
+                        && runVersionInfo.getVersion() != null
+                        && !runVersionInfo.getVersion().isBlank()) {
+                    modelVersion = runVersionInfo.getVersion();
+                }
+
                 String productionVersion = firstNotBlank(
                         mlflowTrackingClientService.getProductionVersion(registeredModelName),
                         runDetails.getTag("production_version"),
                         runDetails.getTag("production_model_version")
                 );
+
+                System.out.println("[MLFLOW_SYNC] import runId="
+                        + mlflowRunId
+                        + ", runVersion="
+                        + modelVersion
+                        + ", productionVersion="
+                        + productionVersion
+                        + ", registeredModel="
+                        + registeredModelName);
 
                 String kubeflowRunIdFromTags = firstNotBlank(
         runDetails.getTag("kubeflow_run_id"),
@@ -1034,6 +1068,34 @@ if (experimentToSave == null) {
                 }
 
                 mlflowTrackingClientService.syncModelRegistryForExperiment(savedExperiment);
+
+                /*
+                 * Protection versioning :
+                 * la version affichée sur cette ligne doit rester la version associée
+                 * au run MLflow importé, pas la version production globale.
+                 */
+                if (hasText(modelVersion)) {
+                    savedExperiment.setModelVersion(modelVersion);
+                    savedExperiment.setLatestVersion(modelVersion);
+                }
+
+                String refreshedProductionVersion =
+                        mlflowTrackingClientService.getProductionVersion(registeredModelName);
+
+                if (hasText(refreshedProductionVersion)) {
+                    savedExperiment.setProductionVersion(refreshedProductionVersion);
+                }
+
+                savedExperiment.setProduction(isProductionExperimentRow(savedExperiment));
+
+                System.out.println("[MLFLOW_SYNC] imported runId="
+                        + mlflowRunId
+                        + ", runVersion="
+                        + savedExperiment.getModelVersion()
+                        + ", productionVersion="
+                        + savedExperiment.getProductionVersion()
+                        + ", isProduction="
+                        + savedExperiment.getProduction());
 
                 MlExperiment finalSavedExperiment = mlExperimentRepository.saveAndFlush(savedExperiment);
                 notifyExperimentStatusChangedIfNeeded(previousStatus, finalSavedExperiment);
@@ -1307,15 +1369,20 @@ private boolean isProductionExperimentRow(MlExperiment experiment) {
         return false;
     }
 
-    if (Boolean.TRUE.equals(experiment.getProduction())) {
-        return true;
-    }
-
+    /*
+     * Source de vérité :
+     * une ligne est Production UNIQUEMENT si sa version de run MLflow
+     * est exactement la version pointée par l'alias production.
+     *
+     * On ne fait plus confiance au booléen is_production seul, car une ancienne
+     * synchronisation peut l'avoir mis à true sur plusieurs lignes.
+     */
     return hasText(experiment.getProductionVersion())
             && hasText(experiment.getModelVersion())
             && experiment.getProductionVersion().trim()
             .equalsIgnoreCase(experiment.getModelVersion().trim());
 }
+
 
 private List<MlExperiment> filterAndDeduplicateVisibleExperiments(List<MlExperiment> experiments) {
     if (experiments == null || experiments.isEmpty()) {
@@ -2848,11 +2915,34 @@ private void updateMessageFromFinalStatus(
 
     mlflowTrackingClientService.syncModelRegistryForExperiment(savedExperiment);
 
-    savedExperiment.setProduction(
-            savedExperiment.getProductionVersion() != null
-                    && savedExperiment.getModelVersion() != null
-                    && savedExperiment.getProductionVersion().equals(savedExperiment.getModelVersion())
-    );
+    /*
+     * Protection versioning :
+     * syncModelRegistryForExperiment peut rafraîchir les infos Registry.
+     * Mais la version d'une ligne doit rester la version liée à SON run_id,
+     * jamais la version globale pointée par l'alias production.
+     */
+    if (hasText(modelVersion)) {
+        savedExperiment.setModelVersion(modelVersion);
+        savedExperiment.setLatestVersion(modelVersion);
+    }
+
+    String refreshedProductionVersion =
+            mlflowTrackingClientService.getProductionVersion(preferredRegisteredModelName);
+
+    if (hasText(refreshedProductionVersion)) {
+        savedExperiment.setProductionVersion(refreshedProductionVersion);
+    }
+
+    savedExperiment.setProduction(isProductionExperimentRow(savedExperiment));
+
+    System.out.println("[MLFLOW_SYNC] runId="
+            + effectiveRunId
+            + ", runVersion="
+            + savedExperiment.getModelVersion()
+            + ", productionVersion="
+            + savedExperiment.getProductionVersion()
+            + ", isProduction="
+            + savedExperiment.getProduction());
 
     MlExperiment finalSavedExperiment = mlExperimentRepository.saveAndFlush(savedExperiment);
 
@@ -2990,7 +3080,7 @@ private String limitForDatabase(String value, int maxLength) {
             continue;
         }
 
-        String normalizedMetricName = entry.getKey().trim().toLowerCase();
+        String normalizedMetricName = normalizeMetricKey(entry.getKey());
 
         if (!isDisplayablePerformanceMetric(normalizedMetricName)) {
             continue;
@@ -3014,35 +3104,43 @@ private String limitForDatabase(String value, int maxLength) {
     }
 }
     private boolean isDisplayablePerformanceMetric(String metricName) {
-        if (metricName == null || metricName.isBlank()) {
-            return false;
-        }
+    String normalized = normalizeMetricKey(metricName);
 
-        String normalized = metricName.trim().toLowerCase();
-
-        if (normalized.equals("prediction")
-                || normalized.equals("prediction_example")
-                || normalized.equals("sample_prediction")
-                || normalized.contains("example")) {
-            return false;
-        }
-
-        return normalized.equals("accuracy")
-                || normalized.equals("precision")
-                || normalized.equals("precision_weighted")
-                || normalized.equals("recall")
-                || normalized.equals("recall_weighted")
-                || normalized.equals("f1")
-                || normalized.equals("f1_score")
-                || normalized.equals("f1_weighted")
-                || normalized.equals("r2")
-                || normalized.equals("r2_score")
-                || normalized.equals("rmse")
-                || normalized.equals("mae")
-                || normalized.equals("mse")
-                || normalized.contains("loss")
-                || normalized.contains("error");
+    if (normalized.isBlank()) {
+        return false;
     }
+
+    if (normalized.equals("prediction")
+            || normalized.equals("prediction_example")
+            || normalized.equals("sample_prediction")
+            || normalized.equals("return_code")
+            || normalized.equals("status")
+            || normalized.equals("epoch")
+            || normalized.equals("step")
+            || normalized.contains("example")) {
+        return false;
+    }
+
+    return normalized.equals("accuracy")
+            || normalized.equals("acc")
+            || normalized.equals("precision")
+            || normalized.equals("precision_weighted")
+            || normalized.equals("recall")
+            || normalized.equals("recall_weighted")
+            || normalized.equals("f1")
+            || normalized.equals("f1_score")
+            || normalized.equals("f1_weighted")
+            || normalized.equals("r2")
+            || normalized.equals("r2_score")
+            || normalized.equals("rmse")
+            || normalized.equals("mae")
+            || normalized.equals("mse")
+            || normalized.equals("log_loss")
+            || normalized.equals("loss")
+            || normalized.contains("loss")
+            || normalized.contains("error");
+}
+
 
    private Map<String, Double> getMetricsMap(MlExperiment experiment) {
     Map<String, Double> result = new LinkedHashMap<>();
@@ -3062,88 +3160,96 @@ private String limitForDatabase(String value, int maxLength) {
             continue;
         }
 
-        String metricName = metric.getMetricName();
+        String metricName = normalizeMetricKey(metric.getMetricName());
 
-        if (metricName == null || !isDisplayablePerformanceMetric(metricName)) {
+        if (metricName.isBlank() || !isDisplayablePerformanceMetric(metricName)) {
             continue;
         }
 
         if (metric.getMetricValue() != null) {
-            result.put(metricName.trim().toLowerCase(), metric.getMetricValue());
+            result.put(metricName, metric.getMetricValue());
         }
     }
 
     return result;
 }
 
+
     private void updatePrimaryMetricFromProjectPriority(
-            MlProject project,
-            MlExperiment experiment,
-            Map<String, Double> metrics
-    ) {
-        if (experiment == null || metrics == null || metrics.isEmpty()) {
-            return;
-        }
-
-        String primaryMetric = null;
-
-        if (project != null && project.getPrimaryMetric1() != null && !project.getPrimaryMetric1().isBlank()) {
-            primaryMetric = project.getPrimaryMetric1();
-        } else if (experiment.getPrimaryMetric() != null && !experiment.getPrimaryMetric().isBlank()) {
-            primaryMetric = experiment.getPrimaryMetric();
-        }
-
-        if (primaryMetric != null && !primaryMetric.isBlank()) {
-            Double primaryMetricValue = getMetricValueCompatible(metrics, primaryMetric);
-
-            if (primaryMetricValue != null) {
-                experiment.setPrimaryMetric(primaryMetric);
-                experiment.setDirection(getDirectionFromMetric(primaryMetric));
-                experiment.setPrimaryMetricValue(primaryMetricValue);
-                return;
-            }
-        }
-
-        updatePrimaryMetricFromAvailableMetrics(experiment, metrics);
+        MlProject project,
+        MlExperiment experiment,
+        Map<String, Double> metrics
+) {
+    if (experiment == null || metrics == null || metrics.isEmpty()) {
+        return;
     }
 
-    private void updatePrimaryMetricFromAvailableMetrics(MlExperiment experiment, Map<String, Double> metrics) {
-        if (experiment == null || metrics == null || metrics.isEmpty()) {
+    Map<String, Double> normalizedMetrics = normalizeMetricsMap(metrics);
+    List<String> priorities = getProjectMetricPriorities(project);
+
+    for (String metricName : priorities) {
+        if (!isMetricCompatibleWithProjectType(project, metricName)) {
+            continue;
+        }
+
+        Double value = getMetricValueCompatible(normalizedMetrics, metricName);
+
+        if (value != null) {
+            String normalizedMetric = normalizeMetricKey(metricName);
+            experiment.setPrimaryMetric(normalizedMetric);
+            experiment.setDirection(getDirectionFromMetric(normalizedMetric));
+            experiment.setPrimaryMetricValue(value);
             return;
         }
+    }
 
-        List<String> priority = List.of(
-                "f1_score",
-                "f1_weighted",
-                "f1",
-                "accuracy",
-                "precision",
-                "precision_weighted",
-                "recall",
-                "recall_weighted",
-                "r2",
-                "r2_score",
-                "rmse",
-                "mae",
-                "mse"
-        );
+    updatePrimaryMetricFromAvailableMetrics(project, experiment, normalizedMetrics);
+}
 
-        for (String metricName : priority) {
-            Double value = getMetricValueIgnoreCase(metrics, metricName);
 
-            if (value != null) {
-                experiment.setPrimaryMetric(metricName);
-                experiment.setDirection(getDirectionFromMetric(metricName));
-                experiment.setPrimaryMetricValue(value);
-                return;
-            }
+    private void updatePrimaryMetricFromAvailableMetrics(
+        MlProject project,
+        MlExperiment experiment,
+        Map<String, Double> metrics
+) {
+    if (experiment == null || metrics == null || metrics.isEmpty()) {
+        return;
+    }
+
+    List<String> priority = isRegressionProject(project)
+            ? List.of("rmse", "mae", "r2", "r2_score", "mse")
+            : List.of("f1_score", "f1_weighted", "f1", "accuracy", "precision", "precision_weighted", "recall", "recall_weighted");
+
+    for (String metricName : priority) {
+        Double value = getMetricValueCompatible(metrics, metricName);
+
+        if (value != null) {
+            String normalizedMetric = normalizeMetricKey(metricName);
+            experiment.setPrimaryMetric(normalizedMetric);
+            experiment.setDirection(getDirectionFromMetric(normalizedMetric));
+            experiment.setPrimaryMetricValue(value);
+            return;
+        }
+    }
+
+    for (Map.Entry<String, Double> entry : metrics.entrySet()) {
+        if (entry == null || entry.getKey() == null || entry.getValue() == null) {
+            continue;
         }
 
-        Map.Entry<String, Double> firstMetric = metrics.entrySet().iterator().next();
-        experiment.setPrimaryMetric(firstMetric.getKey());
-        experiment.setDirection(getDirectionFromMetric(firstMetric.getKey()));
-        experiment.setPrimaryMetricValue(firstMetric.getValue());
+        String normalizedMetric = normalizeMetricKey(entry.getKey());
+
+        if (!isMetricCompatibleWithProjectType(project, normalizedMetric)) {
+            continue;
+        }
+
+        experiment.setPrimaryMetric(normalizedMetric);
+        experiment.setDirection(getDirectionFromMetric(normalizedMetric));
+        experiment.setPrimaryMetricValue(entry.getValue());
+        return;
     }
+}
+
 
     private Double calculateSingleExperimentGlobalScore(MlProject project, Map<String, Double> metrics) {
     return calculatePriorityGlobalScore(project, metrics);
@@ -3170,9 +3276,17 @@ public void recalculateGlobalScoresForProject(MlProject project, String register
 
         if (metrics == null || metrics.isEmpty()) {
             experiment.setGlobalScore(null);
-            experiment.setPrimaryMetric(project.getPrimaryMetric1());
+
+            String fallbackPrimaryMetric = firstNotBlank(
+                    project.getPrimaryMetric1(),
+                    defaultPrimaryMetricForProject(project)
+            );
+
+            fallbackPrimaryMetric = normalizeMetricKey(fallbackPrimaryMetric);
+
+            experiment.setPrimaryMetric(fallbackPrimaryMetric);
             experiment.setPrimaryMetricValue(null);
-            experiment.setDirection(getDirectionFromMetric(project.getPrimaryMetric1()));
+            experiment.setDirection(getDirectionFromMetric(fallbackPrimaryMetric));
 
             mlExperimentRepository.saveAndFlush(experiment);
             updateMetricRowsGlobalScore(experiment);
@@ -3300,59 +3414,95 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
     List<String> priorities = new ArrayList<>();
 
     if (project == null) {
+        priorities.add("accuracy");
         return priorities;
     }
 
-    if (project.getPrimaryMetric1() != null && !project.getPrimaryMetric1().isBlank()) {
-        priorities.add(project.getPrimaryMetric1().trim().toLowerCase());
+    List<String> configured = List.of(
+            project.getPrimaryMetric1(),
+            project.getPrimaryMetric2(),
+            project.getPrimaryMetric3()
+    );
+
+    for (String metric : configured) {
+        String normalized = normalizeMetricKey(metric);
+
+        if (normalized.isBlank()) {
+            continue;
+        }
+
+        if (!isMetricCompatibleWithProjectType(project, normalized)) {
+            System.out.println("[METRICS] Ignored incompatible project metric. project="
+                    + project.getName()
+                    + ", projectType="
+                    + project.getProjectType()
+                    + ", metric="
+                    + metric);
+            continue;
+        }
+
+        if (!priorities.contains(normalized)) {
+            priorities.add(normalized);
+        }
     }
 
-    if (project.getPrimaryMetric2() != null && !project.getPrimaryMetric2().isBlank()) {
-        priorities.add(project.getPrimaryMetric2().trim().toLowerCase());
+    if (!priorities.isEmpty()) {
+        return priorities;
     }
 
-    if (project.getPrimaryMetric3() != null && !project.getPrimaryMetric3().isBlank()) {
-        priorities.add(project.getPrimaryMetric3().trim().toLowerCase());
+    if (isRegressionProject(project)) {
+        priorities.add("rmse");
+        priorities.add("mae");
+        priorities.add("r2");
+        priorities.add("mse");
+        return priorities;
     }
 
+    priorities.add("f1_score");
+    priorities.add("accuracy");
+    priorities.add("precision");
+    priorities.add("recall");
     return priorities;
 }
+
 
     private Double calculatePriorityGlobalScore(MlProject project, Map<String, Double> metrics) {
     if (project == null || metrics == null || metrics.isEmpty()) {
         return null;
     }
 
+    Map<String, Double> normalizedMetrics = normalizeMetricsMap(metrics);
     List<String> priorities = getProjectMetricPriorities(project);
 
     if (priorities == null || priorities.isEmpty()) {
         return null;
     }
 
-    /*
-     * Le globalScore devient un score indicatif basé sur la première métrique disponible
-     * selon l'ordre choisi par l'utilisateur.
-     *
-     * Exemple :
-     * priorité 1 = f1_score
-     * priorité 2 = accuracy
-     * priorité 3 = precision
-     *
-     * Si f1_score existe dans le run, globalScore = score normalisé de f1_score.
-     * Sinon on prend accuracy, puis precision.
-     */
     for (String metricName : priorities) {
         if (metricName == null || metricName.isBlank()) {
             continue;
         }
 
-        Double metricValue = getMetricValueCompatible(metrics, metricName);
+        if (!isMetricCompatibleWithProjectType(project, metricName)) {
+            continue;
+        }
+
+        Double metricValue = getMetricValueCompatible(normalizedMetrics, metricName);
 
         if (metricValue == null) {
             continue;
         }
 
         Double normalizedScore = normalizeMetricScore(metricName, metricValue);
+
+        System.out.println("[METRICS] projectType="
+                + project.getProjectType()
+                + ", selectedMetric="
+                + normalizeMetricKey(metricName)
+                + ", value="
+                + metricValue
+                + ", globalScore="
+                + normalizedScore);
 
         if (normalizedScore != null) {
             return normalizedScore;
@@ -3361,32 +3511,42 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
 
     return null;
 }
+
     private Double normalizeMetricScore(String metricName, Double value) {
-        if (metricName == null || value == null) {
-            return null;
-        }
-
-        String direction = getDirectionFromMetric(metricName);
-
-        if ("min".equalsIgnoreCase(direction)) {
-            double safeValue = Math.max(value, 0.0);
-            return roundDouble(1.0 / (1.0 + safeValue), 6);
-        }
-
-        if (value >= 0.0 && value <= 1.0) {
-            return roundDouble(value, 6);
-        }
-
-        if (value > 1.0 && value <= 100.0) {
-            return roundDouble(value / 100.0, 6);
-        }
-
-        if (value < 0.0) {
-            return 0.0;
-        }
-
-        return 1.0;
+    if (metricName == null || value == null) {
+        return null;
     }
+
+    String normalizedMetric = normalizeMetricKey(metricName);
+    String direction = getDirectionFromMetric(normalizedMetric);
+
+    /*
+     * Les métriques à minimiser comme RMSE/MAE/MSE sont transformées en score 0..1 :
+     * plus l'erreur est petite, plus le score est proche de 1.
+     */
+    if ("min".equalsIgnoreCase(direction)) {
+        double safeValue = Math.max(value, 0.0);
+        return roundDouble(1.0 / (1.0 + safeValue), 6);
+    }
+
+    /*
+     * Accuracy/F1/Precision/Recall/R2 sont naturellement des scores.
+     */
+    if (value >= 0.0 && value <= 1.0) {
+        return roundDouble(value, 6);
+    }
+
+    if (value > 1.0 && value <= 100.0) {
+        return roundDouble(value / 100.0, 6);
+    }
+
+    if (value < 0.0) {
+        return 0.0;
+    }
+
+    return 1.0;
+}
+
 
     private void updateMetricRowsGlobalScore(MlExperiment experiment) {
     if (experiment == null || experiment.getId() == null) {
@@ -3618,120 +3778,239 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
     }
 
     private String getDirectionFromMetric(String metric) {
-        if (metric == null) {
-            return "max";
-        }
+    String normalizedMetric = normalizeMetricKey(metric);
 
-        String normalizedMetric = metric.trim().toLowerCase();
-
-        if (normalizedMetric.equals("loss")
-                || normalizedMetric.equals("log_loss")
-                || normalizedMetric.equals("rmse")
-                || normalizedMetric.equals("mse")
-                || normalizedMetric.equals("mae")
-                || normalizedMetric.equals("error")
-                || normalizedMetric.contains("loss")
-                || normalizedMetric.contains("error")) {
-            return "min";
-        }
-
+    if (normalizedMetric.isBlank()) {
         return "max";
     }
 
+    if (normalizedMetric.equals("loss")
+            || normalizedMetric.equals("log_loss")
+            || normalizedMetric.equals("rmse")
+            || normalizedMetric.equals("mse")
+            || normalizedMetric.equals("mae")
+            || normalizedMetric.equals("error")
+            || normalizedMetric.endsWith("_loss")
+            || normalizedMetric.endsWith("_error")
+            || normalizedMetric.contains("loss")
+            || normalizedMetric.contains("error")) {
+        return "min";
+    }
+
+    return "max";
+}
+
+
     private Double getMetricValueIgnoreCase(Map<String, Double> metrics, String metricName) {
-        if (metrics == null || metrics.isEmpty() || metricName == null || metricName.isBlank()) {
-            return null;
-        }
-
-        String normalizedMetricName = metricName.trim().toLowerCase();
-
-        for (Map.Entry<String, Double> entry : metrics.entrySet()) {
-            if (entry.getKey() == null) {
-                continue;
-            }
-
-            String key = entry.getKey().trim().toLowerCase();
-
-            if (key.equals(normalizedMetricName)
-                    || key.contains(normalizedMetricName)
-                    || normalizedMetricName.contains(key)) {
-                return entry.getValue();
-            }
-        }
-
+    if (metrics == null || metrics.isEmpty() || metricName == null || metricName.isBlank()) {
         return null;
     }
+
+    String normalizedMetricName = normalizeMetricKey(metricName);
+
+    for (Map.Entry<String, Double> entry : metrics.entrySet()) {
+        if (entry.getKey() == null || entry.getValue() == null) {
+            continue;
+        }
+
+        String key = normalizeMetricKey(entry.getKey());
+
+        if (key.equals(normalizedMetricName)) {
+            return entry.getValue();
+        }
+    }
+
+    return null;
+}
+
 
     private Double getMetricValueCompatible(Map<String, Double> metrics, String metricName) {
-        if (metrics == null || metrics.isEmpty() || metricName == null || metricName.isBlank()) {
-            return null;
-        }
-
-        Double direct = getMetricValueIgnoreCase(metrics, metricName);
-
-        if (direct != null) {
-            return direct;
-        }
-
-        String normalized = normalizeMetricKey(metricName);
-
-        if (normalized.equals("f1") || normalized.equals("f1_score")) {
-            Double value = getMetricValueIgnoreCase(metrics, "f1_score");
-            if (value != null) return value;
-
-            value = getMetricValueIgnoreCase(metrics, "f1");
-            if (value != null) return value;
-
-            return getMetricValueIgnoreCase(metrics, "f1_weighted");
-        }
-
-        if (normalized.equals("precision")) {
-            Double value = getMetricValueIgnoreCase(metrics, "precision");
-            if (value != null) return value;
-
-            return getMetricValueIgnoreCase(metrics, "precision_weighted");
-        }
-
-        if (normalized.equals("recall")) {
-            Double value = getMetricValueIgnoreCase(metrics, "recall");
-            if (value != null) return value;
-
-            return getMetricValueIgnoreCase(metrics, "recall_weighted");
-        }
-
-        if (normalized.equals("accuracy")) {
-            return getMetricValueIgnoreCase(metrics, "accuracy");
-        }
-
-        if (normalized.equals("r2") || normalized.equals("r2_score")) {
-            Double value = getMetricValueIgnoreCase(metrics, "r2");
-            if (value != null) return value;
-
-            return getMetricValueIgnoreCase(metrics, "r2_score");
-        }
-
-        if (normalized.equals("rmse")) {
-            return getMetricValueIgnoreCase(metrics, "rmse");
-        }
-
-        if (normalized.equals("mse")) {
-            return getMetricValueIgnoreCase(metrics, "mse");
-        }
-
-        if (normalized.equals("mae")) {
-            return getMetricValueIgnoreCase(metrics, "mae");
-        }
-
+    if (metrics == null || metrics.isEmpty() || metricName == null || metricName.isBlank()) {
         return null;
     }
 
+    Map<String, Double> normalizedMetrics = normalizeMetricsMap(metrics);
+    String normalized = normalizeMetricKey(metricName);
+
+    if (normalizedMetrics.containsKey(normalized)) {
+        return normalizedMetrics.get(normalized);
+    }
+
+    if (normalized.equals("f1") || normalized.equals("f1_score")) {
+        return firstMetricValue(normalizedMetrics, "f1_score", "f1", "f1_weighted");
+    }
+
+    if (normalized.equals("precision")) {
+        return firstMetricValue(normalizedMetrics, "precision", "precision_weighted");
+    }
+
+    if (normalized.equals("recall")) {
+        return firstMetricValue(normalizedMetrics, "recall", "recall_weighted");
+    }
+
+    if (normalized.equals("accuracy") || normalized.equals("acc")) {
+        return firstMetricValue(normalizedMetrics, "accuracy", "acc");
+    }
+
+    if (normalized.equals("r2") || normalized.equals("r2_score")) {
+        return firstMetricValue(normalizedMetrics, "r2", "r2_score");
+    }
+
+    if (normalized.equals("rmse")) {
+        return firstMetricValue(normalizedMetrics, "rmse", "root_mean_squared_error");
+    }
+
+    if (normalized.equals("mse")) {
+        return firstMetricValue(normalizedMetrics, "mse", "mean_squared_error");
+    }
+
+    if (normalized.equals("mae")) {
+        return firstMetricValue(normalizedMetrics, "mae", "mean_absolute_error");
+    }
+
+    return null;
+}
+
+
     private String normalizeMetricKey(String metricName) {
-        if (metricName == null) {
-            return "";
+    if (metricName == null) {
+        return "";
+    }
+
+    String normalized = metricName.trim()
+            .toLowerCase(Locale.ROOT)
+            .replace("-", "_")
+            .replace(" ", "_")
+            .replaceAll("[^a-z0-9_]+", "_")
+            .replaceAll("_+", "_")
+            .replaceAll("^_+", "")
+            .replaceAll("_+$", "");
+
+    if (normalized.equals("f1score") || normalized.equals("f1_score_score")) {
+        return "f1_score";
+    }
+
+    if (normalized.equals("f1_score") || normalized.equals("f1")) {
+        return normalized;
+    }
+
+    if (normalized.equals("acc")) {
+        return "accuracy";
+    }
+
+    if (normalized.equals("r2score") || normalized.equals("r2_score")) {
+        return "r2";
+    }
+
+    if (normalized.equals("root_mean_squared_error")) {
+        return "rmse";
+    }
+
+    if (normalized.equals("mean_absolute_error")) {
+        return "mae";
+    }
+
+    if (normalized.equals("mean_squared_error")) {
+        return "mse";
+    }
+
+    return normalized;
+}
+
+private Map<String, Double> normalizeMetricsMap(Map<String, Double> metrics) {
+    Map<String, Double> normalizedMetrics = new LinkedHashMap<>();
+
+    if (metrics == null || metrics.isEmpty()) {
+        return normalizedMetrics;
+    }
+
+    for (Map.Entry<String, Double> entry : metrics.entrySet()) {
+        if (entry == null || entry.getKey() == null || entry.getValue() == null) {
+            continue;
         }
 
-        return metricName.trim().toLowerCase();
+        String normalizedKey = normalizeMetricKey(entry.getKey());
+
+        if (normalizedKey.isBlank() || !isDisplayablePerformanceMetric(normalizedKey)) {
+            continue;
+        }
+
+        normalizedMetrics.put(normalizedKey, entry.getValue());
     }
+
+    return normalizedMetrics;
+}
+
+private Double firstMetricValue(Map<String, Double> metrics, String... names) {
+    if (metrics == null || metrics.isEmpty() || names == null) {
+        return null;
+    }
+
+    for (String name : names) {
+        String normalizedName = normalizeMetricKey(name);
+
+        if (metrics.containsKey(normalizedName)) {
+            return metrics.get(normalizedName);
+        }
+    }
+
+    return null;
+}
+
+private boolean isRegressionProject(MlProject project) {
+    if (project == null || project.getProjectType() == null) {
+        return false;
+    }
+
+    return project.getProjectType().trim().equalsIgnoreCase("regression");
+}
+
+private boolean isClassificationProject(MlProject project) {
+    if (project == null || project.getProjectType() == null) {
+        return true;
+    }
+
+    return project.getProjectType().trim().equalsIgnoreCase("classification");
+}
+
+private boolean isMetricCompatibleWithProjectType(MlProject project, String metricName) {
+    String normalized = normalizeMetricKey(metricName);
+
+    if (normalized.isBlank()) {
+        return false;
+    }
+
+    if (isRegressionProject(project)) {
+        return normalized.equals("rmse")
+                || normalized.equals("mae")
+                || normalized.equals("mse")
+                || normalized.equals("r2")
+                || normalized.equals("r2_score")
+                || normalized.equals("loss")
+                || normalized.contains("error");
+    }
+
+    return normalized.equals("accuracy")
+            || normalized.equals("acc")
+            || normalized.equals("precision")
+            || normalized.equals("precision_weighted")
+            || normalized.equals("recall")
+            || normalized.equals("recall_weighted")
+            || normalized.equals("f1")
+            || normalized.equals("f1_score")
+            || normalized.equals("f1_weighted")
+            || normalized.equals("log_loss")
+            || normalized.equals("loss");
+}
+
+private String defaultPrimaryMetricForProject(MlProject project) {
+    if (isRegressionProject(project)) {
+        return "rmse";
+    }
+
+    return "accuracy";
+}
+
 
     private Double roundDouble(Double value, int decimals) {
         if (value == null) {
@@ -4466,14 +4745,17 @@ public MlExperimentResponse retrainFromExistingExperiment(
             ? registeredModelName
             : buildMlflowExperimentName(project);
 
-    String primaryMetric = defaultValue(
+    String primaryMetric = firstNotBlank(
             sourceExperiment.getPrimaryMetric(),
-            project.getPrimaryMetric1()
+            project.getPrimaryMetric1(),
+            defaultPrimaryMetricForProject(project)
     );
 
     if (primaryMetric == null || primaryMetric.isBlank()) {
-        primaryMetric = "accuracy";
+        primaryMetric = defaultPrimaryMetricForProject(project);
     }
+
+    primaryMetric = normalizeMetricKey(primaryMetric);
 
     String direction = defaultValue(
             sourceExperiment.getDirection(),
