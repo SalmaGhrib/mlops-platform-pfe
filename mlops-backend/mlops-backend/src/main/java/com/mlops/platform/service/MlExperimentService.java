@@ -36,6 +36,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -674,7 +676,7 @@ experiment.setMessage(
         experiment.setFailureSuggestion(normalizedSuggestion);
         experiment.setFailureLogExcerpt(logExcerpt != null ? logExcerpt : "");
         experiment.setFailureSourceFile(normalizedSourceFile);
-        experiment.setLastErrorAt(LocalDateTime.now());
+        experiment.setLastErrorAt(utcNow());
 
         if (experiment.getBuildStatus() == null || experiment.getBuildStatus().isBlank()) {
             experiment.setBuildStatus("FAILED");
@@ -4104,8 +4106,8 @@ private String defaultPrimaryMetricForProject(MlProject project) {
     private String buildUniqueRunName(String runName) {
         String clean = defaultValue(runName, "training-run");
 
-        String suffix = java.time.LocalDateTime.now()
-                .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss_SSS"));
+        String suffix = utcNow()
+                .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss_SSS"));
         String shortId = UUID.randomUUID().toString().substring(0, 8);
 
         return clean + "_" + suffix + "_" + shortId;
@@ -4191,9 +4193,14 @@ private String defaultPrimaryMetricForProject(MlProject project) {
                 experiment.getMessage(),
                 experiment.getErrorMessage(),
 
-                experiment.getCreatedAt() != null ? experiment.getCreatedAt().toString() : "-",
-                experiment.getUpdatedAt() != null ? experiment.getUpdatedAt().toString() : "-"
+                toUtcIsoString(experiment.getCreatedAt()),
+                toUtcIsoString(experiment.getUpdatedAt())
         );
+
+        response.setStartedAt(toUtcIsoString(experiment.getStartedAt()));
+        response.setFinishedAt(toUtcIsoString(experiment.getFinishedAt()));
+        response.setCreatedAt(toUtcIsoString(experiment.getCreatedAt()));
+        response.setUpdatedAt(toUtcIsoString(experiment.getUpdatedAt()));
 
         response.setDetectedAlgorithms(experiment.getDetectedAlgorithms());
         response.setRuntimeMode(experiment.getRuntimeMode());
@@ -4638,13 +4645,27 @@ private void syncSingleProjectAutomatically(MlProject project) {
     
 
 
+private LocalDateTime utcNow() {
+    return LocalDateTime.now(ZoneOffset.UTC);
+}
+
+private String toUtcIsoString(LocalDateTime value) {
+    if (value == null) {
+        return null;
+    }
+
+    return value
+            .atOffset(ZoneOffset.UTC)
+            .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+}
+
 private void markExperimentStarted(MlExperiment experiment) {
     if (experiment == null) {
         return;
     }
 
     if (experiment.getStartedAt() == null) {
-        experiment.setStartedAt(LocalDateTime.now());
+        experiment.setStartedAt(utcNow());
     }
 
     experiment.setFinishedAt(null);
@@ -4657,7 +4678,7 @@ private void applyExecutionTimestampsForStatus(MlExperiment experiment, Experime
 
     if (status == ExperimentStatus.RUNNING) {
         if (experiment.getStartedAt() == null) {
-            experiment.setStartedAt(LocalDateTime.now());
+            experiment.setStartedAt(utcNow());
         }
 
         experiment.setFinishedAt(null);
@@ -4672,12 +4693,12 @@ private void applyExecutionTimestampsForStatus(MlExperiment experiment, Experime
             experiment.setStartedAt(
                     experiment.getCreatedAt() != null
                             ? experiment.getCreatedAt()
-                            : LocalDateTime.now()
+                            : utcNow()
             );
         }
 
         if (experiment.getFinishedAt() == null) {
-            experiment.setFinishedAt(LocalDateTime.now());
+            experiment.setFinishedAt(utcNow());
         }
     }
 }
