@@ -5,6 +5,8 @@ import com.mlops.platform.entity.NotificationTargetType;
 import com.mlops.platform.entity.NotificationType;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 
 public class NotificationResponse {
 
@@ -16,7 +18,15 @@ public class NotificationResponse {
     private Long targetId;
     private Boolean read;
     private Boolean adminNotification;
-    private LocalDateTime createdAt;
+
+    /*
+     * Important :
+     * Le backend stocke les dates en UTC.
+     * On renvoie une String ISO avec timezone explicite pour éviter qu'Angular
+     * interprète la date comme une heure locale et affiche toujours +2 h.
+     * Exemple retourné : 2026-07-06T13:15:45Z
+     */
+    private String createdAt;
 
     public NotificationResponse() {
     }
@@ -30,7 +40,17 @@ public class NotificationResponse {
         this.targetId = notification.getTargetId();
         this.read = notification.getRead();
         this.adminNotification = notification.getAdminNotification();
-        this.createdAt = notification.getCreatedAt();
+        this.createdAt = toUtcIsoString(notification.getCreatedAt());
+    }
+
+    private String toUtcIsoString(LocalDateTime value) {
+        if (value == null) {
+            return null;
+        }
+
+        return value
+                .atOffset(ZoneOffset.UTC)
+                .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
     }
 
     public Long getId() {
@@ -65,7 +85,7 @@ public class NotificationResponse {
         return adminNotification;
     }
 
-    public LocalDateTime getCreatedAt() {
+    public String getCreatedAt() {
         return createdAt;
     }
 }

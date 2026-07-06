@@ -101,6 +101,8 @@ export interface MlExperimentResponse {
 
   createdAt: string;
   updatedAt?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
 
   [key: string]: any;
 }

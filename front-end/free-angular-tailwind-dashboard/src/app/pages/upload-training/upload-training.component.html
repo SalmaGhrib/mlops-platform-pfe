@@ -848,12 +848,12 @@
 
                       <td class="px-5 py-4 align-top">
                         <p class="text-sm text-gray-700 dark:text-gray-300">
-                          {{ formatDate(experiment.createdAt) }}
+                          {{ getRunDisplayDate(experiment) }}
                         </p>
 
-                        @if (experiment.updatedAt) {
+                        @if (hasRunFinishedDate(experiment)) {
                           <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                            MAJ : {{ formatDate(experiment.updatedAt) }}
+                            Fin : {{ getRunFinishedDate(experiment) }}
                           </p>
                         }
                       </td>

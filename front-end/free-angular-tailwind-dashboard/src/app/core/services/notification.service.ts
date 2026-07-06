@@ -210,12 +210,6 @@ export class NotificationService {
     return date ? date.getTime() : 0;
   }
 
-  /*
-   * Backend ancien : "2026-07-06T12:04:21" sans timezone.
-   * Backend corrigé : "2026-07-06T12:04:21Z".
-   *
-   * Si aucun timezone n'est présent, on considère la date comme UTC et on ajoute Z.
-   */
   private parseBackendDate(value: string | null | undefined): Date | null {
     if (!value) {
       return null;

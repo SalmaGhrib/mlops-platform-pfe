@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import org.hibernate.annotations.OnDelete;
 import org.hibernate.annotations.OnDeleteAction;
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -195,10 +196,14 @@ public class MlExperiment {
 
     @PrePersist
     public void onCreate() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
 
         if (this.createdAt == null) {
             this.createdAt = now;
+        }
+
+        if (this.startedAt == null) {
+            this.startedAt = now;
         }
 
         this.updatedAt = now;
@@ -224,7 +229,7 @@ public class MlExperiment {
 
     @PreUpdate
     public void onUpdate() {
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(Clock.systemUTC());
 
         if (this.production == null) {
             this.production = false;

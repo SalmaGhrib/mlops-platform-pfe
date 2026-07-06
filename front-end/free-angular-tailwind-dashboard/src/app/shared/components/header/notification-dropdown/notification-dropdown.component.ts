@@ -215,10 +215,23 @@ export class NotificationDropdownComponent implements OnInit, OnDestroy {
       return '';
     }
 
-    const date = new Date(value);
-    const now = new Date();
+    const date = this.parseBackendDate(value);
 
-    const diffMs = now.getTime() - date.getTime();
+    if (!date) {
+      return '';
+    }
+
+    const now = new Date();
+    let diffMs = now.getTime() - date.getTime();
+
+    /*
+     * Sécurité : si l’heure backend est légèrement dans le futur
+     * à cause d’un décalage serveur/client, on affiche À l’instant.
+     */
+    if (diffMs < 0) {
+      diffMs = 0;
+    }
+
     const diffMinutes = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMinutes / 60);
     const diffDays = Math.floor(diffHours / 24);
@@ -236,5 +249,32 @@ export class NotificationDropdownComponent implements OnInit, OnDestroy {
     }
 
     return `${diffDays} j`;
+  }
+
+  private parseBackendDate(value: string | null | undefined): Date | null {
+    if (!value) {
+      return null;
+    }
+
+    const clean = String(value).trim();
+
+    if (!clean) {
+      return null;
+    }
+
+    /*
+     * Si le backend renvoie déjà Z ou +00:00, on garde tel quel.
+     * Si le backend renvoie un LocalDateTime sans timezone, on le considère UTC.
+     */
+    const hasTimezone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(clean);
+    const normalized = hasTimezone ? clean : `${clean}Z`;
+
+    const date = new Date(normalized);
+
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    return date;
   }
 }

@@ -1,0 +1,16 @@
+{
+  "spec": {
+    "template": {
+      "spec": {
+        "volumes": [
+          {
+            "name": "backend-uploads",
+            "persistentVolumeClaim": {
+              "claimName": "mlops-uploads-pvc"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1692,18 +1692,80 @@ getDetectedComponentsCount(): number {
     return `${(numeric * 100).toFixed(2)}%`;
   }
 
-  formatDate(value?: string): string {
+  formatDate(value?: string | null): string {
     if (!value || value === '-') {
       return '-';
     }
 
-    const date = new Date(value);
+    const date = this.parseBackendDate(value);
 
-    if (Number.isNaN(date.getTime())) {
-      return value;
+    if (!date) {
+      return String(value);
     }
 
-    return date.toLocaleString();
+    return date.toLocaleString('fr-FR', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  private parseBackendDate(value: string | null | undefined): Date | null {
+    if (!value) {
+      return null;
+    }
+
+    const clean = String(value).trim();
+
+    if (!clean || clean === '-') {
+      return null;
+    }
+
+    /*
+     * Si le backend renvoie une date sans timezone, on la considère UTC.
+     * Cela évite les décalages entre Windows, Docker, AKS et le navigateur.
+     */
+    const hasTimezone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(clean);
+    const normalized = hasTimezone ? clean : `${clean}Z`;
+
+    const date = new Date(normalized);
+
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    return date;
+  }
+
+  getRunDisplayDate(experiment: MlExperimentResponse): string {
+    /*
+     * Date principale du run :
+     * 1. startedAt : vraie date de début du run si disponible
+     * 2. createdAt : date de création de la ligne sinon
+     *
+     * Ne pas utiliser updatedAt ici, car updatedAt change à chaque sync MLflow.
+     */
+    return this.formatDate(
+      experiment.startedAt ||
+      experiment['started_at'] ||
+      experiment.createdAt ||
+      experiment['created_at'] ||
+      '-'
+    );
+  }
+
+  getRunFinishedDate(experiment: MlExperimentResponse): string {
+    return this.formatDate(
+      experiment.finishedAt ||
+      experiment['finished_at'] ||
+      '-'
+    );
+  }
+
+  hasRunFinishedDate(experiment: MlExperimentResponse): boolean {
+    return Boolean(experiment.finishedAt || experiment['finished_at']);
   }
 
   getModuleKey(module: any): string {
