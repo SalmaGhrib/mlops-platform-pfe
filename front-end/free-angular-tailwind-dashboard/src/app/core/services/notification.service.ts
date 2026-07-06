@@ -186,15 +186,10 @@ export class NotificationService {
       const exists = current.some((item) => item.id === notification.id);
 
       const updated = exists
-        ? current.map((item) => item.id === notification.id ? notification : item)
+        ? current.map((item) => (item.id === notification.id ? notification : item))
         : [notification, ...current];
 
       this.notificationsSubject.next(this.sortNotifications(updated));
-
-      /*
-       * On recharge le vrai nombre depuis le backend.
-       * Comme ça, pas de compteur faux ou aléatoire.
-       */
       this.refreshUnreadCount();
 
     } catch (error) {
@@ -204,10 +199,44 @@ export class NotificationService {
 
   private sortNotifications(notifications: NotificationResponse[]): NotificationResponse[] {
     return [...notifications].sort((a, b) => {
-      const dateA = new Date(a.createdAt || 0).getTime();
-      const dateB = new Date(b.createdAt || 0).getTime();
+      const dateA = this.toTimestamp(a.createdAt);
+      const dateB = this.toTimestamp(b.createdAt);
       return dateB - dateA;
     });
+  }
+
+  private toTimestamp(value: string | null | undefined): number {
+    const date = this.parseBackendDate(value);
+    return date ? date.getTime() : 0;
+  }
+
+  /*
+   * Backend ancien : "2026-07-06T12:04:21" sans timezone.
+   * Backend corrigé : "2026-07-06T12:04:21Z".
+   *
+   * Si aucun timezone n'est présent, on considère la date comme UTC et on ajoute Z.
+   */
+  private parseBackendDate(value: string | null | undefined): Date | null {
+    if (!value) {
+      return null;
+    }
+
+    const clean = String(value).trim();
+
+    if (!clean) {
+      return null;
+    }
+
+    const hasTimezone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(clean);
+    const normalized = hasTimezone ? clean : `${clean}Z`;
+
+    const date = new Date(normalized);
+
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    return date;
   }
 
   private getAuthHeaders(): HttpHeaders {

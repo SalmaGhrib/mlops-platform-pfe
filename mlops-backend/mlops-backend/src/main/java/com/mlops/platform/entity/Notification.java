@@ -2,6 +2,7 @@ package com.mlops.platform.entity;
 
 import jakarta.persistence.*;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
 
 @Entity
@@ -43,6 +44,12 @@ public class Notification {
     @Column(name = "admin_notification", nullable = false)
     private Boolean adminNotification = false;
 
+    /*
+     * IMPORTANT :
+     * La base stocke un LocalDateTime sans timezone.
+     * On décide donc que cette valeur est toujours en UTC.
+     * Le DTO NotificationResponse renvoie ensuite createdAt avec suffixe Z.
+     */
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -52,7 +59,7 @@ public class Notification {
     @PrePersist
     public void onCreate() {
         if (createdAt == null) {
-            createdAt = LocalDateTime.now();
+            createdAt = LocalDateTime.now(Clock.systemUTC());
         }
 
         if (read == null) {
@@ -134,5 +141,9 @@ public class Notification {
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
     }
 }
