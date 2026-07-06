@@ -164,6 +164,56 @@ class GenericPyFuncWrapper(mlflow.pyfunc.PythonModel):
             return self._prepare_text_input(model_input)
         return self._prepare_tabular_or_image_input(model_input)
 
+    def _expected_feature_names(self):
+        """
+        Récupère l'ordre des colonnes attendu par le scaler/preprocessor/modèle.
+        Très utile pour les scripts utilisateurs qui sauvegardent un scaler séparé.
+        """
+        for obj in [self.preprocessor, self.scaler, self.model]:
+            if obj is None:
+                continue
+
+            names = getattr(obj, "feature_names_in_", None)
+            if names is not None:
+                try:
+                    return [str(name) for name in list(names)]
+                except Exception:
+                    pass
+
+        return None
+
+    def _align_dataframe_features(self, X):
+        """
+        Aligne automatiquement un DataFrame sur les colonnes attendues.
+        - garde l'ordre d'entraînement ;
+        - ignore les colonnes en trop ;
+        - signale clairement les colonnes manquantes.
+        """
+        if not isinstance(X, pd.DataFrame):
+            return X
+
+        expected = self._expected_feature_names()
+
+        if not expected:
+            return X
+
+        missing = [column for column in expected if column not in X.columns]
+
+        if missing:
+            raise ValueError(
+                "Missing required feature columns for prediction: "
+                + ", ".join(missing[:20])
+            )
+
+        extra = [column for column in X.columns if column not in expected]
+        if extra:
+            print(
+                "[GENERIC_PYFUNC] ignoring extra columns not used during training: "
+                + ", ".join(extra[:20])
+            )
+
+        return X[expected]
+
     def _apply_transformer(self, transformer, X, name: str):
         if transformer is None:
             return X
@@ -182,6 +232,11 @@ class GenericPyFuncWrapper(mlflow.pyfunc.PythonModel):
         X = self._prepare_input(model_input)
 
         print(f"[GENERIC_PYFUNC] prediction input type after prepare: {type(X)}")
+
+        # Important :
+        # si un scaler/preprocessor a été entraîné sur un DataFrame,
+        # il garde feature_names_in_. On réordonne donc les colonnes avant transform().
+        X = self._align_dataframe_features(X)
 
         # Ordre logique :
         # preprocessor -> vectorizer/scaler -> model

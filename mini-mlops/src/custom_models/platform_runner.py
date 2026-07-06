@@ -653,7 +653,75 @@ def build_recovered_mlflow_warning(
     }
 
 
-def create_dataset_aliases(workspace: Path, dataset_path: Optional[Path]) -> None:
+def extract_hardcoded_dataset_paths(script_path: Optional[Path]) -> List[str]:
+    """
+    Détecte les chemins de datasets écrits en dur dans les scripts utilisateurs.
+
+    Exemple supporté :
+    DATA_PATH = os.path.join("data", "iris.csv")
+    pd.read_csv("data/iris.csv")
+    pd.read_csv('iris.csv')
+    """
+    if script_path is None:
+        return []
+
+    try:
+        code = script_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return []
+
+    candidates: List[str] = []
+
+    # pd.read_csv("...csv"), open("...csv"), variable = "...csv"
+    for match in re.finditer(
+        r"""["'](?P<path>[^"']+\.(?:csv|tsv|xlsx|xls|parquet|json))["']""",
+        code,
+        re.IGNORECASE,
+    ):
+        value = match.group("path").strip()
+        if value and not value.startswith(("http://", "https://", "s3://", "wasbs://")):
+            candidates.append(value)
+
+    # os.path.join("data", "iris.csv")
+    for match in re.finditer(
+        r"""os\.path\.join\(\s*["'](?P<dir>[^"']+)["']\s*,\s*["'](?P<file>[^"']+\.(?:csv|tsv|xlsx|xls|parquet|json))["']\s*\)""",
+        code,
+        re.IGNORECASE,
+    ):
+        candidates.append(str(Path(match.group("dir")) / match.group("file")))
+
+    # Dédupliquer en gardant l'ordre.
+    unique: List[str] = []
+    seen = set()
+    for candidate in candidates:
+        normalized = candidate.replace("\\", "/").strip("/")
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            unique.append(normalized)
+
+    return unique
+
+
+def create_dataset_aliases(
+    workspace: Path,
+    dataset_path: Optional[Path],
+    script_path: Optional[Path] = None,
+) -> None:
+    """
+    Rend le dataset accessible aux scripts utilisateurs même s'ils n'utilisent pas
+    les arguments fournis par la plateforme.
+
+    La plateforme crée plusieurs alias :
+    - /workspace/dataset.csv
+    - /workspace/data.csv
+    - /workspace/train.csv
+    - /workspace/input.csv
+    - /workspace/data/<nom_original>
+    - /workspace/data/iris.csv
+    - tout chemin .csv détecté dans le script, ex : data/iris.csv
+
+    Cela permet de supporter des scripts simples sans code MLflow et sans argparse.
+    """
     if dataset_path is None:
         return
 
@@ -664,17 +732,50 @@ def create_dataset_aliases(workspace: Path, dataset_path: Optional[Path]) -> Non
         print(f"[PLATFORM] Dataset path does not exist: {dataset_path}")
         return
 
+    original_name = dataset_path.name or "dataset.csv"
+
     aliases = [
         "dataset.csv",
         "data.csv",
         "train.csv",
         "input.csv",
+        original_name,
+        f"data/{original_name}",
+        "data/dataset.csv",
+        "data/data.csv",
+        "data/train.csv",
+        "data/input.csv",
+        "data/iris.csv",
+        "datasets/dataset.csv",
+        "datasets/data.csv",
+        f"datasets/{original_name}",
     ]
 
+    aliases.extend(extract_hardcoded_dataset_paths(script_path))
+
+    unique_aliases: List[str] = []
+    seen = set()
+
     for alias in aliases:
+        if not alias:
+            continue
+
+        normalized = str(alias).replace("\\", "/").strip()
+
+        # Sécurité : on refuse les chemins absolus et les chemins qui sortent du workspace.
+        if normalized.startswith("/") or normalized.startswith("../") or "/../" in normalized:
+            continue
+
+        if normalized not in seen:
+            seen.add(normalized)
+            unique_aliases.append(normalized)
+
+    for alias in unique_aliases:
         alias_path = workspace / alias
 
         try:
+            alias_path.parent.mkdir(parents=True, exist_ok=True)
+
             if alias_path.exists():
                 continue
 
@@ -682,7 +783,6 @@ def create_dataset_aliases(workspace: Path, dataset_path: Optional[Path]) -> Non
             print(f"[PLATFORM] Dataset alias created: {alias_path}")
         except Exception as exc:
             print(f"[PLATFORM] Could not create dataset alias {alias_path}: {exc}")
-
 
 def build_script_commands(
     script_path: Path,
@@ -780,7 +880,7 @@ def run_user_script(
     if dataset_path is not None:
         dataset_path = dataset_path.resolve()
 
-    create_dataset_aliases(workspace, dataset_path)
+    create_dataset_aliases(workspace, dataset_path, script_path=script_path)
 
     env = {
         **os.environ,
@@ -1222,9 +1322,47 @@ def run_standard_runtime(
         and platform_model_registered
     )
 
-    final_success = result.returncode == 0 or recovered_success
+    require_registered_model = (
+        os.environ.get("PLATFORM_REQUIRE_MODEL_ARTIFACT", "true").strip().lower()
+        not in {"false", "0", "no", "off"}
+    )
+
+    no_registered_model_error: Optional[Dict[str, Any]] = None
+
+    if result.returncode == 0 and require_registered_model and not platform_model_registered:
+        no_registered_model_error = {
+            "phase": "PLATFORM_MODEL_REGISTRATION",
+            "cause": "no_registered_model_created",
+            "message": (
+                "Le script s'est exécuté sans erreur, mais la plateforme n'a pas pu "
+                "enregistrer de version de modèle dans MLflow Registry."
+            ),
+            "suggestion": (
+                "Le script doit sauvegarder le modèle dans outputs/model.pkl, "
+                "outputs/model.joblib, artifacts/model.pkl ou artifacts/model.joblib. "
+                "La plateforme se charge ensuite de l'enregistrement MLflow automatiquement."
+            ),
+            "detected_model_files": [str(path) for path in model_artifacts],
+            "logged_model_uri": logged_model_uri,
+            "platform_model_registered": platform_model_registered,
+        }
+
+        print("[PLATFORM_MODEL] No platform model version was registered.")
+        print(json.dumps(no_registered_model_error, indent=2, ensure_ascii=False, default=str))
+
+    final_success = (
+        recovered_success
+        or (
+            result.returncode == 0
+            and (
+                not require_registered_model
+                or platform_model_registered
+            )
+        )
+    )
+
     final_status = "SUCCESS" if final_success else "FAILED"
-    effective_return_code = 0 if final_success else result.returncode
+    effective_return_code = 0 if final_success else (result.returncode or 1)
 
     if recovered_success:
         print(
@@ -1250,10 +1388,9 @@ def run_standard_runtime(
         metrics=metrics,
         model_paths=[str(path) for path in model_artifacts],
         logged_model_uri=logged_model_uri,
-        error=None if final_success else error_info,
+        error=None if final_success else (no_registered_model_error or error_info),
         analysis=analysis,
     )
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Standard runtime platform runner")
