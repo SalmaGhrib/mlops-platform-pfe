@@ -844,6 +844,26 @@ def run_standard_runtime(
     )
 
     with mlflow.start_run(run_name=run_name):
+        mlflow.set_tag("platform_runner", "true")
+        mlflow.set_tag("mlops.managed", "true")
+        mlflow.set_tag("runtime_mode", os.environ.get("RUNTIME_MODE", "CUSTOM_DOCKERFILE"))
+        mlflow.set_tag("registered_model_name", platform_registered_model_name)
+        mlflow.set_tag("platform_registered_model_name", platform_registered_model_name)
+        mlflow.set_tag("run_name", run_name)
+
+        spring_experiment_id = os.environ.get("SPRING_EXPERIMENT_ID") or os.environ.get("MLFLOW_TAG_SPRING_EXPERIMENT_ID")
+        if spring_experiment_id:
+            mlflow.set_tag("spring_experiment_id", spring_experiment_id)
+
+        project_id = os.environ.get("PROJECT_ID")
+        if project_id:
+            mlflow.set_tag("project_id", project_id)
+
+        training_job_name = os.environ.get("TRAINING_JOB_NAME") or os.environ.get("KUBERNETES_JOB_NAME") or os.environ.get("HOSTNAME")
+        if training_job_name:
+            mlflow.set_tag("training_job_name", training_job_name)
+            mlflow.set_tag("kubeflow_run_name", training_job_name)
+
         mlflow.log_param("entrypoint", script_path.name)
         mlflow.log_param("workspace", str(workspace))
         mlflow.log_param("platform_registered_model_name", platform_registered_model_name)
@@ -1108,6 +1128,12 @@ def main() -> int:
                 mlflow.set_experiment(args.experiment_name)
 
             with mlflow.start_run(run_name=args.run_name):
+                mlflow.set_tag("platform_runner", "true")
+                mlflow.set_tag("mlops.managed", "true")
+                mlflow.set_tag("run_name", args.run_name)
+                spring_experiment_id = os.environ.get("SPRING_EXPERIMENT_ID") or os.environ.get("MLFLOW_TAG_SPRING_EXPERIMENT_ID")
+                if spring_experiment_id:
+                    mlflow.set_tag("spring_experiment_id", spring_experiment_id)
                 mlflow.log_text(
                     json.dumps(error, indent=2, ensure_ascii=False),
                     artifact_file="logs/platform_error.json",

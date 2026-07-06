@@ -1432,11 +1432,18 @@ getDetectedComponentsCount(): number {
   }
 
   getProductionVersion(experiment: MlExperimentResponse): string {
+    if (!this.isProductionExperiment(experiment)) {
+      return '-';
+    }
+
     const value =
       experiment.productionVersion ??
       experiment.productionModelVersion ??
       experiment['production_version'] ??
       experiment['productionVersion'] ??
+      experiment.modelVersion ??
+      experiment.mlflowModelVersion ??
+      experiment['model_version'] ??
       null;
 
     return value === null || value === undefined || value === '' ? '-' : String(value);

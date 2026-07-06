@@ -824,9 +824,13 @@
 
                         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                           Production :
-                          <span class="font-semibold text-green-700 dark:text-green-300">
-                            {{ getProductionVersion(experiment) }}
-                          </span>
+                          @if (isProductionExperiment(experiment)) {
+                            <span class="font-semibold text-green-700 dark:text-green-300">
+                              v{{ getProductionVersion(experiment) }}
+                            </span>
+                          } @else {
+                            <span>-</span>
+                          }
                         </p>
 
                         @if (isProductionExperiment(experiment)) {

@@ -1180,6 +1180,28 @@ if (experimentToSave == null) {
     return hasText(registeredModelName) && (hasModelVersion || hasMetrics);
 }
 
+private boolean isPlatformGeneratedRunName(String runName) {
+    if (!hasText(runName)) {
+        return false;
+    }
+
+    String clean = runName.trim().toLowerCase(Locale.ROOT);
+
+    /*
+     * Format créé par la plateforme : project_run_20260706_151522...
+     */
+    if (clean.matches("[a-z0-9][a-z0-9_-]*_run_\\d{8}_\\d{6}.*")) {
+        return true;
+    }
+
+    /*
+     * Compatibilité avec quelques anciens runs standard de la plateforme.
+     */
+    return clean.startsWith("standard-runtime")
+            || clean.startsWith("custom-runtime")
+            || clean.startsWith("custom_run_");
+}
+
 private boolean isSuccessfulMlflowRun(
         MlflowTrackingClientService.MlflowRunDetails runDetails,
         Map<String, Double> metrics
@@ -1372,14 +1394,15 @@ private boolean isProductionExperimentRow(MlExperiment experiment) {
     }
 
     /*
-     * Source de vérité :
-     * une ligne est Production UNIQUEMENT si sa version de run MLflow
-     * est exactement la version pointée par l'alias production.
+     * Source de vérité corrigée :
+     * - production_version indique seulement quelle version MLflow est actuellement aliasée.
+     * - is_production indique LA ligne MySQL choisie pour représenter cette production.
      *
-     * On ne fait plus confiance au booléen is_production seul, car une ancienne
-     * synchronisation peut l'avoir mis à true sur plusieurs lignes.
+     * Cela évite d'afficher plusieurs badges Production quand plusieurs runs ont
+     * la même model_version.
      */
-    return hasText(experiment.getProductionVersion())
+    return Boolean.TRUE.equals(experiment.getProduction())
+            && hasText(experiment.getProductionVersion())
             && hasText(experiment.getModelVersion())
             && experiment.getProductionVersion().trim()
             .equalsIgnoreCase(experiment.getModelVersion().trim());
@@ -4515,36 +4538,149 @@ private void refreshProductionVersionFlagsForProject(MlProject project, String r
         return;
     }
 
-    String productionVersion = mlflowTrackingClientService.getProductionVersion(registeredModelName.trim());
-
-    if (!hasText(productionVersion)) {
-        return;
-    }
+    String cleanRegisteredModelName = registeredModelName.trim();
+    String productionVersion = mlflowTrackingClientService.getProductionVersion(cleanRegisteredModelName);
 
     List<MlExperiment> experiments = mlExperimentRepository
             .findByProjectAndRegisteredModelNameOrderByCreatedAtDesc(
                     project,
-                    registeredModelName.trim()
+                    cleanRegisteredModelName
             );
 
     if (experiments == null || experiments.isEmpty()) {
         return;
     }
 
+    /*
+     * Règle forte : un seul run peut être marqué Production pour un modèle donné.
+     * productionVersion reste une information globale, mais le badge Production
+     * doit dépendre uniquement de is_production=true sur UNE seule ligne.
+     */
     for (MlExperiment experiment : experiments) {
-        if (experiment == null || experiment.getId() == null) {
+        if (experiment == null) {
             continue;
         }
 
-        experiment.setProductionVersion(productionVersion);
-        experiment.setProduction(
-                hasText(experiment.getModelVersion())
-                        && productionVersion.equals(experiment.getModelVersion())
-        );
-        mlExperimentRepository.save(experiment);
+        experiment.setProduction(false);
+        experiment.setProductionVersion(hasText(productionVersion) ? productionVersion.trim() : null);
     }
 
+    if (!hasText(productionVersion)) {
+        mlExperimentRepository.saveAll(experiments);
+        mlExperimentRepository.flush();
+        return;
+    }
+
+    MlExperiment productionCandidate = null;
+
+    for (MlExperiment experiment : experiments) {
+        if (!isEligibleProductionCandidate(experiment, productionVersion)) {
+            continue;
+        }
+
+        if (productionCandidate == null
+                || compareProductionCandidates(experiment, productionCandidate) > 0) {
+            productionCandidate = experiment;
+        }
+    }
+
+    if (productionCandidate != null) {
+        productionCandidate.setProduction(true);
+        productionCandidate.setProductionVersion(productionVersion.trim());
+    }
+
+    mlExperimentRepository.saveAll(experiments);
     mlExperimentRepository.flush();
+}
+
+private boolean isEligibleProductionCandidate(MlExperiment experiment, String productionVersion) {
+    if (experiment == null || !hasText(productionVersion)) {
+        return false;
+    }
+
+    if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
+        return false;
+    }
+
+    if (!hasText(experiment.getModelVersion())) {
+        return false;
+    }
+
+    if (!productionVersion.trim().equalsIgnoreCase(experiment.getModelVersion().trim())) {
+        return false;
+    }
+
+    /*
+     * On évite de marquer Production une ligne incomplète/importée sans vraie identité MLflow.
+     */
+    return hasText(experiment.getMlflowRunId());
+}
+
+private int compareProductionCandidates(MlExperiment left, MlExperiment right) {
+    if (left == null && right == null) {
+        return 0;
+    }
+
+    if (left == null) {
+        return -1;
+    }
+
+    if (right == null) {
+        return 1;
+    }
+
+    int scoreComparison = Double.compare(scoreForProductionCandidate(left), scoreForProductionCandidate(right));
+    if (scoreComparison != 0) {
+        return scoreComparison;
+    }
+
+    LocalDateTime leftDate = firstNonNullDate(left.getFinishedAt(), left.getStartedAt(), left.getCreatedAt(), left.getUpdatedAt());
+    LocalDateTime rightDate = firstNonNullDate(right.getFinishedAt(), right.getStartedAt(), right.getCreatedAt(), right.getUpdatedAt());
+
+    if (leftDate != null && rightDate != null) {
+        int dateComparison = leftDate.compareTo(rightDate);
+        if (dateComparison != 0) {
+            return dateComparison;
+        }
+    } else if (leftDate != null) {
+        return 1;
+    } else if (rightDate != null) {
+        return -1;
+    }
+
+    Long leftId = left.getId() != null ? left.getId() : -1L;
+    Long rightId = right.getId() != null ? right.getId() : -1L;
+    return leftId.compareTo(rightId);
+}
+
+private double scoreForProductionCandidate(MlExperiment experiment) {
+    if (experiment == null) {
+        return -1.0;
+    }
+
+    if (experiment.getGlobalScore() != null) {
+        return experiment.getGlobalScore();
+    }
+
+    if (experiment.getPrimaryMetricValue() != null) {
+        return experiment.getPrimaryMetricValue();
+    }
+
+    return -1.0;
+}
+
+private LocalDateTime firstNonNullDate(LocalDateTime... values) {
+    if (values == null) {
+        return null;
+    }
+
+    for (LocalDateTime value : values) {
+        if (value != null) {
+            return value;
+        }
+    }
+
+    return null;
 }
 
 private void syncSingleProjectAutomatically(MlProject project) {

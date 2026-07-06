@@ -512,10 +512,15 @@ public class KubernetesJobService {
         addEnv(envVars, "MLFLOW_EXPERIMENT_NAME", registeredModelName);
         addEnv(envVars, "REGISTERED_MODEL_NAME", registeredModelName);
 
-        addEnv(envVars, "RUN_NAME", safe(experiment.getExperimentName()));
+        String platformRunName = safe(experiment.getExperimentName());
+        addEnv(envVars, "RUN_NAME", platformRunName);
+        addEnv(envVars, "MLFLOW_RUN_NAME", platformRunName);
         addEnv(envVars, "PROJECT_NAME", safe(project.getName()));
         addEnv(envVars, "PROJECT_ID", String.valueOf(project.getId()));
         addEnv(envVars, "SPRING_EXPERIMENT_ID", String.valueOf(experiment.getId()));
+        addEnv(envVars, "MLFLOW_TAG_SPRING_EXPERIMENT_ID", String.valueOf(experiment.getId()));
+        addEnv(envVars, "MLFLOW_TAG_PLATFORM_RUNNER", "true");
+        addEnv(envVars, "MLFLOW_TAG_REGISTERED_MODEL_NAME", registeredModelName);
 
         addEnv(envVars, "PRIMARY_METRIC", safe(experiment.getPrimaryMetric()));
         addEnv(envVars, "PRIMARY_METRIC_1", safe(project.getPrimaryMetric1()));
