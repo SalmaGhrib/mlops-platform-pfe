@@ -36,12 +36,34 @@ SUPPORTED_MODEL_EXTENSIONS = {
 }
 
 METRIC_REGEX = re.compile(
-    r"^\s*(?P<key>"
+    r"(?P<key>"
     r"loss|val_loss|accuracy|val_accuracy|acc|f1|f1_score|precision|recall|"
     r"rmse|mse|mae|r2|r2_score|auc|roc_auc"
-    r")\s*[:=]\s*(?P<value>[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\s*$",
+    r")"
+    r"(?:\\s+[^:=]*?)?"
+    r"\\s*[:=]\\s*"
+    r"(?P<value>[-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?)",
     re.IGNORECASE,
 )
+
+FRENCH_METRIC_ALIASES = {
+    "accuracy sur le test set": "accuracy",
+    "accuracy moyenne cv": "accuracy",
+    "cv accuracy mean": "accuracy",
+    "score de précision": "precision",
+    "précision": "precision",
+    "precision": "precision",
+    "rappel": "recall",
+    "recall": "recall",
+    "f1": "f1_score",
+    "f1 score": "f1_score",
+    "f1_score": "f1_score",
+    "rmse": "rmse",
+    "mse": "mse",
+    "mae": "mae",
+    "r2": "r2",
+    "r2_score": "r2",
+}
 
 
 @dataclass
@@ -130,24 +152,116 @@ def normalize_metric_name(name: str) -> str:
 
 
 def parse_metrics(stdout: str) -> Dict[str, float]:
+    """
+    Parse des métriques imprimées par des scripts très différents.
+
+    Formats supportés :
+    - accuracy: 0.95
+    - accuracy=0.95
+    - Accuracy sur le test set : 0.95
+    - RMSE : 123.4
+    - R2 score = 0.89
+    """
     metrics: Dict[str, float] = {}
 
-    for line in (stdout or "").splitlines():
-        line = line.strip()
-
-        match = METRIC_REGEX.match(line)
-        if not match:
+    for raw_line in (stdout or "").splitlines():
+        line = raw_line.strip()
+        if not line:
             continue
 
-        key = normalize_metric_name(match.group("key"))
-        value = match.group("value")
+        # Format standard ou semi-standard
+        match = METRIC_REGEX.search(line)
+        if match:
+            key = normalize_metric_name(match.group("key"))
+            try:
+                metrics[key] = float(match.group("value"))
+                continue
+            except ValueError:
+                pass
 
-        try:
-            metrics[key] = float(value)
-        except ValueError:
-            continue
+        # Formats plus humains/français
+        lower_line = line.lower().replace("é", "e").replace("è", "e").replace("ê", "e")
+        for alias, canonical in FRENCH_METRIC_ALIASES.items():
+            normalized_alias = alias.lower().replace("é", "e").replace("è", "e").replace("ê", "e")
+            if normalized_alias in lower_line:
+                number_match = re.search(
+                    r"([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)",
+                    line,
+                )
+                if number_match:
+                    try:
+                        metrics[canonical] = float(number_match.group(1))
+                    except ValueError:
+                        pass
+                break
 
     return metrics
+
+
+
+AUXILIARY_ARTIFACT_KEYWORDS = {
+    "scaler",
+    "standardscaler",
+    "minmaxscaler",
+    "encoder",
+    "label_encoder",
+    "onehot",
+    "preprocessor",
+    "preprocess",
+    "vectorizer",
+    "tokenizer",
+    "classes",
+    "metadata",
+    "metrics",
+    "report",
+}
+
+
+def is_auxiliary_model_artifact(path: Path) -> bool:
+    name = path.stem.lower()
+    full_name = path.name.lower()
+
+    if full_name in {"model.pkl", "model.joblib", "model.pickle"}:
+        return False
+
+    return any(keyword in name for keyword in AUXILIARY_ARTIFACT_KEYWORDS)
+
+
+def model_artifact_score(path: Path) -> int:
+    """
+    Score élevé = meilleur candidat pour le modèle principal.
+    On favorise outputs/model.* puis artifacts/model.* et on pénalise les scalers.
+    """
+    lower_parts = [part.lower() for part in path.parts]
+    name = path.name.lower()
+    stem = path.stem.lower()
+
+    score = 0
+
+    if "outputs" in lower_parts:
+        score += 1000
+
+    if "artifacts" in lower_parts:
+        score += 700
+
+    if name in {"model.pkl", "model.joblib", "model.pickle"}:
+        score += 1000
+
+    if stem == "model":
+        score += 500
+
+    if "model" in stem:
+        score += 250
+
+    if is_auxiliary_model_artifact(path):
+        score -= 2000
+
+    try:
+        score += int(path.stat().st_mtime)
+    except Exception:
+        pass
+
+    return score
 
 
 def find_model_artifacts(workspace: Path) -> List[Path]:
@@ -171,7 +285,44 @@ def find_model_artifacts(workspace: Path) -> List[Path]:
             if path.is_file():
                 paths.append(path)
 
-    return sorted(paths, key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+    return sorted(paths, key=lambda p: model_artifact_score(p), reverse=True)
+
+
+def select_primary_model_artifact(model_artifacts: List[Path]) -> Optional[Path]:
+    for path in model_artifacts:
+        if not is_auxiliary_model_artifact(path):
+            return path
+
+    return model_artifacts[0] if model_artifacts else None
+
+
+def find_companion_artifacts(
+    primary_model_path: Path,
+    model_artifacts: List[Path],
+) -> Dict[str, str]:
+    """
+    Trouve les artefacts nécessaires à la prédiction :
+    scaler, preprocessor, vectorizer, encoder...
+    """
+    companions: Dict[str, str] = {}
+
+    for path in model_artifacts:
+        if path == primary_model_path:
+            continue
+
+        name = path.stem.lower()
+
+        if "scaler" in name and "scaler_path" not in companions:
+            companions["scaler_path"] = str(path)
+        elif ("preprocess" in name or "preprocessor" in name) and "preprocessor_path" not in companions:
+            companions["preprocessor_path"] = str(path)
+        elif ("vectorizer" in name or "tfidf" in name) and "vectorizer_path" not in companions:
+            companions["vectorizer_path"] = str(path)
+        elif ("encoder" in name or "label_encoder" in name) and "encoder_path" not in companions:
+            companions["encoder_path"] = str(path)
+
+    return companions
+
 
 
 def resolve_platform_registered_model_name(
@@ -697,30 +848,58 @@ def run_user_script(
     return last_result
 
 
-def try_log_pickle_model(model_path: Path) -> Optional[str]:
-    try:
-        model = joblib.load(model_path)
-        mlflow.sklearn.log_model(model, artifact_path="model")
-        return mlflow.get_artifact_uri("model")
-    except Exception as first_exc:
-        print(f"[PLATFORM_MODEL] sklearn log_model failed for {model_path}: {first_exc}")
+def try_log_pickle_model(
+    model_path: Path,
+    companion_artifacts: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    companion_artifacts = companion_artifacts or {}
 
+    # Si le modèle a un scaler/preprocessor séparé, il faut absolument utiliser
+    # un wrapper pyfunc. Sinon la prédiction servirait un modèle incomplet.
+    if companion_artifacts:
         try:
-            with open(model_path, "rb") as file:
-                pickle.load(file)
+            artifacts = {"model_path": str(model_path)}
+            artifacts.update(companion_artifacts)
 
             mlflow.pyfunc.log_model(
                 artifact_path="model",
                 python_model=GenericPyFuncWrapper(),
-                artifacts={"model_path": str(model_path)},
+                artifacts=artifacts,
             )
             return mlflow.get_artifact_uri("model")
-        except Exception as second_exc:
+        except Exception as exc:
             print(
-                f"[PLATFORM_MODEL] generic pyfunc log_model failed for "
-                f"{model_path}: {second_exc}"
+                "[PLATFORM_MODEL] pyfunc log_model with companion artifacts failed "
+                f"for {model_path}: {exc}"
             )
-            return None
+
+    # Cas simple : pipeline sklearn complet ou modèle sklearn standalone.
+    try:
+        model = joblib.load(model_path)
+
+        if hasattr(model, "predict"):
+            mlflow.sklearn.log_model(model, artifact_path="model")
+            return mlflow.get_artifact_uri("model")
+    except Exception as first_exc:
+        print(f"[PLATFORM_MODEL] sklearn log_model failed for {model_path}: {first_exc}")
+
+    # Fallback générique.
+    try:
+        with open(model_path, "rb") as file:
+            pickle.load(file)
+
+        mlflow.pyfunc.log_model(
+            artifact_path="model",
+            python_model=GenericPyFuncWrapper(),
+            artifacts={"model_path": str(model_path)},
+        )
+        return mlflow.get_artifact_uri("model")
+    except Exception as second_exc:
+        print(
+            f"[PLATFORM_MODEL] generic pyfunc log_model failed for "
+            f"{model_path}: {second_exc}"
+        )
+        return None
 
 
 def try_log_pytorch_model(model_path: Path) -> Optional[str]:
@@ -736,17 +915,21 @@ def try_log_pytorch_model(model_path: Path) -> Optional[str]:
         return None
 
 
-def log_model_artifact(model_path: Path) -> Dict[str, Any]:
+def log_model_artifact(
+    model_path: Path,
+    companion_artifacts: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     extension = model_path.suffix.lower()
     result: Dict[str, Any] = {
         "path": str(model_path),
         "extension": extension,
         "logged_model_uri": None,
         "artifact_only": False,
+        "companion_artifacts": companion_artifacts or {},
     }
 
     if extension in {".pkl", ".joblib", ".pickle"}:
-        logged_uri = try_log_pickle_model(model_path)
+        logged_uri = try_log_pickle_model(model_path, companion_artifacts)
         if logged_uri:
             result["logged_model_uri"] = logged_uri
             return result
@@ -760,6 +943,7 @@ def log_model_artifact(model_path: Path) -> Dict[str, Any]:
     mlflow.log_artifact(str(model_path), artifact_path="model_artifacts")
     result["artifact_only"] = True
     return result
+
 
 
 def run_standard_runtime(
@@ -914,14 +1098,36 @@ def run_standard_runtime(
                 f"{[str(path) for path in model_artifacts]}"
             )
 
+            primary_model_path = select_primary_model_artifact(model_artifacts)
+            companion_artifacts = (
+                find_companion_artifacts(primary_model_path, model_artifacts)
+                if primary_model_path
+                else {}
+            )
+
             artifact_results: List[Dict[str, Any]] = []
 
-            for model_path in model_artifacts:
-                artifact_result = log_model_artifact(model_path)
+            if primary_model_path:
+                print(f"[PLATFORM_MODEL] selected_primary_model={primary_model_path}")
+                print(f"[PLATFORM_MODEL] companion_artifacts={companion_artifacts}")
+
+                artifact_result = log_model_artifact(
+                    primary_model_path,
+                    companion_artifacts=companion_artifacts,
+                )
                 artifact_results.append(artifact_result)
 
-                if artifact_result.get("logged_model_uri") and not logged_model_uri:
+                if artifact_result.get("logged_model_uri"):
                     logged_model_uri = artifact_result["logged_model_uri"]
+
+                # Log des fichiers auxiliaires pour audit, sans les prendre pour des modèles.
+                for artifact_path in model_artifacts:
+                    if artifact_path == primary_model_path:
+                        continue
+                    try:
+                        mlflow.log_artifact(str(artifact_path), artifact_path="raw_user_artifacts")
+                    except Exception as exc:
+                        print(f"[PLATFORM_MODEL] Could not log auxiliary artifact {artifact_path}: {exc}")
 
             if logged_model_uri:
                 try:
@@ -1011,7 +1217,7 @@ def run_standard_runtime(
                 )
 
     recovered_success = (
-        recoverable_user_mlflow_failure
+        result.returncode != 0
         and bool(logged_model_uri)
         and platform_model_registered
     )
