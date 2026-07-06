@@ -320,12 +320,24 @@ public class AutoProductionDeploymentReconcilerService {
 
         productionVersion = productionVersion.trim();
 
+        String runVersion = firstNonBlank(experiment.getModelVersion());
+        boolean thisRunIsProduction = hasText(runVersion)
+                && productionVersion.equalsIgnoreCase(runVersion.trim());
+
         experiment.setRegisteredModelName(registeredModelName);
         experiment.setModelName(registeredModelName);
-        experiment.setModelVersion(productionVersion);
         experiment.setProductionVersion(productionVersion);
-        experiment.setProduction(true);
+        experiment.setProduction(thisRunIsProduction);
         experiment.setErrorMessage(null);
+
+        if (!thisRunIsProduction) {
+            mlExperimentRepository.saveAndFlush(experiment);
+            System.out.println("[PRODUCTION_RECONCILER] Native MLflow Registry fallback skipped because this run is not the production version. "
+                    + "experimentId=" + experiment.getId()
+                    + ", runVersion=" + runVersion
+                    + ", productionVersion=" + productionVersion);
+            return false;
+        }
 
         experiment.setMessage(
                 appendSafeMessage(
@@ -514,12 +526,24 @@ public class AutoProductionDeploymentReconcilerService {
 
             registryProductionVersion = registryProductionVersion.trim();
 
+            boolean thisRunIsProduction = hasText(modelVersion)
+                    && registryProductionVersion.equalsIgnoreCase(modelVersion.trim());
+
             experiment.setRegisteredModelName(registeredModelName);
             experiment.setModelName(registeredModelName);
-            experiment.setModelVersion(registryProductionVersion);
             experiment.setProductionVersion(registryProductionVersion);
-            experiment.setProduction(true);
+            experiment.setProduction(thisRunIsProduction);
             experiment.setErrorMessage(null);
+
+            if (!thisRunIsProduction) {
+                mlExperimentRepository.saveAndFlush(experiment);
+                System.out.println("[PRODUCTION_RECONCILER][CUSTOM] Custom experiment ignored because this run is not the MLflow production version. "
+                        + "experimentId=" + experiment.getId()
+                        + ", model=" + registeredModelName
+                        + ", runVersion=" + modelVersion
+                        + ", productionVersion=" + registryProductionVersion);
+                return false;
+            }
 
             experiment.setMessage(
                     appendSafeMessage(
@@ -648,6 +672,20 @@ public class AutoProductionDeploymentReconcilerService {
         }
 
         return String.valueOf(experiment.getId());
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+
+        for (String value : values) {
+            if (hasText(value)) {
+                return value.trim();
+            }
+        }
+
+        return null;
     }
 
     private boolean hasText(String value) {

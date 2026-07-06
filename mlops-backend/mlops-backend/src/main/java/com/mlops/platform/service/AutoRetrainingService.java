@@ -73,8 +73,11 @@ public class AutoRetrainingService {
             return;
         }
 
-        boolean activeScheduledRetraining =
-                mlExperimentRepository.existsActiveScheduledRetrainingForProject(projectId);
+        Long activeScheduledRetrainingCount =
+                mlExperimentRepository.countActiveScheduledRetrainingForProject(projectId);
+
+        boolean activeScheduledRetraining = activeScheduledRetrainingCount != null
+                && activeScheduledRetrainingCount > 0;
 
         if (activeScheduledRetraining) {
             System.out.println("[AUTO_RETRAINING] Ignored because active scheduled retraining already exists. projectId="

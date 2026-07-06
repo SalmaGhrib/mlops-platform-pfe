@@ -14,6 +14,9 @@ data:
   SPRING_JPA_OPEN_IN_VIEW: "true"
 
   APP_UPLOAD_DIR: "/app/uploads"
+  APP_UPLOADS_PVC_ENABLED: "true"
+  APP_UPLOADS_PVC_NAME: "mlops-uploads-pvc"
+  APP_UPLOADS_MOUNT_PATH: "/app/uploads"
 
   APP_MLFLOW_TRACKING_URL: "http://mlflow-service:5000"
   APP_MLFLOW_TRACKING_URI: "http://mlflow-service:5000"
@@ -31,7 +34,23 @@ data:
 
   APP_KUBERNETES_NAMESPACE: "mlops"
 
-  APP_CUSTOM_DOCKER_WATCHER_ENABLED: "false"
-  APP_MLOPS_AUTO_SYNC_ENABLED: "false"
-  APP_MLOPS_AUTO_DEPLOY_ENABLED: "false"
-  APP_MLOPS_PRODUCTION_RECONCILER_ENABLED: "false"
+  # Fonctions nécessaires au cycle MLOps automatique sur AKS.
+  APP_CUSTOM_DOCKER_WATCHER_ENABLED: "true"
+  APP_CUSTOM_DOCKER_WATCHER_DELAY_MS: "30000"
+  APP_MLOPS_AUTO_SYNC_ENABLED: "true"
+  APP_MLOPS_AUTO_SYNC_DELAY_MS: "300000"
+  APP_MLOPS_AUTO_DEPLOY_ENABLED: "true"
+  APP_MLOPS_PRODUCTION_RECONCILER_ENABLED: "true"
+  APP_MLOPS_PRODUCTION_RECONCILER_DELAY_MS: "60000"
+  APP_MLOPS_PRODUCTION_RECONCILER_INITIAL_DELAY_MS: "30000"
+
+  APP_SERVING_DEDICATED_IMAGE_ENABLED: "true"
+  APP_DEPLOYMENT_DEFAULT_DOCKER_IMAGE: "docker.io/salmaghrib2003/mlops-generic-model-server:v6"
+  APP_SERVING_BUILD_DIR: "/tmp/mlops/generated-serving-images"
+  APP_KANIKO_DOCKER_CONFIG_SECRET: "kaniko-docker-config"
+  APP_KANIKO_CACHE_REPO: "docker.io/salmaghrib2003/mlops-kaniko-cache-v2"
+
+  # Désactivés par défaut pour éviter le spam quand Prometheus/retraining n'est pas configuré.
+  APP_RETRAINING_SCHEDULER_ENABLED: "false"
+  APP_MONITORING_ALERTS_ENABLED: "false"
+  APP_MONITORING_ALERTS_DELAY_MS: "60000"

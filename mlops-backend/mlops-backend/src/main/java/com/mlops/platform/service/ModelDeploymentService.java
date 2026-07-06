@@ -190,10 +190,7 @@ public ModelDeploymentResponse autoDeployExperimentIfNeeded(MlExperiment experim
             managedExperiment.getRegisteredModelName(),
             managedExperiment.getModelName()
     );
-    String modelVersion = firstNonBlank(
-            managedExperiment.getModelVersion(),
-            managedExperiment.getProductionVersion()
-    );
+    String modelVersion = firstNonBlank(managedExperiment.getModelVersion());
     String productionVersion = firstNonBlank(managedExperiment.getProductionVersion());
 
     if (!hasText(registeredModelName)) {
@@ -201,34 +198,10 @@ public ModelDeploymentResponse autoDeployExperimentIfNeeded(MlExperiment experim
     }
 
 if (!hasText(modelVersion)) {
-    try {
-        String registryProductionVersion = mlflowTrackingClientService.getProductionVersion(registeredModelName.trim());
-
-        if (hasText(registryProductionVersion)) {
-            modelVersion = registryProductionVersion.trim();
-
-            managedExperiment.setModelVersion(modelVersion);
-managedExperiment.setProductionVersion(modelVersion);
-managedExperiment.setProduction(true);
-managedExperiment.setErrorMessage(null);
-
-productionVersion = modelVersion;
-
-managedExperiment = mlExperimentRepository.saveAndFlush(managedExperiment);
-
-            System.out.println("[AUTO_DEPLOY] modelVersion was empty, recovered from MLflow production alias. "
-                    + "experimentId=" + managedExperiment.getId()
-                    + ", model=" + registeredModelName
-                    + ", version=" + modelVersion);
-        }
-    } catch (Exception e) {
-        System.out.println("[AUTO_DEPLOY] Could not recover modelVersion from MLflow production alias. "
-                + "model=" + registeredModelName
-                + ", reason=" + e.getMessage());
-    }
-}
-
-if (!hasText(modelVersion)) {
+    System.out.println("[AUTO_DEPLOY] Skip deployment because experiment modelVersion is empty. "
+            + "experimentId=" + managedExperiment.getId()
+            + ", model=" + registeredModelName
+            + ". This prevents overwriting historical runs with the MLflow production alias.");
     return null;
 }
 
@@ -258,19 +231,26 @@ if (!hasText(modelVersion)) {
                     mlflowTrackingClientService.getProductionVersion(registeredModelName.trim());
 
             if (hasText(registryProductionVersion)) {
-                modelVersion = registryProductionVersion.trim();
-                productionVersion = modelVersion;
+                productionVersion = registryProductionVersion.trim();
 
                 managedExperiment.setRegisteredModelName(registeredModelName.trim());
                 managedExperiment.setModelName(registeredModelName.trim());
-                managedExperiment.setModelVersion(modelVersion);
-                managedExperiment.setProductionVersion(modelVersion);
-                managedExperiment.setProduction(true);
+                managedExperiment.setProductionVersion(productionVersion);
+                managedExperiment.setProduction(productionVersion.equalsIgnoreCase(modelVersion.trim()));
                 managedExperiment.setErrorMessage(null);
 
                 managedExperiment = mlExperimentRepository.saveAndFlush(managedExperiment);
 
-                System.out.println("[AUTO_DEPLOY][CUSTOM] Production state recovered from MLflow Registry. "
+                if (!productionVersion.equalsIgnoreCase(modelVersion.trim())) {
+                    System.out.println("[AUTO_DEPLOY][CUSTOM] Skip deployment because this run is not the MLflow production version. "
+                            + "experimentId=" + managedExperiment.getId()
+                            + ", model=" + registeredModelName
+                            + ", runVersion=" + modelVersion
+                            + ", productionVersion=" + productionVersion);
+                    return null;
+                }
+
+                System.out.println("[AUTO_DEPLOY][CUSTOM] Production state confirmed from MLflow Registry. "
                         + "experimentId=" + managedExperiment.getId()
                         + ", model=" + registeredModelName
                         + ", version=" + modelVersion);
@@ -559,40 +539,41 @@ if (!hasText(modelVersion)) {
 
     productionVersion = productionVersion.trim();
 
-    String modelVersion = firstNonBlank(
-            experiment.getModelVersion(),
-            experiment.getProductionVersion(),
-            productionVersion
-    );
+    String modelVersion = firstNonBlank(experiment.getModelVersion());
 
     if (!hasText(modelVersion)) {
-        modelVersion = productionVersion;
+        experiment.setRegisteredModelName(registeredModelName);
+        experiment.setModelName(registeredModelName);
+        experiment.setProductionVersion(productionVersion);
+        experiment.setProduction(false);
+        mlExperimentRepository.saveAndFlush(experiment);
+
+        System.out.println("[MODEL_DEPLOYMENT] Native Registry check skipped: experiment modelVersion is empty. "
+                + "experimentId=" + experiment.getId()
+                + ", registeredModelName=" + registeredModelName
+                + ", productionVersion=" + productionVersion);
+        return false;
     }
 
     modelVersion = modelVersion.trim();
 
-    /*
-     * Correction importante :
-     * Si l'expérience a modelVersion=null ou une ancienne valeur,
-     * mais que MLflow Registry possède bien alias production,
-     * on force la version à la version production MLflow.
-     */
-    if (!modelVersion.equalsIgnoreCase(productionVersion)) {
-        System.out.println("[MODEL_DEPLOYMENT] Native Registry version corrected from experiment value to production alias. "
-                + "experimentId=" + experiment.getId()
-                + ", registeredModelName=" + registeredModelName
-                + ", oldModelVersion=" + modelVersion
-                + ", productionVersion=" + productionVersion);
-
-        modelVersion = productionVersion;
-    }
+    boolean thisRunIsProduction = modelVersion.equalsIgnoreCase(productionVersion);
 
     experiment.setRegisteredModelName(registeredModelName);
     experiment.setModelName(registeredModelName);
-    experiment.setModelVersion(modelVersion);
     experiment.setProductionVersion(productionVersion);
-    experiment.setProduction(true);
+    experiment.setProduction(thisRunIsProduction);
     experiment.setErrorMessage(null);
+
+    if (!thisRunIsProduction) {
+        mlExperimentRepository.saveAndFlush(experiment);
+        System.out.println("[MODEL_DEPLOYMENT] Native Registry check skipped: this run is not the production version. "
+                + "experimentId=" + experiment.getId()
+                + ", registeredModelName=" + registeredModelName
+                + ", runVersion=" + modelVersion
+                + ", productionVersion=" + productionVersion);
+        return false;
+    }
 
     experiment.setMessage(
             appendDeploymentMessage(

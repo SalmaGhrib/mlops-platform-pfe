@@ -55,8 +55,11 @@ public class MonitoringRetrainingTriggerService {
             return false;
         }
 
-        boolean activeScheduledRetraining =
-                mlExperimentRepository.existsActiveScheduledRetrainingForProject(projectId);
+        Long activeScheduledRetrainingCount =
+                mlExperimentRepository.countActiveScheduledRetrainingForProject(projectId);
+
+        boolean activeScheduledRetraining = activeScheduledRetrainingCount != null
+                && activeScheduledRetrainingCount > 0;
 
         if (activeScheduledRetraining) {
             System.out.println("[MONITORING_RETRAINING] Ignored: active scheduled retraining already exists for projectId="

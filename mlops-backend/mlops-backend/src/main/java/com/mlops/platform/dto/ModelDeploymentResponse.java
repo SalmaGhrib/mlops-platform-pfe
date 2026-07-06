@@ -1,9 +1,11 @@
 package com.mlops.platform.dto;
 
-import com.mlops.platform.entity.ModelDeployment;
 import com.mlops.platform.entity.DeploymentStatus;
+import com.mlops.platform.entity.ModelDeployment;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 
 public class ModelDeploymentResponse {
 
@@ -29,9 +31,13 @@ public class ModelDeploymentResponse {
 
     private Boolean active;
 
-    private LocalDateTime deployedAt;
-    private LocalDateTime createdAt;
-    private LocalDateTime updatedAt;
+    /*
+     * Dates envoyées au frontend en ISO UTC avec suffixe Z.
+     * Cela évite le bug Angular "2 h" causé par les LocalDateTime sans timezone.
+     */
+    private String deployedAt;
+    private String createdAt;
+    private String updatedAt;
 
     /*
      * API access / visibility
@@ -39,8 +45,8 @@ public class ModelDeploymentResponse {
     private Boolean apiEnabled;
     private String visibility;
     private String apiKey;
-    private LocalDateTime apiKeyCreatedAt;
-    private LocalDateTime apiKeyLastUsedAt;
+    private String apiKeyCreatedAt;
+    private String apiKeyLastUsedAt;
 
     private String mlflowProductionVersion;
     private String kubernetesActiveVersion;
@@ -75,11 +81,11 @@ public class ModelDeploymentResponse {
         response.setDockerImage(deployment.getDockerImage());
         response.setErrorMessage(deployment.getErrorMessage());
 
-        response.setActive(deployment.getActive());
+        response.setActive(Boolean.TRUE.equals(deployment.getActive()));
 
-        response.setDeployedAt(deployment.getDeployedAt());
-        response.setCreatedAt(deployment.getCreatedAt());
-        response.setUpdatedAt(deployment.getUpdatedAt());
+        response.setDeployedAt(toUtcIsoString(deployment.getDeployedAt()));
+        response.setCreatedAt(toUtcIsoString(deployment.getCreatedAt()));
+        response.setUpdatedAt(toUtcIsoString(deployment.getUpdatedAt()));
 
         /*
          * Important pour Angular :
@@ -95,10 +101,20 @@ public class ModelDeploymentResponse {
         }
 
         response.setApiKey(deployment.getApiKey());
-        response.setApiKeyCreatedAt(deployment.getApiKeyCreatedAt());
-        response.setApiKeyLastUsedAt(deployment.getApiKeyLastUsedAt());
+        response.setApiKeyCreatedAt(toUtcIsoString(deployment.getApiKeyCreatedAt()));
+        response.setApiKeyLastUsedAt(toUtcIsoString(deployment.getApiKeyLastUsedAt()));
 
         return response;
+    }
+
+    private static String toUtcIsoString(LocalDateTime value) {
+        if (value == null) {
+            return null;
+        }
+
+        return value
+                .atOffset(ZoneOffset.UTC)
+                .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
     }
 
     public Long getId() {
@@ -161,15 +177,15 @@ public class ModelDeploymentResponse {
         return active;
     }
 
-    public LocalDateTime getDeployedAt() {
+    public String getDeployedAt() {
         return deployedAt;
     }
 
-    public LocalDateTime getCreatedAt() {
+    public String getCreatedAt() {
         return createdAt;
     }
 
-    public LocalDateTime getUpdatedAt() {
+    public String getUpdatedAt() {
         return updatedAt;
     }
 
@@ -185,11 +201,11 @@ public class ModelDeploymentResponse {
         return apiKey;
     }
 
-    public LocalDateTime getApiKeyCreatedAt() {
+    public String getApiKeyCreatedAt() {
         return apiKeyCreatedAt;
     }
 
-    public LocalDateTime getApiKeyLastUsedAt() {
+    public String getApiKeyLastUsedAt() {
         return apiKeyLastUsedAt;
     }
 
@@ -261,15 +277,15 @@ public class ModelDeploymentResponse {
         this.active = active;
     }
 
-    public void setDeployedAt(LocalDateTime deployedAt) {
+    public void setDeployedAt(String deployedAt) {
         this.deployedAt = deployedAt;
     }
 
-    public void setCreatedAt(LocalDateTime createdAt) {
+    public void setCreatedAt(String createdAt) {
         this.createdAt = createdAt;
     }
 
-    public void setUpdatedAt(LocalDateTime updatedAt) {
+    public void setUpdatedAt(String updatedAt) {
         this.updatedAt = updatedAt;
     }
 
@@ -285,11 +301,11 @@ public class ModelDeploymentResponse {
         this.apiKey = apiKey;
     }
 
-    public void setApiKeyCreatedAt(LocalDateTime apiKeyCreatedAt) {
+    public void setApiKeyCreatedAt(String apiKeyCreatedAt) {
         this.apiKeyCreatedAt = apiKeyCreatedAt;
     }
 
-    public void setApiKeyLastUsedAt(LocalDateTime apiKeyLastUsedAt) {
+    public void setApiKeyLastUsedAt(String apiKeyLastUsedAt) {
         this.apiKeyLastUsedAt = apiKeyLastUsedAt;
     }
 

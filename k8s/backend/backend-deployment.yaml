@@ -24,10 +24,17 @@ spec:
                 name: backend-config
             - secretRef:
                 name: backend-secret
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "1500m"
+              memory: "2Gi"
           volumeMounts:
             - name: backend-uploads
               mountPath: /app/uploads
       volumes:
         - name: backend-uploads
           persistentVolumeClaim:
-            claimName: backend-uploads-pvc
+            claimName: mlops-uploads-pvc

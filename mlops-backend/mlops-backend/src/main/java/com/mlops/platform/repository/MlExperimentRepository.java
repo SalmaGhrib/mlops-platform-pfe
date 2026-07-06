@@ -320,15 +320,21 @@ public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long
 
     /*
      * Vérifie s’il existe déjà un réentraînement automatique actif pour un projet.
+     *
+     * Important : avec MySQL + nativeQuery, SELECT COUNT(*) > 0 peut revenir comme Long/BigInteger.
+     * Si Spring essaie de caster directement vers boolean, on obtient :
+     * class java.lang.Long cannot be cast to class java.lang.Boolean.
+     *
+     * On retourne donc un compteur Long, puis le service fait count > 0.
      */
     @Query(value = """
-            SELECT COUNT(*) > 0
+            SELECT COUNT(*)
             FROM ml_experiments
             WHERE project_id = :projectId
               AND experiment_name LIKE 'scheduled_retraining_%'
               AND status IN ('CREATED', 'RUNNING')
             """, nativeQuery = true)
-    boolean existsActiveScheduledRetrainingForProject(
+    Long countActiveScheduledRetrainingForProject(
             @Param("projectId") Long projectId
     );
 }

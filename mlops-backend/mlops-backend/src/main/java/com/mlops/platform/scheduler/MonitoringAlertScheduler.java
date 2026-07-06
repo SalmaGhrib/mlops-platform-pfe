@@ -24,6 +24,9 @@ public class MonitoringAlertScheduler {
     private final MlExperimentRepository mlExperimentRepository;
     private final MonitoringRetrainingTriggerService monitoringRetrainingTriggerService;
 
+    @Value("${app.monitoring.alerts.enabled:true}")
+    private boolean monitoringAlertsEnabled;
+
     @Value("${monitoring.alert.failed-runs-threshold:1}")
     private double failedRunsThreshold;
 
@@ -54,8 +57,12 @@ public class MonitoringAlertScheduler {
         this.monitoringRetrainingTriggerService = monitoringRetrainingTriggerService;
     }
 
-    @Scheduled(fixedDelay = 60000)
+    @Scheduled(fixedDelayString = "${app.monitoring.alerts.delay-ms:60000}")
     public void checkMonitoringAlerts() {
+        if (!monitoringAlertsEnabled) {
+            return;
+        }
+
         try {
             System.out.println("[MONITORING_ALERT] Checking monitoring thresholds...");
 
