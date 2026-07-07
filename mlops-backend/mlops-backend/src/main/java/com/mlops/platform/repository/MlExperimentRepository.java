@@ -5,9 +5,11 @@ import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.entity.User;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import jakarta.transaction.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -337,4 +339,67 @@ public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long
     Long countActiveScheduledRetrainingForProject(
             @Param("projectId") Long projectId
     );
+
+    /*
+     * Versioning/Production consistency guards.
+     * A run without metrics and a global score is not a valid platform model version.
+     * It must never be Production and must never be deployed.
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE ml_experiments
+            SET is_production = b'0',
+                model_version = NULL,
+                latest_version = NULL,
+                production_version = NULL
+            WHERE registered_model_name IS NOT NULL
+              AND (
+                    status <> 'COMPLETED'
+                    OR mlflow_run_id IS NULL
+                    OR mlflow_run_id = ''
+                    OR primary_metric_value IS NULL
+                    OR global_score IS NULL
+              )
+            """, nativeQuery = true)
+    int invalidateAllNonEligibleVersions();
+
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE ml_experiments
+            SET is_production = b'0'
+            WHERE registered_model_name = :registeredModelName
+            """, nativeQuery = true)
+    int clearProductionByRegisteredModelName(
+            @Param("registeredModelName") String registeredModelName
+    );
+
+    @Query(value = """
+            SELECT DISTINCT registered_model_name
+            FROM ml_experiments
+            WHERE registered_model_name IS NOT NULL
+              AND registered_model_name <> ''
+            """, nativeQuery = true)
+    List<String> findDistinctRegisteredModelNames();
+
+    @Query(value = """
+            SELECT *
+            FROM ml_experiments
+            WHERE registered_model_name = :registeredModelName
+              AND status = 'COMPLETED'
+              AND mlflow_run_id IS NOT NULL
+              AND mlflow_run_id <> ''
+              AND model_version IS NOT NULL
+              AND model_version <> ''
+              AND primary_metric_value IS NOT NULL
+              AND global_score IS NOT NULL
+            ORDER BY global_score DESC,
+                     COALESCE(finished_at, started_at, created_at, updated_at) DESC,
+                     id DESC
+            """, nativeQuery = true)
+    List<MlExperiment> findEligibleProductionCandidates(
+            @Param("registeredModelName") String registeredModelName
+    );
+
 }

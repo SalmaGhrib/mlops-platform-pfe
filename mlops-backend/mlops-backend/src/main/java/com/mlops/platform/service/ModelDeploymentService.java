@@ -186,6 +186,17 @@ public ModelDeploymentResponse autoDeployExperimentIfNeeded(MlExperiment experim
         return null;
     }
 
+    if (!isValidProductionExperimentForDeployment(managedExperiment)) {
+        System.out.println("[AUTO_DEPLOY] Skip deployment because experiment is not a valid scored Production candidate. "
+                + "experimentId=" + managedExperiment.getId()
+                + ", status=" + managedExperiment.getStatus()
+                + ", modelVersion=" + managedExperiment.getModelVersion()
+                + ", primaryMetricValue=" + managedExperiment.getPrimaryMetricValue()
+                + ", globalScore=" + managedExperiment.getGlobalScore()
+                + ", isProduction=" + managedExperiment.getProduction());
+        return null;
+    }
+
     String registeredModelName = firstNonBlank(
             managedExperiment.getRegisteredModelName(),
             managedExperiment.getModelName()
@@ -3228,5 +3239,26 @@ private String buildDeploymentDisplayName(ModelDeployment deployment) {
     return model + " v" + version;
 }
     
+
+
+private boolean isValidProductionExperimentForDeployment(MlExperiment experiment) {
+    if (experiment == null) {
+        return false;
+    }
+
+    return Boolean.TRUE.equals(experiment.getProduction())
+            && "COMPLETED".equalsIgnoreCase(String.valueOf(experiment.getStatus()))
+            && experiment.getMlflowRunId() != null
+            && !experiment.getMlflowRunId().isBlank()
+            && experiment.getRegisteredModelName() != null
+            && !experiment.getRegisteredModelName().isBlank()
+            && experiment.getModelVersion() != null
+            && !experiment.getModelVersion().isBlank()
+            && experiment.getProductionVersion() != null
+            && !experiment.getProductionVersion().isBlank()
+            && experiment.getProductionVersion().trim().equalsIgnoreCase(experiment.getModelVersion().trim())
+            && experiment.getPrimaryMetricValue() != null
+            && experiment.getGlobalScore() != null;
+}
 
 }

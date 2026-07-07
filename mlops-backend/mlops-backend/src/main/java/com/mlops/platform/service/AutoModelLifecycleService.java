@@ -246,14 +246,20 @@ public class AutoModelLifecycleService {
             return false;
         }
 
-        boolean isProduction =
-                Boolean.TRUE.equals(experiment.getProduction())
-                        || (
-                        experiment.getProductionVersion() != null
-                                && experiment.getProductionVersion().equals(experiment.getModelVersion())
-                );
+        if (!Boolean.TRUE.equals(experiment.getProduction())) {
+            return false;
+        }
 
-        return isProduction;
+        if (experiment.getProductionVersion() == null
+                || experiment.getProductionVersion().isBlank()
+                || !experiment.getProductionVersion().trim().equalsIgnoreCase(experiment.getModelVersion().trim())) {
+            return false;
+        }
+
+        return experiment.getMlflowRunId() != null
+                && !experiment.getMlflowRunId().isBlank()
+                && experiment.getPrimaryMetricValue() != null
+                && experiment.getGlobalScore() != null;
     }
 
     private boolean isAutoPromoteEnabled(MlProject project) {

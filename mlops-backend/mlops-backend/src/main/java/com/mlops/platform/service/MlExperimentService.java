@@ -747,6 +747,7 @@ experiment.setMessage(
         try {
             recalculateGlobalScoresForProject(project, registeredName);
             refreshProductionVersionFlagsForProject(project, registeredName);
+            enforceProductionConsistencyForModel(registeredName);
 
             if (isAutoPromoteEnabled(project)) {
                 autoModelLifecycleService.evaluateAndAutoPromoteAndDeploy(project, registeredName);
@@ -1063,6 +1064,10 @@ if (experimentToSave == null) {
                     }
                 }
 
+                if (!isEligiblePlatformVersion(experimentToSave)) {
+                    clearVersioningAndProduction(experimentToSave);
+                }
+
                 syncAlgorithmMetadataFromRunTags(experimentToSave, runDetails);
 
                 MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(experimentToSave);
@@ -1086,8 +1091,12 @@ if (experimentToSave == null) {
                 String refreshedProductionVersion =
                         mlflowTrackingClientService.getProductionVersion(registeredModelName);
 
-                if (hasText(refreshedProductionVersion)) {
+                if (isEligiblePlatformVersion(savedExperiment) && hasText(refreshedProductionVersion)) {
                     savedExperiment.setProductionVersion(refreshedProductionVersion);
+                }
+
+                if (!isEligiblePlatformVersion(savedExperiment)) {
+                    clearVersioningAndProduction(savedExperiment);
                 }
 
                 savedExperiment.setProduction(isProductionExperimentRow(savedExperiment));
@@ -1404,18 +1413,10 @@ private void deleteUselessOrphanExperimentRows(MlProject project) {
 }
 
 private boolean isProductionExperimentRow(MlExperiment experiment) {
-    if (experiment == null) {
+    if (!isEligiblePlatformVersion(experiment)) {
         return false;
     }
 
-    /*
-     * Source de vérité corrigée :
-     * - production_version indique seulement quelle version MLflow est actuellement aliasée.
-     * - is_production indique LA ligne MySQL choisie pour représenter cette production.
-     *
-     * Cela évite d'afficher plusieurs badges Production quand plusieurs runs ont
-     * la même model_version.
-     */
     return Boolean.TRUE.equals(experiment.getProduction())
             && hasText(experiment.getProductionVersion())
             && hasText(experiment.getModelVersion())
@@ -1423,6 +1424,82 @@ private boolean isProductionExperimentRow(MlExperiment experiment) {
             .equalsIgnoreCase(experiment.getModelVersion().trim());
 }
 
+private boolean isEligiblePlatformVersion(MlExperiment experiment) {
+    if (experiment == null) {
+        return false;
+    }
+
+    return experiment.getStatus() == ExperimentStatus.COMPLETED
+            && hasText(experiment.getMlflowRunId())
+            && hasText(experiment.getModelVersion())
+            && experiment.getPrimaryMetricValue() != null
+            && experiment.getGlobalScore() != null;
+}
+
+private void clearVersioningAndProduction(MlExperiment experiment) {
+    if (experiment == null) {
+        return;
+    }
+
+    experiment.setProduction(false);
+    experiment.setModelVersion(null);
+    experiment.setLatestVersion(null);
+    experiment.setProductionVersion(null);
+}
+
+private void normalizeVersioningState(MlExperiment experiment) {
+    if (experiment == null) {
+        return;
+    }
+
+    if (!isEligiblePlatformVersion(experiment)) {
+        clearVersioningAndProduction(experiment);
+    } else {
+        experiment.setProduction(false);
+        experiment.setProductionVersion(null);
+    }
+}
+
+@Transactional
+public void enforceProductionConsistencyForAllModels() {
+    try {
+        mlExperimentRepository.invalidateAllNonEligibleVersions();
+    } catch (Exception e) {
+        System.out.println("[PRODUCTION_GUARD] Could not invalidate non eligible versions: " + e.getMessage());
+    }
+
+    List<String> registeredModelNames = mlExperimentRepository.findDistinctRegisteredModelNames();
+    if (registeredModelNames == null || registeredModelNames.isEmpty()) {
+        return;
+    }
+
+    for (String registeredModelName : registeredModelNames) {
+        enforceProductionConsistencyForModel(registeredModelName);
+    }
+}
+
+@Transactional
+public void enforceProductionConsistencyForModel(String registeredModelName) {
+    if (!hasText(registeredModelName)) {
+        return;
+    }
+
+    String cleanRegisteredModelName = registeredModelName.trim();
+
+    mlExperimentRepository.clearProductionByRegisteredModelName(cleanRegisteredModelName);
+
+    List<MlExperiment> candidates = mlExperimentRepository
+            .findEligibleProductionCandidates(cleanRegisteredModelName);
+
+    if (candidates == null || candidates.isEmpty()) {
+        return;
+    }
+
+    MlExperiment selected = candidates.get(0);
+    selected.setProduction(true);
+    selected.setProductionVersion(selected.getModelVersion());
+    mlExperimentRepository.saveAndFlush(selected);
+}
 
 private List<MlExperiment> filterAndDeduplicateVisibleExperiments(List<MlExperiment> experiments) {
     if (experiments == null || experiments.isEmpty()) {
@@ -2831,11 +2908,7 @@ private void updateMessageFromFinalStatus(
         experiment.setProductionVersion(productionVersion);
     }
 
-    experiment.setProduction(
-            experiment.getProductionVersion() != null
-                    && experiment.getModelVersion() != null
-                    && experiment.getProductionVersion().equals(experiment.getModelVersion())
-    );
+    experiment.setProduction(false);
 
     Map<String, Double> mlflowMetrics = new LinkedHashMap<>();
 
@@ -2949,6 +3022,10 @@ private void updateMessageFromFinalStatus(
         appendMetricWarningToMessage(experiment, metricWarningMessage);
     }
 
+    if (!isEligiblePlatformVersion(experiment)) {
+        clearVersioningAndProduction(experiment);
+    }
+
     MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(experiment);
 
         if (hasMetrics) {
@@ -2971,8 +3048,12 @@ private void updateMessageFromFinalStatus(
     String refreshedProductionVersion =
             mlflowTrackingClientService.getProductionVersion(preferredRegisteredModelName);
 
-    if (hasText(refreshedProductionVersion)) {
+    if (isEligiblePlatformVersion(savedExperiment) && hasText(refreshedProductionVersion)) {
         savedExperiment.setProductionVersion(refreshedProductionVersion);
+    }
+
+    if (!isEligiblePlatformVersion(savedExperiment)) {
+        clearVersioningAndProduction(savedExperiment);
     }
 
     savedExperiment.setProduction(isProductionExperimentRow(savedExperiment));
@@ -4556,7 +4637,7 @@ private void refreshProductionVersionFlagsForProject(MlProject project, String r
     }
 
     String cleanRegisteredModelName = registeredModelName.trim();
-    String productionVersion = mlflowTrackingClientService.getProductionVersion(cleanRegisteredModelName);
+    String registryProductionVersion = mlflowTrackingClientService.getProductionVersion(cleanRegisteredModelName);
 
     List<MlExperiment> experiments = mlExperimentRepository
             .findByProjectAndRegisteredModelNameOrderByCreatedAtDesc(
@@ -4569,41 +4650,72 @@ private void refreshProductionVersionFlagsForProject(MlProject project, String r
     }
 
     /*
-     * Règle forte : un seul run peut être marqué Production pour un modèle donné.
-     * productionVersion reste une information globale, mais le badge Production
-     * doit dépendre uniquement de is_production=true sur UNE seule ligne.
+     * Règle métier définitive :
+     * - pas de métrique principale => pas de version plateforme
+     * - pas de score global => pas de version plateforme
+     * - pas de version plateforme => jamais Production
+     * - une seule ligne Production par registered_model_name
      */
     for (MlExperiment experiment : experiments) {
         if (experiment == null) {
             continue;
         }
 
-        experiment.setProduction(false);
-        experiment.setProductionVersion(hasText(productionVersion) ? productionVersion.trim() : null);
-    }
-
-    if (!hasText(productionVersion)) {
-        mlExperimentRepository.saveAll(experiments);
-        mlExperimentRepository.flush();
-        return;
+        if (!isEligiblePlatformVersion(experiment)) {
+            clearVersioningAndProduction(experiment);
+        } else {
+            experiment.setProduction(false);
+            experiment.setProductionVersion(null);
+        }
     }
 
     MlExperiment productionCandidate = null;
 
-    for (MlExperiment experiment : experiments) {
-        if (!isEligibleProductionCandidate(experiment, productionVersion)) {
-            continue;
-        }
+    if (hasText(registryProductionVersion)) {
+        String cleanProductionVersion = registryProductionVersion.trim();
 
-        if (productionCandidate == null
-                || compareProductionCandidates(experiment, productionCandidate) > 0) {
-            productionCandidate = experiment;
+        for (MlExperiment experiment : experiments) {
+            if (!isEligibleProductionCandidate(experiment, cleanProductionVersion)) {
+                continue;
+            }
+
+            if (productionCandidate == null
+                    || compareProductionCandidates(experiment, productionCandidate) > 0) {
+                productionCandidate = experiment;
+            }
+        }
+    }
+
+    if (productionCandidate == null) {
+        for (MlExperiment experiment : experiments) {
+            if (!isEligiblePlatformVersion(experiment)) {
+                continue;
+            }
+
+            if (productionCandidate == null
+                    || compareProductionCandidates(experiment, productionCandidate) > 0) {
+                productionCandidate = experiment;
+            }
         }
     }
 
     if (productionCandidate != null) {
         productionCandidate.setProduction(true);
-        productionCandidate.setProductionVersion(productionVersion.trim());
+        productionCandidate.setProductionVersion(productionCandidate.getModelVersion());
+
+        try {
+            mlflowTrackingClientService.setProductionAliasSafe(
+                    cleanRegisteredModelName,
+                    productionCandidate.getModelVersion()
+            );
+        } catch (Exception e) {
+            System.out.println("[PRODUCTION_GUARD] Could not sync MLflow production alias for model="
+                    + cleanRegisteredModelName
+                    + ", version="
+                    + productionCandidate.getModelVersion()
+                    + ", reason="
+                    + e.getMessage());
+        }
     }
 
     mlExperimentRepository.saveAll(experiments);
@@ -4611,28 +4723,12 @@ private void refreshProductionVersionFlagsForProject(MlProject project, String r
 }
 
 private boolean isEligibleProductionCandidate(MlExperiment experiment, String productionVersion) {
-    if (experiment == null || !hasText(productionVersion)) {
+    if (!isEligiblePlatformVersion(experiment) || !hasText(productionVersion)) {
         return false;
     }
 
-    if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
-        return false;
-    }
-
-    if (!hasText(experiment.getModelVersion())) {
-        return false;
-    }
-
-    if (!productionVersion.trim().equalsIgnoreCase(experiment.getModelVersion().trim())) {
-        return false;
-    }
-
-    /*
-     * On évite de marquer Production une ligne incomplète/importée sans vraie identité MLflow.
-     */
-    return hasText(experiment.getMlflowRunId());
+    return productionVersion.trim().equalsIgnoreCase(experiment.getModelVersion().trim());
 }
-
 private int compareProductionCandidates(MlExperiment left, MlExperiment right) {
     if (left == null && right == null) {
         return 0;
@@ -4784,7 +4880,13 @@ private void syncSingleProjectAutomatically(MlProject project) {
     mergeDuplicateMlflowKubeflowRows(project);
 
     /*
-     * 10) Nettoyer les lignes RUNNING/CREATED inutiles :
+     * 10) Appliquer la règle globale définitive :
+     * pas de métrique + pas de score => pas de version, pas de Production, pas de déploiement.
+     */
+    enforceProductionConsistencyForAllModels();
+
+    /*
+     * 11) Nettoyer les lignes RUNNING/CREATED inutiles :
      * - sans MLflow
      * - sans Kubeflow
      * - sans training job

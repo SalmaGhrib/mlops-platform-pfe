@@ -196,7 +196,11 @@ public class ModelPromotionService {
         }
 
         return experiment.getModelVersion() != null
-                && !experiment.getModelVersion().isBlank();
+                && !experiment.getModelVersion().isBlank()
+                && experiment.getMlflowRunId() != null
+                && !experiment.getMlflowRunId().isBlank()
+                && experiment.getPrimaryMetricValue() != null
+                && experiment.getGlobalScore() != null;
     }
 
     private Map<String, Double> loadMetricValues(MlExperiment experiment) {

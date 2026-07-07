@@ -1417,7 +1417,28 @@ getDetectedComponentsCount(): number {
     };
   }
 
+  private hasValidScoreForVersioning(experiment: MlExperimentResponse): boolean {
+    const primaryMetricValue =
+      experiment.primaryMetricValue ??
+      experiment['primary_metric_value'] ??
+      null;
+
+    const globalScore =
+      experiment.globalScore ??
+      experiment['global_score'] ??
+      null;
+
+    return primaryMetricValue !== null &&
+      primaryMetricValue !== undefined &&
+      globalScore !== null &&
+      globalScore !== undefined;
+  }
+
   getModelVersion(experiment: MlExperimentResponse): string {
+    if (!this.hasValidScoreForVersioning(experiment) || experiment.status !== 'COMPLETED') {
+      return '-';
+    }
+
     const value =
       experiment.modelVersion ??
       experiment.mlflowModelVersion ??
@@ -1450,7 +1471,10 @@ getDetectedComponentsCount(): number {
   }
 
   isProductionExperiment(experiment: MlExperimentResponse): boolean {
-    return this.toBoolean(experiment.production ?? experiment.isProduction ?? experiment['is_production']);
+    return this.toBoolean(experiment.production ?? experiment.isProduction ?? experiment['is_production']) &&
+      experiment.status === 'COMPLETED' &&
+      this.hasValidScoreForVersioning(experiment) &&
+      this.getModelVersion(experiment) !== '-';
   }
 
   hasAlgorithmReplacementForRun(experiment: MlExperimentResponse): boolean {
