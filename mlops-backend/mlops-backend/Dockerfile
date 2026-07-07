@@ -2,7 +2,7 @@ FROM eclipse-temurin:17-jre
 
 WORKDIR /app
 
-COPY target/*.jar app.jar
+COPY mlops-backend/mlops-backend/target/*.jar app.jar
 
 COPY mini-mlops /app/mini-mlops
 

@@ -11,6 +11,7 @@ public class RetrainingConfig {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "project_id", unique = true)
     private Long projectId;
 
     private Long sourceExperimentId;
@@ -38,26 +39,57 @@ public class RetrainingConfig {
         this.createdAt = now;
         this.updatedAt = now;
 
-        if (this.nextRetrainingAt == null) {
+        normalizeFrequency();
+
+        if (this.enabled && this.nextRetrainingAt == null) {
             this.nextRetrainingAt = calculateNextRetrainingDate(now);
+        }
+
+        if (!this.enabled) {
+            this.nextRetrainingAt = null;
+            this.running = false;
         }
     }
 
     @PreUpdate
     public void onUpdate() {
         this.updatedAt = LocalDateTime.now();
+        normalizeFrequency();
+
+        if (!this.enabled) {
+            this.nextRetrainingAt = null;
+            this.running = false;
+        }
+    }
+
+    public void normalizeFrequency() {
+        if (this.frequencyType == null) {
+            this.frequencyType = RetrainingFrequencyType.WEEK;
+        }
+
+        if (this.frequencyValue == null || this.frequencyValue <= 0) {
+            this.frequencyValue = 1;
+        }
     }
 
     public LocalDateTime calculateNextRetrainingDate(LocalDateTime fromDate) {
-        if (frequencyType == null || frequencyValue == null || frequencyValue <= 0) {
-            return fromDate.plusWeeks(1);
-        }
+        LocalDateTime base = fromDate != null ? fromDate : LocalDateTime.now();
+        normalizeFrequency();
 
         return switch (frequencyType) {
-            case DAY -> fromDate.plusDays(frequencyValue);
-            case WEEK -> fromDate.plusWeeks(frequencyValue);
-            case MONTH -> fromDate.plusMonths(frequencyValue);
+            case DAY -> base.plusDays(frequencyValue);
+            case WEEK -> base.plusWeeks(frequencyValue);
+            case MONTH -> base.plusMonths(frequencyValue);
         };
+    }
+
+    public void scheduleNextFrom(LocalDateTime fromDate) {
+        if (!enabled) {
+            this.nextRetrainingAt = null;
+            this.running = false;
+            return;
+        }
+        this.nextRetrainingAt = calculateNextRetrainingDate(fromDate);
     }
 
     public Long getId() {
@@ -86,6 +118,10 @@ public class RetrainingConfig {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+        if (!enabled) {
+            this.running = false;
+            this.nextRetrainingAt = null;
+        }
     }
 
     public RetrainingFrequencyType getFrequencyType() {
@@ -93,7 +129,7 @@ public class RetrainingConfig {
     }
 
     public void setFrequencyType(RetrainingFrequencyType frequencyType) {
-        this.frequencyType = frequencyType;
+        this.frequencyType = frequencyType != null ? frequencyType : RetrainingFrequencyType.WEEK;
     }
 
     public Integer getFrequencyValue() {
@@ -101,7 +137,7 @@ public class RetrainingConfig {
     }
 
     public void setFrequencyValue(Integer frequencyValue) {
-        this.frequencyValue = frequencyValue;
+        this.frequencyValue = frequencyValue != null && frequencyValue > 0 ? frequencyValue : 1;
     }
 
     public LocalDateTime getLastRetrainingAt() {

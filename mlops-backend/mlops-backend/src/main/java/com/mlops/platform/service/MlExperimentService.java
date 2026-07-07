@@ -5001,6 +5001,14 @@ public MlExperimentResponse retrainFromExistingExperiment(
 
     UploadedProjectFile sourceDatasetFile = sourceExperiment.getDatasetFile();
 
+    if (sourceDatasetFile == null
+            || sourceDatasetFile.getFilePath() == null
+            || sourceDatasetFile.getFilePath().isBlank()) {
+        throw new RuntimeException(
+                "Source experiment has no dataset file. Cannot schedule retraining."
+        );
+    }
+
     String effectiveRuntimeMode = defaultValue(
             sourceExperiment.getRuntimeMode(),
             getProjectRuntimeMode(project)
@@ -5427,9 +5435,43 @@ private boolean isValidProductionRetrainingSource(
         return false;
     }
 
+    /*
+     * A retraining source must be a real platform production version.
+     * Runs without score/metric are not eligible, even if MLflow has a technical version.
+     */
+    if (!Boolean.TRUE.equals(experiment.getProduction())) {
+        return false;
+    }
+
+    if (experiment.getPrimaryMetricValue() == null || experiment.getGlobalScore() == null) {
+        return false;
+    }
+
+    if (experiment.getMlflowRunId() == null || experiment.getMlflowRunId().isBlank()) {
+        return false;
+    }
+
+    if (experiment.getModelVersion() == null || experiment.getModelVersion().isBlank()) {
+        return false;
+    }
+
+    if (experiment.getProductionVersion() == null || experiment.getProductionVersion().isBlank()) {
+        return false;
+    }
+
+    if (!experiment.getModelVersion().trim().equalsIgnoreCase(experiment.getProductionVersion().trim())) {
+        return false;
+    }
+
     if (experiment.getModelFile() == null
             || experiment.getModelFile().getFilePath() == null
             || experiment.getModelFile().getFilePath().isBlank()) {
+        return false;
+    }
+
+    if (experiment.getDatasetFile() == null
+            || experiment.getDatasetFile().getFilePath() == null
+            || experiment.getDatasetFile().getFilePath().isBlank()) {
         return false;
     }
 
@@ -5444,25 +5486,15 @@ private boolean isValidProductionRetrainingSource(
         return false;
     }
 
-    if (experiment.getModelVersion() == null
-            || experiment.getModelVersion().isBlank()) {
-        return false;
+    String runtimeMode = defaultValue(experiment.getRuntimeMode(), "STANDARD_RUNTIME").trim().toUpperCase(Locale.ROOT);
+
+    if (isCustomDockerfileMode(runtimeMode)) {
+        boolean hasDockerfile = experiment.getDockerfilePath() != null && !experiment.getDockerfilePath().isBlank();
+        boolean hasCustomImage = experiment.getCustomImageUri() != null && !experiment.getCustomImageUri().isBlank();
+        return hasDockerfile || hasCustomImage;
     }
 
-    /*
-     * On accepte :
-     * - soit mlflowRunId rempli
-     * - soit trainingJobName/kubeflowRunName rempli pour les runs Custom Docker
-     */
-    boolean hasMlflowIdentity =
-            experiment.getMlflowRunId() != null
-                    && !experiment.getMlflowRunId().isBlank();
-
-    boolean hasExecutionIdentity =
-            hasMlflowIdentity
-                    || hasKubeflowIdentity(experiment);
-
-    return hasExecutionIdentity;
+    return true;
 }
 
 private void notifyTerminalExperimentIfNeeded(MlExperiment experiment) {

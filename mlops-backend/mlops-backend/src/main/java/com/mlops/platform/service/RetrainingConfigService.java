@@ -1,8 +1,14 @@
 package com.mlops.platform.service;
 
 import com.mlops.platform.dto.RetrainingConfigRequest;
+import com.mlops.platform.entity.MlExperiment;
+import com.mlops.platform.entity.MlProject;
+import com.mlops.platform.entity.NotificationTargetType;
+import com.mlops.platform.entity.NotificationType;
 import com.mlops.platform.entity.RetrainingConfig;
 import com.mlops.platform.entity.RetrainingFrequencyType;
+import com.mlops.platform.repository.MlExperimentRepository;
+import com.mlops.platform.repository.MlProjectRepository;
 import com.mlops.platform.repository.RetrainingConfigRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,9 +19,20 @@ import java.time.LocalDateTime;
 public class RetrainingConfigService {
 
     private final RetrainingConfigRepository retrainingConfigRepository;
+    private final MlProjectRepository mlProjectRepository;
+    private final MlExperimentRepository mlExperimentRepository;
+    private final NotificationService notificationService;
 
-    public RetrainingConfigService(RetrainingConfigRepository retrainingConfigRepository) {
+    public RetrainingConfigService(
+            RetrainingConfigRepository retrainingConfigRepository,
+            MlProjectRepository mlProjectRepository,
+            MlExperimentRepository mlExperimentRepository,
+            NotificationService notificationService
+    ) {
         this.retrainingConfigRepository = retrainingConfigRepository;
+        this.mlProjectRepository = mlProjectRepository;
+        this.mlExperimentRepository = mlExperimentRepository;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -45,15 +62,22 @@ public class RetrainingConfigService {
             throw new IllegalArgumentException("projectId is required");
         }
 
-        if (requireSourceExperiment && sourceExperimentId == null) {
-            throw new IllegalArgumentException("sourceExperimentId is required");
+        MlProject project = mlProjectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("Project not found: " + projectId));
+
+        boolean enabled = request != null && request.isEnabled();
+
+        if (requireSourceExperiment && enabled && sourceExperimentId == null) {
+            throw new IllegalArgumentException("sourceExperimentId is required when retraining is enabled from an experiment");
+        }
+
+        if (sourceExperimentId != null) {
+            validateSourceExperiment(projectId, sourceExperimentId);
         }
 
         RetrainingConfig config = retrainingConfigRepository
                 .findByProjectId(projectId)
                 .orElseGet(RetrainingConfig::new);
-
-        boolean enabled = request != null && request.isEnabled();
 
         RetrainingFrequencyType frequencyType = resolveFrequencyType(request);
         Integer frequencyValue = resolveFrequencyValue(request);
@@ -70,16 +94,19 @@ public class RetrainingConfigService {
         config.setRunning(false);
 
         if (enabled) {
-            config.setNextRetrainingAt(
-                    config.calculateNextRetrainingDate(LocalDateTime.now())
-            );
+            config.scheduleNextFrom(LocalDateTime.now());
         } else {
             config.setNextRetrainingAt(null);
         }
 
-        return retrainingConfigRepository.saveAndFlush(config);
+        RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
+
+        notifyConfigChanged(project, saved, enabled ? "activé" : "désactivé");
+
+        return saved;
     }
 
+    @Transactional(readOnly = true)
     public RetrainingConfig getConfig(Long projectId) {
         if (projectId == null) {
             throw new IllegalArgumentException("projectId is required");
@@ -117,17 +144,24 @@ public class RetrainingConfigService {
             throw new IllegalArgumentException("projectId is required");
         }
 
+        MlProject project = mlProjectRepository.findById(projectId).orElse(null);
+
         RetrainingConfig config = retrainingConfigRepository
                 .findByProjectId(projectId)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "No retraining config found for projectId=" + projectId
-                ));
+                .orElseGet(RetrainingConfig::new);
 
+        config.setProjectId(projectId);
         config.setEnabled(false);
         config.setRunning(false);
         config.setNextRetrainingAt(null);
 
-        return retrainingConfigRepository.saveAndFlush(config);
+        RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
+
+        if (project != null) {
+            notifyConfigChanged(project, saved, "désactivé");
+        }
+
+        return saved;
     }
 
     @Transactional
@@ -155,9 +189,31 @@ public class RetrainingConfigService {
         }
 
         config.setRunning(false);
-        config.setNextRetrainingAt(LocalDateTime.of(2000, 1, 1, 0, 0));
+        config.setNextRetrainingAt(LocalDateTime.now().minusSeconds(5));
 
-        return retrainingConfigRepository.saveAndFlush(config);
+        RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
+
+        MlProject project = mlProjectRepository.findById(projectId).orElse(null);
+        if (project != null) {
+            notifyConfigChanged(project, saved, "demandé maintenant");
+        }
+
+        return saved;
+    }
+
+    private void validateSourceExperiment(Long projectId, Long sourceExperimentId) {
+        MlExperiment experiment = mlExperimentRepository.findById(sourceExperimentId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Source experiment not found: " + sourceExperimentId
+                ));
+
+        if (experiment.getProject() == null
+                || experiment.getProject().getId() == null
+                || !experiment.getProject().getId().equals(projectId)) {
+            throw new IllegalArgumentException(
+                    "Source experiment does not belong to projectId=" + projectId
+            );
+        }
     }
 
     private RetrainingFrequencyType resolveFrequencyType(RetrainingConfigRequest request) {
@@ -169,14 +225,46 @@ public class RetrainingConfigService {
     }
 
     private Integer resolveFrequencyValue(RetrainingConfigRequest request) {
-        if (
-                request == null ||
-                request.getFrequencyValue() == null ||
-                request.getFrequencyValue() <= 0
-        ) {
+        if (request == null || request.getFrequencyValue() == null || request.getFrequencyValue() <= 0) {
             return 1;
         }
 
-        return request.getFrequencyValue();
+        return Math.min(request.getFrequencyValue(), 365);
+    }
+
+    private void notifyConfigChanged(MlProject project, RetrainingConfig config, String action) {
+        if (project == null || config == null) {
+            return;
+        }
+
+        try {
+            String projectName = project.getName() != null && !project.getName().isBlank()
+                    ? project.getName()
+                    : "project " + project.getId();
+
+            String message = "Le réentraînement automatique du projet "
+                    + projectName
+                    + " a été "
+                    + action
+                    + ".";
+
+            if (config.isEnabled() && config.getNextRetrainingAt() != null) {
+                message += " Prochaine exécution : " + config.getNextRetrainingAt() + ".";
+            }
+
+            notificationService.notifyUser(
+                    project.getOwner(),
+                    "Réentraînement automatique",
+                    message,
+                    NotificationType.SYSTEM_INFO,
+                    NotificationTargetType.PROJECT,
+                    project.getId()
+            );
+        } catch (Exception e) {
+            System.out.println("[AUTO_RETRAINING][NOTIFICATION] Cannot notify config change. projectId="
+                    + project.getId()
+                    + ", reason="
+                    + e.getMessage());
+        }
     }
 }

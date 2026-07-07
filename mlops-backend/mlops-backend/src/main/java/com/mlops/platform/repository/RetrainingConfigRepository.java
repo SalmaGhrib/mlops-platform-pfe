@@ -1,7 +1,11 @@
 package com.mlops.platform.repository;
 
 import com.mlops.platform.entity.RetrainingConfig;
+import jakarta.transaction.Transactional;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
@@ -14,13 +18,90 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
     Optional<RetrainingConfig> findByProjectId(Long projectId);
 
     /*
-     * Le scheduler ne doit récupérer que :
-     * - enabled = true
-     * - running = false
-     * - nextRetrainingAt non null
-     * - nextRetrainingAt <= now
+     * Scheduler query.
+     * We keep the derived query for compatibility, but the scheduler now uses
+     * findDueConfigs(...) + claimDueConfig(...) to avoid double launches on AKS.
      */
     List<RetrainingConfig> findByEnabledTrueAndRunningFalseAndNextRetrainingAtIsNotNullAndNextRetrainingAtLessThanEqual(
             LocalDateTime now
+    );
+
+    @Query("""
+            SELECT c
+            FROM RetrainingConfig c
+            WHERE c.enabled = true
+              AND c.running = false
+              AND c.nextRetrainingAt IS NOT NULL
+              AND c.nextRetrainingAt <= :now
+            ORDER BY c.nextRetrainingAt ASC, c.id ASC
+            """)
+    List<RetrainingConfig> findDueConfigs(@Param("now") LocalDateTime now);
+
+    /*
+     * Atomic claim: only one backend pod/scheduler cycle can claim the same config.
+     */
+    @Modifying
+    @Transactional
+    @Query("""
+            UPDATE RetrainingConfig c
+            SET c.running = true,
+                c.updatedAt = :now
+            WHERE c.id = :id
+              AND c.enabled = true
+              AND c.running = false
+              AND c.nextRetrainingAt IS NOT NULL
+              AND c.nextRetrainingAt <= :now
+            """)
+    int claimDueConfig(@Param("id") Long id, @Param("now") LocalDateTime now);
+
+    @Modifying
+    @Transactional
+    @Query("""
+            UPDATE RetrainingConfig c
+            SET c.running = false,
+                c.lastRetrainingAt = :lastRetrainingAt,
+                c.nextRetrainingAt = :nextRetrainingAt,
+                c.updatedAt = :updatedAt
+            WHERE c.id = :id
+            """)
+    int releaseAfterSuccess(
+            @Param("id") Long id,
+            @Param("lastRetrainingAt") LocalDateTime lastRetrainingAt,
+            @Param("nextRetrainingAt") LocalDateTime nextRetrainingAt,
+            @Param("updatedAt") LocalDateTime updatedAt
+    );
+
+    @Modifying
+    @Transactional
+    @Query("""
+            UPDATE RetrainingConfig c
+            SET c.running = false,
+                c.nextRetrainingAt = :nextRetrainingAt,
+                c.updatedAt = :updatedAt
+            WHERE c.id = :id
+            """)
+    int releaseAfterFailure(
+            @Param("id") Long id,
+            @Param("nextRetrainingAt") LocalDateTime nextRetrainingAt,
+            @Param("updatedAt") LocalDateTime updatedAt
+    );
+
+    /*
+     * If the backend pod is killed while a retraining launch is running, running=true
+     * can stay blocked forever. This reset makes the scheduler self-healing in AKS.
+     */
+    @Modifying
+    @Transactional
+    @Query("""
+            UPDATE RetrainingConfig c
+            SET c.running = false,
+                c.updatedAt = :now
+            WHERE c.running = true
+              AND c.updatedAt IS NOT NULL
+              AND c.updatedAt < :cutoff
+            """)
+    int resetStuckRunningConfigs(
+            @Param("cutoff") LocalDateTime cutoff,
+            @Param("now") LocalDateTime now
     );
 }
