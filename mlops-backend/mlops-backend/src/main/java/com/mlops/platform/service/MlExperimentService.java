@@ -932,12 +932,7 @@ experiment.setMessage(
 
                 Map<String, Double> metrics = runDetails.getMetrics();
 
-                String modelVersion = firstNotBlank(
-                        runDetails.getModelVersion(),
-                        runDetails.getTag("model_version"),
-                        runDetails.getTag("registered_model_version"),
-                        runDetails.getTag("version")
-                );
+                String modelVersion = null;
 
                 MlflowTrackingClientService.ModelVersionInfo runVersionInfo =
                         mlflowTrackingClientService.findModelVersionInfoByRunId(
@@ -949,6 +944,13 @@ experiment.setMessage(
                         && runVersionInfo.getVersion() != null
                         && !runVersionInfo.getVersion().isBlank()) {
                     modelVersion = runVersionInfo.getVersion();
+                } else if (isPlatformManagedMlflowRun(runDetails)) {
+                    modelVersion = firstNotBlank(
+                            runDetails.getModelVersion(),
+                            runDetails.getTag("model_version"),
+                            runDetails.getTag("registered_model_version"),
+                            runDetails.getTag("platform_model_version")
+                    );
                 }
 
                 String productionVersion = firstNotBlank(
@@ -1131,7 +1133,8 @@ if (experimentToSave == null) {
     String registeredModelName = firstNotBlank(
             runDetails.getRegisteredModelName(),
             runDetails.getTag("registered_model_name"),
-            runDetails.getTag("registeredModelName")
+            runDetails.getTag("registeredModelName"),
+            runDetails.getTag("platform_registered_model_name")
     );
 
     String kubeflowRunId = firstNotBlank(
@@ -1164,20 +1167,32 @@ if (experimentToSave == null) {
     }
 
     /*
-     * Fallback pour STANDARD_RUNTIME :
-     * le run peut ne pas avoir les tags Spring/Kubeflow,
-     * mais il appartient bien au projet s'il possède un registered model/version
-     * ou des métriques récupérées depuis MLflow Registry.
+     * Protection contre les runs MLflow créés directement par le script utilisateur.
+     * Exemple : run_name="custom_run" avec artifact "model".
+     *
+     * Ces runs peuvent être utiles dans MLflow, mais ils ne doivent pas être importés
+     * comme lignes plateforme, sinon ils créent des doublons et des versions fausses.
+     *
+     * La plateforme importe seulement :
+     * - les runs avec tags plateforme,
+     * - ou les anciens runs dont le nom suit le format project_run_yyyymmdd...
      */
-    boolean hasModelVersion =
-            hasText(runDetails.getModelVersion())
-                    || hasText(runDetails.getTag("model_version"))
-                    || hasText(runDetails.getTag("registered_model_version"));
+    return isPlatformGeneratedRunName(runDetails.getRunName());
+}
 
-    boolean hasMetrics =
-            runDetails.getMetrics() != null && !runDetails.getMetrics().isEmpty();
+private boolean isPlatformManagedMlflowRun(MlflowTrackingClientService.MlflowRunDetails runDetails) {
+    if (runDetails == null) {
+        return false;
+    }
 
-    return hasText(registeredModelName) && (hasModelVersion || hasMetrics);
+    return "true".equalsIgnoreCase(firstNotBlank(
+            runDetails.getTag("mlops.managed"),
+            runDetails.getTag("platform.managed")
+    ))
+            || hasText(runDetails.getTag("platform_runner"))
+            || hasText(runDetails.getTag("spring_experiment_id"))
+            || hasText(runDetails.getTag("training_job_name"))
+            || isPlatformGeneratedRunName(runDetails.getRunName());
 }
 
 private boolean isPlatformGeneratedRunName(String runName) {
@@ -2781,12 +2796,7 @@ private void updateMessageFromFinalStatus(
             mlflowTrackingClientService.getRunStatus(effectiveRunId)
     );
 
-    String modelVersion = firstNotBlank(
-            runDetails.getModelVersion(),
-            runDetails.getTag("model_version"),
-            runDetails.getTag("registered_model_version"),
-            runDetails.getTag("version")
-    );
+    String modelVersion = null;
 
     MlflowTrackingClientService.ModelVersionInfo versionInfo =
             mlflowTrackingClientService.findModelVersionInfoByRunId(
@@ -2798,6 +2808,13 @@ private void updateMessageFromFinalStatus(
             && versionInfo.getVersion() != null
             && !versionInfo.getVersion().isBlank()) {
         modelVersion = versionInfo.getVersion();
+    } else if (isPlatformManagedMlflowRun(runDetails)) {
+        modelVersion = firstNotBlank(
+                runDetails.getModelVersion(),
+                runDetails.getTag("model_version"),
+                runDetails.getTag("registered_model_version"),
+                runDetails.getTag("platform_model_version")
+        );
     }
 
     if (modelVersion != null && !modelVersion.isBlank()) {

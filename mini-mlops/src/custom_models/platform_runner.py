@@ -913,9 +913,24 @@ def register_user_mlflow_model_as_platform_model(
         mlflow.log_param("user_model_name", candidate.name)
         mlflow.log_param("user_model_version", candidate.version)
         mlflow.log_param("user_model_run_id", candidate.run_id or "")
+        platform_version = str(model_version.version)
+
         mlflow.log_param("platform_registered_model_name", platform_registered_model_name)
         mlflow.log_param("platform_model_uri", platform_model_uri)
-        mlflow.log_param("platform_model_version", str(model_version.version))
+        mlflow.log_param("platform_model_version", platform_version)
+
+        # Tags exploités par le backend pour relier précisément ce run
+        # à SA version de modèle, même si le script utilisateur a créé
+        # son propre run MLflow.
+        mlflow.set_tag("model_version", platform_version)
+        mlflow.set_tag("registered_model_version", platform_version)
+        mlflow.set_tag("production_version", platform_version)
+        mlflow.set_tag("platform_model_registered", "true")
+        mlflow.set_tag("platform_model_uri", platform_model_uri)
+        mlflow.set_tag(
+            "platform_model_alias_uri",
+            f"models:/{platform_registered_model_name}@production",
+        )
 
         return platform_model_uri
 
@@ -1661,6 +1676,21 @@ def run_standard_runtime(
                     mlflow.log_param(
                         "platform_model_version",
                         platform_model_version,
+                    )
+
+                    # Tags exploités par le backend pour relier précisément
+                    # ce run à SA version MLflow Registry.
+                    mlflow.set_tag("model_version", platform_model_version)
+                    mlflow.set_tag("registered_model_version", platform_model_version)
+                    mlflow.set_tag("production_version", platform_model_version)
+                    mlflow.set_tag("platform_model_registered", "true")
+                    mlflow.set_tag(
+                        "platform_model_uri",
+                        f"models:/{platform_registered_model_name}/{platform_model_version}",
+                    )
+                    mlflow.set_tag(
+                        "platform_model_alias_uri",
+                        f"models:/{platform_registered_model_name}@production",
                     )
 
                     set_platform_production_alias(

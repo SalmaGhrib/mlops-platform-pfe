@@ -1341,24 +1341,22 @@ result.add(details);
             return;
         }
 
-        String tagModelVersion = firstNotBlank(
-                details.getTag("model_version"),
-                details.getTag("registered_model_version"),
-                details.getTag("version")
-        );
-
-        if ((details.getModelVersion() == null || details.getModelVersion().isBlank())
-                && tagModelVersion != null && !tagModelVersion.isBlank()) {
-            details.setModelVersion(tagModelVersion);
-        }
-
         String candidateModelName = firstNotBlank(
                 details.getRegisteredModelName(),
                 preferredRegisteredModelName,
                 details.getTag("registered_model_name"),
-                details.getTag("registeredModelName")
+                details.getTag("registeredModelName"),
+                details.getTag("platform_registered_model_name")
         );
 
+        /*
+         * Source de vérité versioning :
+         * la version d'un run vient du MLflow Model Registry en cherchant
+         * une ModelVersion dont run_id == run_id du run.
+         *
+         * On ne doit pas utiliser l'alias production comme version du run.
+         * On évite aussi de croire des tags model_version posés par un script utilisateur.
+         */
         ModelVersionInfo info = findModelVersionInfoByRunId(candidateModelName, details.getRunId());
 
         if (info != null) {
@@ -1368,12 +1366,31 @@ result.add(details);
 
             if (info.getVersion() != null && !info.getVersion().isBlank()) {
                 details.setModelVersion(info.getVersion());
+                return;
             }
         }
 
-        if ((details.getModelVersion() == null || details.getModelVersion().isBlank())
-                && tagModelVersion != null && !tagModelVersion.isBlank()) {
-            details.setModelVersion(tagModelVersion);
+        /*
+         * Fallback uniquement pour les runs créés par la plateforme.
+         * Les scripts utilisateurs peuvent écrire n'importe quel tag "model_version".
+         * Ces tags ne doivent pas polluer la base.
+         */
+        boolean platformManaged =
+                "true".equalsIgnoreCase(firstNotBlank(details.getTag("mlops.managed"), details.getTag("platform.managed")))
+                        || details.getTag("platform_runner") != null
+                        || details.getTag("spring_experiment_id") != null
+                        || details.getTag("training_job_name") != null;
+
+        if (platformManaged) {
+            String tagModelVersion = firstNotBlank(
+                    details.getTag("model_version"),
+                    details.getTag("registered_model_version"),
+                    details.getTag("platform_model_version")
+            );
+
+            if (tagModelVersion != null && !tagModelVersion.isBlank()) {
+                details.setModelVersion(tagModelVersion.trim());
+            }
         }
     }
 
@@ -1986,14 +2003,15 @@ public boolean deleteMlflowExperimentByName(String experimentName) {
 
     private List<MlflowModelVersionDto> searchModelVersionsByFilter(String registeredModelName) {
     /*
-     * Correction importante :
-     * On n'utilise plus /model-versions/search?filter=...
-     * car dans ton environnement MLflow, les caractères = et ' arrivent encodés
-     * dans le filtre et provoquent INVALID_PARAMETER_VALUE.
+     * Source de vérité pour le versioning :
+     * /registered-models/get ne retourne que latest_versions.
+     * Cela peut cacher les anciennes versions et provoquer :
+     * - plusieurs runs affichés avec la même version,
+     * - plusieurs badges Production.
      *
-     * On utilise directement /registered-models/get?name=...
+     * On utilise donc /model-versions/search pour récupérer TOUTES les versions.
      */
-    return getVersionsFromRegisteredModel(registeredModelName);
+    return searchAllModelVersions(registeredModelName);
 }
 
 private boolean isRealPlatformRun(MlflowRunDetails details) {
@@ -2069,6 +2087,96 @@ private boolean isRealPlatformRun(MlflowRunDetails details) {
     return hasRegistryModel && (hasModelVersion || hasMetrics);
 }
     private List<MlflowModelVersionDto> getVersionsFromRegisteredModel(String registeredModelName) {
+    /*
+     * Très important :
+     * cette méthode doit retourner toutes les versions du modèle, pas seulement
+     * latest_versions. latest_versions n'est pas suffisant pour relier un run
+     * à sa vraie version.
+     */
+    List<MlflowModelVersionDto> allVersions = searchAllModelVersions(registeredModelName);
+
+    if (allVersions != null && !allVersions.isEmpty()) {
+        return allVersions;
+    }
+
+    return getLatestVersionsFromRegisteredModel(registeredModelName);
+}
+
+private List<MlflowModelVersionDto> searchAllModelVersions(String registeredModelName) {
+    List<MlflowModelVersionDto> result = new ArrayList<>();
+
+    try {
+        if (registeredModelName == null || registeredModelName.isBlank()) {
+            return result;
+        }
+
+        String cleanName = registeredModelName.trim();
+        String filter = "name = '" + escapeMlflowFilterValue(cleanName) + "'";
+        String pageToken = null;
+
+        do {
+            StringBuilder urlBuilder = new StringBuilder(cleanMlflowUri(mlflowTrackingUri))
+                    .append("/api/2.0/mlflow/model-versions/search?filter=")
+                    .append(URLEncoder.encode(filter, StandardCharsets.UTF_8));
+
+            if (pageToken != null && !pageToken.isBlank()) {
+                urlBuilder.append("&page_token=")
+                        .append(URLEncoder.encode(pageToken, StandardCharsets.UTF_8));
+            }
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+
+            HttpEntity<Void> entity = new HttpEntity<>(headers);
+
+            ResponseEntity<String> response = restTemplate.exchange(
+                    urlBuilder.toString(),
+                    HttpMethod.GET,
+                    entity,
+                    String.class
+            );
+
+            String body = response.getBody();
+
+            if (!response.getStatusCode().is2xxSuccessful() || body == null || body.isBlank()) {
+                return result;
+            }
+
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode modelVersions = root.path("model_versions");
+
+            if (modelVersions.isArray()) {
+                for (JsonNode versionNode : modelVersions) {
+                    result.add(mapMlflowVersionNode(versionNode, cleanName));
+                }
+            }
+
+            pageToken = root.path("next_page_token").asText(null);
+
+            if (pageToken != null && pageToken.isBlank()) {
+                pageToken = null;
+            }
+
+        } while (pageToken != null);
+
+        result.sort((a, b) -> compareVersionStrings(b.getVersion(), a.getVersion()));
+
+        return result;
+
+    } catch (Exception e) {
+        String message = e.getMessage();
+
+        if (message != null && message.contains("RESOURCE_DOES_NOT_EXIST")) {
+            System.out.println("[MLFLOW] Registered model not found: " + registeredModelName);
+        } else {
+            System.out.println("[MLFLOW] searchAllModelVersions failed for " + registeredModelName + ": " + message);
+        }
+
+        return result;
+    }
+}
+
+private List<MlflowModelVersionDto> getLatestVersionsFromRegisteredModel(String registeredModelName) {
     try {
         List<MlflowModelVersionDto> result = new ArrayList<>();
 
@@ -2120,7 +2228,7 @@ private boolean isRealPlatformRun(MlflowRunDetails details) {
         if (message != null && message.contains("RESOURCE_DOES_NOT_EXIST")) {
             System.out.println("[MLFLOW] Registered model not found: " + registeredModelName);
         } else {
-            System.out.println("Erreur getVersionsFromRegisteredModel : " + message);
+            System.out.println("Erreur getLatestVersionsFromRegisteredModel : " + message);
         }
 
         return new ArrayList<>();
