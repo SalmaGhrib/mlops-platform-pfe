@@ -4,10 +4,25 @@ import { Observable } from 'rxjs';
 
 export type RetrainingFrequencyType = 'DAY' | 'WEEK' | 'MONTH';
 
+export type RetrainingStrategy =
+  | 'SCHEDULED_ONLY'
+  | 'SCHEDULED_WITH_MONITORING'
+  | 'SMART_MONITORING_ONLY'
+  | 'FULL_SMART';
+
 export interface RetrainingConfigRequest {
   enabled: boolean;
   frequencyType: RetrainingFrequencyType;
   frequencyValue: number;
+
+  strategy?: RetrainingStrategy;
+  failureMonitoringEnabled?: boolean;
+  performanceMonitoringEnabled?: boolean;
+  dataDriftMonitoringEnabled?: boolean;
+  monitoringLookbackHours?: number;
+  minPredictionsForMonitoring?: number;
+  maxPredictionErrorRatePercent?: number;
+  dataDriftThresholdPercent?: number;
 }
 
 export interface RetrainingConfigResponse {
@@ -22,6 +37,17 @@ export interface RetrainingConfigResponse {
   running: boolean;
   createdAt: string;
   updatedAt: string;
+
+  strategy?: RetrainingStrategy | null;
+  failureMonitoringEnabled?: boolean | null;
+  performanceMonitoringEnabled?: boolean | null;
+  dataDriftMonitoringEnabled?: boolean | null;
+  monitoringLookbackHours?: number | null;
+  minPredictionsForMonitoring?: number | null;
+  maxPredictionErrorRatePercent?: number | null;
+  dataDriftThresholdPercent?: number | null;
+  lastTriggerReason?: string | null;
+  lastDecisionReason?: string | null;
 }
 
 @Injectable({

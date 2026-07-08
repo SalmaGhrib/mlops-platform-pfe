@@ -340,6 +340,35 @@ public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long
             @Param("projectId") Long projectId
     );
 
+
+    @Query(value = """
+            SELECT COUNT(*)
+            FROM ml_experiments
+            WHERE project_id = :projectId
+              AND status = 'FAILED'
+              AND created_at >= DATE_SUB(NOW(), INTERVAL :hours HOUR)
+            """, nativeQuery = true)
+    Long countFailedRunsForProjectSince(
+            @Param("projectId") Long projectId,
+            @Param("hours") int hours
+    );
+
+    @Query(value = """
+            SELECT e.*
+            FROM ml_experiments e
+            WHERE e.project_id = :projectId
+              AND e.is_production = b'1'
+              AND e.status = 'COMPLETED'
+              AND e.model_version IS NOT NULL
+              AND e.primary_metric_value IS NOT NULL
+              AND e.global_score IS NOT NULL
+            ORDER BY COALESCE(e.finished_at, e.started_at, e.created_at) DESC, e.id DESC
+            LIMIT 1
+            """, nativeQuery = true)
+    Optional<MlExperiment> findCurrentProductionExperimentForProject(
+            @Param("projectId") Long projectId
+    );
+
     /*
      * Versioning/Production consistency guards.
      * A run without metrics and a global score is not a valid platform model version.

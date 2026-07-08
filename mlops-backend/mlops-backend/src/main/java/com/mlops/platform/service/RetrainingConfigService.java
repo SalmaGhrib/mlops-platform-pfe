@@ -91,7 +91,11 @@ public class RetrainingConfigService {
         config.setEnabled(enabled);
         config.setFrequencyType(frequencyType);
         config.setFrequencyValue(frequencyValue);
+        applyMonitoringSettings(config, request);
         config.setRunning(false);
+        config.setManualTriggerRequested(false);
+        config.setLastTriggerReason(enabled ? "CONFIG_UPDATED" : "DISABLED");
+        config.setLastDecisionReason(null);
 
         if (enabled) {
             config.scheduleNextFrom(LocalDateTime.now());
@@ -153,6 +157,9 @@ public class RetrainingConfigService {
         config.setProjectId(projectId);
         config.setEnabled(false);
         config.setRunning(false);
+        config.setManualTriggerRequested(false);
+        config.setLastTriggerReason("DISABLED");
+        config.setLastDecisionReason(null);
         config.setNextRetrainingAt(null);
 
         RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
@@ -189,6 +196,9 @@ public class RetrainingConfigService {
         }
 
         config.setRunning(false);
+        config.setManualTriggerRequested(true);
+        config.setLastTriggerReason("MANUAL");
+        config.setLastDecisionReason("Réentraînement manuel demandé par l'utilisateur.");
         config.setNextRetrainingAt(LocalDateTime.now().minusSeconds(5));
 
         RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
@@ -199,6 +209,51 @@ public class RetrainingConfigService {
         }
 
         return saved;
+    }
+
+
+    private void applyMonitoringSettings(RetrainingConfig config, RetrainingConfigRequest request) {
+        if (config == null || request == null) {
+            return;
+        }
+
+        if (request.getStrategy() != null) {
+            config.setStrategy(request.getStrategy());
+        }
+
+        if (request.getFailureMonitoringEnabled() != null) {
+            config.setFailureMonitoringEnabled(request.getFailureMonitoringEnabled());
+        }
+
+        if (request.getPerformanceMonitoringEnabled() != null) {
+            config.setPerformanceMonitoringEnabled(request.getPerformanceMonitoringEnabled());
+        }
+
+        if (request.getDataDriftMonitoringEnabled() != null) {
+            config.setDataDriftMonitoringEnabled(request.getDataDriftMonitoringEnabled());
+        }
+
+        if (request.getMonitoringLookbackHours() != null) {
+            config.setMonitoringLookbackHours(request.getMonitoringLookbackHours());
+        }
+
+        if (request.getMinPredictionsForMonitoring() != null) {
+            config.setMinPredictionsForMonitoring(request.getMinPredictionsForMonitoring());
+        }
+
+        if (request.getMaxPredictionErrorRatePercent() != null) {
+            config.setMaxPredictionErrorRatePercent(request.getMaxPredictionErrorRatePercent());
+        }
+
+        if (request.getPerformanceDropThresholdPercent() != null) {
+            config.setPerformanceDropThresholdPercent(request.getPerformanceDropThresholdPercent());
+        }
+
+        if (request.getDataDriftThresholdPercent() != null) {
+            config.setDataDriftThresholdPercent(request.getDataDriftThresholdPercent());
+        }
+
+        config.normalizeMonitoringSettings();
     }
 
     private void validateSourceExperiment(Long projectId, Long sourceExperimentId) {

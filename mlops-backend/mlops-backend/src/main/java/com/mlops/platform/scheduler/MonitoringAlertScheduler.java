@@ -79,6 +79,7 @@ public class MonitoringAlertScheduler {
             checkBackendLatency(summary);
 
             checkFailedRunsByProjectAndTriggerRetraining();
+            checkSmartMonitoringRetrainingTriggers();
 
         } catch (Exception e) {
             System.err.println("[MONITORING_ALERT] Failed to check monitoring alerts: "
@@ -156,6 +157,18 @@ public class MonitoringAlertScheduler {
                     + failedRuns
                     + ", retrainingRequested="
                     + retrainingRequested);
+        }
+    }
+
+
+    private void checkSmartMonitoringRetrainingTriggers() {
+        try {
+            int requested = monitoringRetrainingTriggerService.evaluateSmartTriggersForAllConfigs();
+            System.out.println("[MONITORING_ALERT] Smart retraining trigger evaluation finished. requested="
+                    + requested);
+        } catch (Exception e) {
+            System.err.println("[MONITORING_ALERT] Smart retraining trigger evaluation failed: "
+                    + e.getMessage());
         }
     }
 

@@ -39,6 +39,7 @@ public class MlProjectService {
     private final MlflowTrackingClientService mlflowTrackingClientService;
     private final AutoModelLifecycleService autoModelLifecycleService;
     private final ModelDeploymentService modelDeploymentService;
+    private final RetrainingConfigService retrainingConfigService;
 
     @Value("${app.upload.dir:uploads}")
     private String uploadDir;
@@ -54,7 +55,8 @@ public class MlProjectService {
             MlflowTrackingClientService mlflowTrackingClientService,
             AutoModelLifecycleService autoModelLifecycleService,
             ApplicationContext applicationContext,
-            ModelDeploymentService modelDeploymentService
+            ModelDeploymentService modelDeploymentService,
+            RetrainingConfigService retrainingConfigService
     ) {
         this.mlProjectRepository = mlProjectRepository;
         this.mlExperimentRepository = mlExperimentRepository;
@@ -67,6 +69,7 @@ public class MlProjectService {
         this.autoModelLifecycleService = autoModelLifecycleService;
         this.applicationContext = applicationContext;
         this.modelDeploymentService = modelDeploymentService;
+        this.retrainingConfigService = retrainingConfigService;
     }
 
     @Transactional
@@ -130,6 +133,13 @@ public class MlProjectService {
 
         MlProject savedProject = mlProjectRepository.save(project);
 
+        if (request.getRetrainingConfig() != null) {
+            retrainingConfigService.saveOrUpdateProjectConfig(
+                    savedProject.getId(),
+                    request.getRetrainingConfig()
+            );
+        }
+
         return mapToResponse(savedProject);
     }
 
@@ -185,6 +195,13 @@ public class MlProjectService {
         }
 
         MlProject updatedProject = mlProjectRepository.save(project);
+
+        if (request.getRetrainingConfig() != null) {
+            retrainingConfigService.saveOrUpdateProjectConfig(
+                    updatedProject.getId(),
+                    request.getRetrainingConfig()
+            );
+        }
 
         return mapToResponse(updatedProject);
     }

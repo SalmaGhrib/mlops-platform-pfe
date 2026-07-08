@@ -37,6 +37,15 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             """)
     List<RetrainingConfig> findDueConfigs(@Param("now") LocalDateTime now);
 
+    @Query("""
+            SELECT c
+            FROM RetrainingConfig c
+            WHERE c.enabled = true
+              AND c.running = false
+            ORDER BY c.updatedAt ASC, c.id ASC
+            """)
+    List<RetrainingConfig> findEnabledNotRunningConfigs();
+
     /*
      * Atomic claim: only one backend pod/scheduler cycle can claim the same config.
      */
@@ -59,8 +68,10 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
     @Query("""
             UPDATE RetrainingConfig c
             SET c.running = false,
+                c.manualTriggerRequested = false,
                 c.lastRetrainingAt = :lastRetrainingAt,
                 c.nextRetrainingAt = :nextRetrainingAt,
+                c.lastMonitoringCheckAt = :updatedAt,
                 c.updatedAt = :updatedAt
             WHERE c.id = :id
             """)
@@ -76,7 +87,9 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
     @Query("""
             UPDATE RetrainingConfig c
             SET c.running = false,
+                c.manualTriggerRequested = false,
                 c.nextRetrainingAt = :nextRetrainingAt,
+                c.lastMonitoringCheckAt = :updatedAt,
                 c.updatedAt = :updatedAt
             WHERE c.id = :id
             """)
@@ -86,6 +99,45 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             @Param("updatedAt") LocalDateTime updatedAt
     );
 
+
+    @Modifying
+    @Transactional
+    @Query("""
+            UPDATE RetrainingConfig c
+            SET c.running = false,
+                c.manualTriggerRequested = false,
+                c.nextRetrainingAt = :nextRetrainingAt,
+                c.lastDecisionReason = :decisionReason,
+                c.lastMonitoringCheckAt = :updatedAt,
+                c.updatedAt = :updatedAt
+            WHERE c.id = :id
+            """)
+    int releaseAfterSkipped(
+            @Param("id") Long id,
+            @Param("nextRetrainingAt") LocalDateTime nextRetrainingAt,
+            @Param("decisionReason") String decisionReason,
+            @Param("updatedAt") LocalDateTime updatedAt
+    );
+
+    @Modifying
+    @Transactional
+    @Query("""
+            UPDATE RetrainingConfig c
+            SET c.nextRetrainingAt = :nextRetrainingAt,
+                c.lastTriggerReason = :triggerReason,
+                c.lastDecisionReason = :decisionReason,
+                c.updatedAt = :updatedAt
+            WHERE c.id = :id
+              AND c.enabled = true
+              AND c.running = false
+            """)
+    int requestSmartRetraining(
+            @Param("id") Long id,
+            @Param("nextRetrainingAt") LocalDateTime nextRetrainingAt,
+            @Param("triggerReason") String triggerReason,
+            @Param("decisionReason") String decisionReason,
+            @Param("updatedAt") LocalDateTime updatedAt
+    );
     /*
      * If the backend pod is killed while a retraining launch is running, running=true
      * can stay blocked forever. This reset makes the scheduler self-healing in AKS.

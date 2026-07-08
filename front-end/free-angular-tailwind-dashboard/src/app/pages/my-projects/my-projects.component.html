@@ -348,81 +348,224 @@
               </div>
 
               <div class="lg:col-span-2">
-                <div class="rounded-2xl border border-green-100 bg-white p-5 shadow-sm dark:border-green-900/40 dark:bg-gray-800/70">
-                  <div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <h4 class="text-base font-semibold text-gray-900 dark:text-white">
-                        Réentraînement automatique
-                      </h4>
+                <div class="overflow-hidden rounded-2xl border border-green-100 bg-white shadow-sm dark:border-green-900/40 dark:bg-gray-800/70">
+                  <div class="border-b border-green-100 bg-gradient-to-r from-green-50 via-white to-emerald-50 px-5 py-5 dark:border-green-900/40 dark:from-green-950/20 dark:via-gray-800 dark:to-emerald-950/20">
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <div class="mb-2 inline-flex rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700 dark:bg-green-900/30 dark:text-green-300">
+                          Monitoring intelligent
+                        </div>
 
-                      <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
-                        Configurez la fréquence de réentraînement de ce projet.
-                        Le système utilisera automatiquement la version actuellement en Production comme source.
-                      </p>
-                    </div>
+                        <h4 class="text-base font-semibold text-gray-900 dark:text-white">
+                          Réentraînement automatique
+                        </h4>
 
-                    <label class="inline-flex cursor-pointer items-center gap-3">
-                      <input
-                        type="checkbox"
-                        name="retrainingEnabled"
-                        [(ngModel)]="projectForm.retrainingEnabled"
-                        (ngModelChange)="onRetrainingEnabledChange($event)"
-                        class="h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500 dark:border-gray-700 dark:bg-gray-900"
-                      />
+                        <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-500 dark:text-gray-400">
+                          La plateforme peut vérifier les échecs récents, le taux d’erreur, la performance et le data drift avant de relancer un training.
+                        </p>
+                      </div>
 
-                      <span class="text-sm font-semibold text-gray-800 dark:text-gray-200">
-                        Activer
-                      </span>
-                    </label>
-                  </div>
+                      <label class="inline-flex cursor-pointer items-center gap-3">
+                        <input
+                          type="checkbox"
+                          name="retrainingEnabled"
+                          [(ngModel)]="projectForm.retrainingEnabled"
+                          (ngModelChange)="onRetrainingEnabledChange($event)"
+                          class="h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500 dark:border-gray-700 dark:bg-gray-900"
+                        />
 
-                  <div
-                    class="grid grid-cols-1 gap-4 lg:grid-cols-2"
-                    [ngClass]="!projectForm.retrainingEnabled ? 'opacity-50' : ''"
-                  >
-                    <div>
-                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                        Fréquence
+                        <span class="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                          Activer
+                        </span>
                       </label>
-
-                      <select
-                        [(ngModel)]="projectForm.retrainingFrequencyType"
-                        name="retrainingFrequencyType"
-                        [disabled]="!projectForm.retrainingEnabled"
-                        class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
-                      >
-                        <option value="DAY">Jour</option>
-                        <option value="WEEK">Semaine</option>
-                        <option value="MONTH">Mois</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                        Valeur
-                      </label>
-
-                      <input
-                        type="number"
-                        min="1"
-                        [(ngModel)]="projectForm.retrainingFrequencyValue"
-                        name="retrainingFrequencyValue"
-                        [disabled]="!projectForm.retrainingEnabled"
-                        class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
-                      />
                     </div>
                   </div>
 
-                  <div class="mt-4 rounded-xl bg-green-50 px-4 py-3 text-xs leading-5 text-green-700 dark:bg-green-900/20 dark:text-green-300">
-                    @if (projectForm.retrainingEnabled) {
-                      Le réentraînement sera lancé chaque
-                      <strong>{{ projectForm.retrainingFrequencyValue || 1 }}</strong>
-                      <strong>
-                        {{ getFrequencyUnitLabel(projectForm.retrainingFrequencyType, projectForm.retrainingFrequencyValue || 1) }}
-                      </strong>.
-                    } @else {
-                      Le réentraînement automatique est désactivé pour ce projet.
-                    }
+                  <div class="space-y-5 p-5" [ngClass]="!projectForm.retrainingEnabled ? 'opacity-50' : ''">
+                    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Fréquence
+                        </label>
+
+                        <select
+                          [(ngModel)]="projectForm.retrainingFrequencyType"
+                          name="retrainingFrequencyType"
+                          [disabled]="!projectForm.retrainingEnabled"
+                          class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                        >
+                          <option value="DAY">Jour</option>
+                          <option value="WEEK">Semaine</option>
+                          <option value="MONTH">Mois</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Valeur
+                        </label>
+
+                        <input
+                          type="number"
+                          min="1"
+                          [(ngModel)]="projectForm.retrainingFrequencyValue"
+                          name="retrainingFrequencyValue"
+                          [disabled]="!projectForm.retrainingEnabled"
+                          class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                        />
+                      </div>
+
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Stratégie
+                        </label>
+
+                        <select
+                          [(ngModel)]="projectForm.retrainingStrategy"
+                          name="retrainingStrategy"
+                          [disabled]="!projectForm.retrainingEnabled"
+                          class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                        >
+                          <option value="SCHEDULED_ONLY">Planifié uniquement</option>
+                          <option value="SCHEDULED_WITH_MONITORING">Planifié + monitoring</option>
+                          <option value="SMART_MONITORING_ONLY">Monitoring intelligent</option>
+                          <option value="FULL_SMART">Full smart</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div class="rounded-2xl border border-green-100 bg-green-50 px-4 py-3 text-xs leading-5 text-green-700 dark:border-green-900/40 dark:bg-green-900/20 dark:text-green-300">
+                      @if (projectForm.retrainingEnabled) {
+                        <div class="font-semibold">
+                          Cycle : chaque {{ projectForm.retrainingFrequencyValue || 1 }}
+                          {{ getFrequencyUnitLabel(projectForm.retrainingFrequencyType, projectForm.retrainingFrequencyValue || 1) }}.
+                        </div>
+                        <div class="mt-1">
+                          {{ getRetrainingStrategyDescription(projectForm.retrainingStrategy) }}
+                        </div>
+                      } @else {
+                        Le réentraînement automatique est désactivé pour ce projet.
+                      }
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                      <label class="cursor-pointer rounded-2xl border p-4 transition"
+                        [ngClass]="projectForm.failureMonitoringEnabled ? 'border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-900/20' : 'border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40'">
+                        <div class="flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            name="failureMonitoringEnabled"
+                            [(ngModel)]="projectForm.failureMonitoringEnabled"
+                            [disabled]="!projectForm.retrainingEnabled"
+                            class="mt-1 h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                          />
+                          <div>
+                            <p class="text-sm font-semibold text-gray-900 dark:text-white">Échecs récents</p>
+                            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                              Relancer si des runs ou prédictions échouent trop souvent.
+                            </p>
+                          </div>
+                        </div>
+                      </label>
+
+                      <label class="cursor-pointer rounded-2xl border p-4 transition"
+                        [ngClass]="projectForm.performanceMonitoringEnabled ? 'border-blue-200 bg-blue-50 dark:border-blue-900/40 dark:bg-blue-900/20' : 'border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40'">
+                        <div class="flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            name="performanceMonitoringEnabled"
+                            [(ngModel)]="projectForm.performanceMonitoringEnabled"
+                            [disabled]="!projectForm.retrainingEnabled"
+                            class="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <div>
+                            <p class="text-sm font-semibold text-gray-900 dark:text-white">Performance</p>
+                            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                              Vérifier la baisse de performance avant de relancer.
+                            </p>
+                          </div>
+                        </div>
+                      </label>
+
+                      <label class="cursor-pointer rounded-2xl border p-4 transition"
+                        [ngClass]="projectForm.dataDriftMonitoringEnabled ? 'border-purple-200 bg-purple-50 dark:border-purple-900/40 dark:bg-purple-900/20' : 'border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40'">
+                        <div class="flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            name="dataDriftMonitoringEnabled"
+                            [(ngModel)]="projectForm.dataDriftMonitoringEnabled"
+                            [disabled]="!projectForm.retrainingEnabled"
+                            class="mt-1 h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                          />
+                          <div>
+                            <p class="text-sm font-semibold text-gray-900 dark:text-white">Data drift</p>
+                            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                              Comparer les nouvelles prédictions avec le comportement attendu.
+                            </p>
+                          </div>
+                        </div>
+                      </label>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Fenêtre monitoring, heures
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          [(ngModel)]="projectForm.monitoringLookbackHours"
+                          name="monitoringLookbackHours"
+                          [disabled]="!projectForm.retrainingEnabled"
+                          class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                        />
+                      </div>
+
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Min prédictions
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          [(ngModel)]="projectForm.minPredictionsForMonitoring"
+                          name="minPredictionsForMonitoring"
+                          [disabled]="!projectForm.retrainingEnabled"
+                          class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                        />
+                      </div>
+
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Taux erreur max, %
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          [(ngModel)]="projectForm.maxPredictionErrorRatePercent"
+                          name="maxPredictionErrorRatePercent"
+                          [disabled]="!projectForm.retrainingEnabled"
+                          class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                        />
+                      </div>
+
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Seuil drift, %
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          [(ngModel)]="projectForm.dataDriftThresholdPercent"
+                          name="dataDriftThresholdPercent"
+                          [disabled]="!projectForm.retrainingEnabled"
+                          class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -618,16 +761,16 @@
                   </div>
                 </div>
 
-                <div class="mt-4 rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
-                  <div class="flex items-start justify-between gap-3">
+                <div class="mt-4 overflow-hidden rounded-2xl border border-gray-100 bg-gray-50 dark:border-gray-800 dark:bg-white/[0.03]">
+                  <div class="flex items-start justify-between gap-3 border-b border-gray-100 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
                     <div>
                       <p class="text-sm font-semibold text-gray-900 dark:text-white">
-                        Réentraînement automatique
+                        Réentraînement intelligent
                       </p>
 
                       <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
                         @if (isRetrainingEnabled(project)) {
-                          Prochain lancement :
+                          Prochain contrôle :
                           {{ formatDateTime(getProjectRetrainingConfig(project)?.nextRetrainingAt) }}
                         } @else {
                           Aucun réentraînement planifié pour ce projet.
@@ -642,6 +785,40 @@
                       {{ getRetrainingBadgeLabel(project) }}
                     </span>
                   </div>
+
+                  @if (getProjectRetrainingConfig(project); as config) {
+                    <div class="space-y-3 p-4">
+                      <div class="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 dark:bg-gray-900">
+                        <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                          Stratégie
+                        </span>
+                        <span class="text-sm font-semibold text-gray-900 dark:text-white">
+                          {{ getRetrainingStrategyLabel(config.strategy) }}
+                        </span>
+                      </div>
+
+                      <div class="grid grid-cols-3 gap-2">
+                        <span class="rounded-full px-2 py-1 text-center text-[11px] font-semibold" [ngClass]="getMonitoringFlagClass(config.failureMonitoringEnabled)">
+                          Échecs {{ getMonitoringFlagLabel(config.failureMonitoringEnabled) }}
+                        </span>
+                        <span class="rounded-full px-2 py-1 text-center text-[11px] font-semibold" [ngClass]="getMonitoringFlagClass(config.performanceMonitoringEnabled)">
+                          Perf {{ getMonitoringFlagLabel(config.performanceMonitoringEnabled) }}
+                        </span>
+                        <span class="rounded-full px-2 py-1 text-center text-[11px] font-semibold" [ngClass]="getMonitoringFlagClass(config.dataDriftMonitoringEnabled)">
+                          Drift {{ getMonitoringFlagLabel(config.dataDriftMonitoringEnabled) }}
+                        </span>
+                      </div>
+
+                      <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">
+                        {{ getMonitoringSummary(config) }}
+                      </p>
+
+                      <div class="rounded-xl border border-dashed border-gray-200 bg-white px-3 py-2 text-xs leading-5 text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">
+                        <span class="font-semibold text-gray-800 dark:text-gray-200">Dernière décision :</span>
+                        {{ getRetrainingDecisionLabel(config) }}
+                      </div>
+                    </div>
+                  }
                 </div>
 
                 <div class="mt-5 rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">

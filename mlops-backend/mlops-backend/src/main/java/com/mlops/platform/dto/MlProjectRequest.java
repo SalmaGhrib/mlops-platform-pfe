@@ -61,6 +61,8 @@ public class MlProjectRequest {
 
     private Boolean autoPromoteBestModel;
 
+    private RetrainingConfigRequest retrainingConfig;
+
     public String getName() {
         return name;
     }
@@ -141,6 +143,14 @@ public class MlProjectRequest {
 
     public void setAutoPromoteBestModel(Boolean autoPromoteBestModel) {
         this.autoPromoteBestModel = autoPromoteBestModel;
+    }
+
+    public RetrainingConfigRequest getRetrainingConfig() {
+        return retrainingConfig;
+    }
+
+    public void setRetrainingConfig(RetrainingConfigRequest retrainingConfig) {
+        this.retrainingConfig = retrainingConfig;
     }
 
     private String cleanText(String value) {

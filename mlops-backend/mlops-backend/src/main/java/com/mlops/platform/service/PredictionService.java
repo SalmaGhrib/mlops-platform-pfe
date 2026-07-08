@@ -7,8 +7,10 @@ import com.mlops.platform.dto.PredictionRequestDto;
 import com.mlops.platform.dto.PredictionResponseDto;
 import com.mlops.platform.dto.ProductionModelDto;
 import com.mlops.platform.entity.MlExperiment;
+import com.mlops.platform.entity.PredictionLog;
 import com.mlops.platform.entity.User;
 import com.mlops.platform.repository.MlExperimentRepository;
+import com.mlops.platform.repository.PredictionLogRepository;
 import com.mlops.platform.repository.UserRepository;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -40,6 +42,7 @@ public class PredictionService {
     private final MlExperimentRepository mlExperimentRepository;
     private final UserRepository userRepository;
     private final ModelDeploymentService modelDeploymentService;
+    private final PredictionLogRepository predictionLogRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /*
@@ -54,12 +57,14 @@ public class PredictionService {
             RestTemplate restTemplate,
             MlExperimentRepository mlExperimentRepository,
             UserRepository userRepository,
-            ModelDeploymentService modelDeploymentService
+            ModelDeploymentService modelDeploymentService,
+            PredictionLogRepository predictionLogRepository
     ) {
         this.restTemplate = restTemplate;
         this.mlExperimentRepository = mlExperimentRepository;
         this.userRepository = userRepository;
         this.modelDeploymentService = modelDeploymentService;
+        this.predictionLogRepository = predictionLogRepository;
     }
 
     public PredictionResponseDto predict(
@@ -90,6 +95,7 @@ public class PredictionService {
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(payload, headers);
+        long startedAt = System.currentTimeMillis();
 
         try {
             System.out.println("[PREDICTION] Calling model endpoint: " + url);
@@ -102,9 +108,15 @@ public class PredictionService {
                     Map.class
             );
 
+            long latencyMs = System.currentTimeMillis() - startedAt;
+            savePredictionLog(deployment, payload, response.getBody(), true, null, latencyMs);
+
             return mapFastApiResponseToDto(response.getBody());
 
         } catch (HttpStatusCodeException e) {
+            long latencyMs = System.currentTimeMillis() - startedAt;
+            savePredictionLog(deployment, payload, null, false, e.getResponseBodyAsString(), latencyMs);
+
             throw new RuntimeException(
                     "Prediction API error: HTTP " + e.getStatusCode()
                             + " - endpoint=" + url
@@ -112,6 +124,9 @@ public class PredictionService {
                     e
             );
         } catch (Exception e) {
+            long latencyMs = System.currentTimeMillis() - startedAt;
+            savePredictionLog(deployment, payload, null, false, e.getMessage(), latencyMs);
+
             throw new RuntimeException(
                     "Prediction failed against endpoint " + url + ": " + e.getMessage(),
                     e
@@ -1065,4 +1080,44 @@ public class PredictionService {
 
         return null;
     }
+
+    private void savePredictionLog(
+            ModelDeploymentResponse deployment,
+            Map<String, Object> inputPayload,
+            Object responseBody,
+            boolean success,
+            String errorMessage,
+            long latencyMs
+    ) {
+        try {
+            if (deployment == null || deployment.getProjectId() == null) {
+                return;
+            }
+
+            PredictionLog log = new PredictionLog();
+            log.setProjectId(deployment.getProjectId());
+            log.setDeploymentId(deployment.getId());
+            log.setExperimentId(deployment.getExperimentId());
+            log.setRegisteredModelName(deployment.getRegisteredModelName());
+            log.setModelVersion(deployment.getModelVersion());
+            log.setSuccess(success);
+            log.setLatencyMs(latencyMs);
+            log.setInputJson(objectMapper.writeValueAsString(inputPayload));
+
+            if (responseBody != null) {
+                log.setResponseJson(objectMapper.writeValueAsString(responseBody));
+            }
+
+            if (errorMessage != null && !errorMessage.isBlank()) {
+                log.setErrorMessage(errorMessage);
+            }
+
+            predictionLogRepository.save(log);
+        } catch (Exception loggingError) {
+            System.out.println("[PREDICTION_LOG] Could not save prediction log: "
+                    + loggingError.getMessage());
+        }
+    }
+
+
 }

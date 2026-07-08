@@ -18,7 +18,8 @@ import {
   RetrainingConfigRequest,
   RetrainingConfigResponse,
   RetrainingFrequencyType,
-  RetrainingService
+  RetrainingService,
+  RetrainingStrategy
 } from '../../core/services/retraining.service';
 
 type DataType = 'TABULAR' | 'TEXT' | 'IMAGE';
@@ -28,6 +29,14 @@ type ProjectFormModel = MlProjectRequest & {
   retrainingEnabled: boolean;
   retrainingFrequencyType: RetrainingFrequencyType;
   retrainingFrequencyValue: number;
+  retrainingStrategy: RetrainingStrategy;
+  failureMonitoringEnabled: boolean;
+  performanceMonitoringEnabled: boolean;
+  dataDriftMonitoringEnabled: boolean;
+  monitoringLookbackHours: number;
+  minPredictionsForMonitoring: number;
+  maxPredictionErrorRatePercent: number;
+  dataDriftThresholdPercent: number;
 };
 
 @Component({
@@ -92,7 +101,15 @@ export class MyProjectsComponent implements OnInit {
 
       retrainingEnabled: false,
       retrainingFrequencyType: 'WEEK',
-      retrainingFrequencyValue: 1
+      retrainingFrequencyValue: 1,
+      retrainingStrategy: 'FULL_SMART',
+      failureMonitoringEnabled: true,
+      performanceMonitoringEnabled: true,
+      dataDriftMonitoringEnabled: true,
+      monitoringLookbackHours: 24,
+      minPredictionsForMonitoring: 5,
+      maxPredictionErrorRatePercent: 20,
+      dataDriftThresholdPercent: 25
     };
   }
 
@@ -184,7 +201,15 @@ export class MyProjectsComponent implements OnInit {
 
       retrainingEnabled: false,
       retrainingFrequencyType: 'WEEK',
-      retrainingFrequencyValue: 1
+      retrainingFrequencyValue: 1,
+      retrainingStrategy: 'FULL_SMART',
+      failureMonitoringEnabled: true,
+      performanceMonitoringEnabled: true,
+      dataDriftMonitoringEnabled: true,
+      monitoringLookbackHours: 24,
+      minPredictionsForMonitoring: 5,
+      maxPredictionErrorRatePercent: 20,
+      dataDriftThresholdPercent: 25
     };
 
     this.loadRetrainingConfigIntoForm(project.id);
@@ -209,6 +234,14 @@ export class MyProjectsComponent implements OnInit {
         this.projectForm.retrainingEnabled = config.enabled ?? false;
         this.projectForm.retrainingFrequencyType = config.frequencyType || 'WEEK';
         this.projectForm.retrainingFrequencyValue = config.frequencyValue || 1;
+        this.projectForm.retrainingStrategy = config.strategy || 'FULL_SMART';
+        this.projectForm.failureMonitoringEnabled = config.failureMonitoringEnabled ?? true;
+        this.projectForm.performanceMonitoringEnabled = config.performanceMonitoringEnabled ?? true;
+        this.projectForm.dataDriftMonitoringEnabled = config.dataDriftMonitoringEnabled ?? true;
+        this.projectForm.monitoringLookbackHours = config.monitoringLookbackHours || 24;
+        this.projectForm.minPredictionsForMonitoring = config.minPredictionsForMonitoring || 5;
+        this.projectForm.maxPredictionErrorRatePercent = config.maxPredictionErrorRatePercent || 20;
+        this.projectForm.dataDriftThresholdPercent = config.dataDriftThresholdPercent || 25;
       },
       error: () => {
         this.retrainingConfigs[projectId] = null;
@@ -216,6 +249,14 @@ export class MyProjectsComponent implements OnInit {
         this.projectForm.retrainingEnabled = false;
         this.projectForm.retrainingFrequencyType = 'WEEK';
         this.projectForm.retrainingFrequencyValue = 1;
+        this.projectForm.retrainingStrategy = 'FULL_SMART';
+        this.projectForm.failureMonitoringEnabled = true;
+        this.projectForm.performanceMonitoringEnabled = true;
+        this.projectForm.dataDriftMonitoringEnabled = true;
+        this.projectForm.monitoringLookbackHours = 24;
+        this.projectForm.minPredictionsForMonitoring = 5;
+        this.projectForm.maxPredictionErrorRatePercent = 20;
+        this.projectForm.dataDriftThresholdPercent = 25;
       }
     });
   }
@@ -267,6 +308,15 @@ export class MyProjectsComponent implements OnInit {
       if (!this.projectForm.retrainingFrequencyValue || this.projectForm.retrainingFrequencyValue <= 0) {
         this.projectForm.retrainingFrequencyValue = 1;
       }
+
+      if (!this.projectForm.retrainingStrategy) {
+        this.projectForm.retrainingStrategy = 'FULL_SMART';
+      }
+
+      this.projectForm.monitoringLookbackHours = this.projectForm.monitoringLookbackHours || 24;
+      this.projectForm.minPredictionsForMonitoring = this.projectForm.minPredictionsForMonitoring || 5;
+      this.projectForm.maxPredictionErrorRatePercent = this.projectForm.maxPredictionErrorRatePercent || 20;
+      this.projectForm.dataDriftThresholdPercent = this.projectForm.dataDriftThresholdPercent || 25;
     }
   }
 
@@ -432,6 +482,31 @@ export class MyProjectsComponent implements OnInit {
       return false;
     }
 
+    if (!this.projectForm.retrainingStrategy) {
+      this.errorMessage = 'Veuillez choisir une stratégie de réentraînement.';
+      return false;
+    }
+
+    if (!this.projectForm.monitoringLookbackHours || this.projectForm.monitoringLookbackHours <= 0) {
+      this.errorMessage = 'La fenêtre de monitoring doit être supérieure à 0 heure.';
+      return false;
+    }
+
+    if (!this.projectForm.minPredictionsForMonitoring || this.projectForm.minPredictionsForMonitoring <= 0) {
+      this.errorMessage = 'Le nombre minimum de prédictions doit être supérieur à 0.';
+      return false;
+    }
+
+    if (this.projectForm.maxPredictionErrorRatePercent < 0 || this.projectForm.maxPredictionErrorRatePercent > 100) {
+      this.errorMessage = 'Le seuil du taux d’erreur doit être entre 0 et 100 %.';
+      return false;
+    }
+
+    if (this.projectForm.dataDriftThresholdPercent < 0 || this.projectForm.dataDriftThresholdPercent > 100) {
+      this.errorMessage = 'Le seuil de data drift doit être entre 0 et 100 %.';
+      return false;
+    }
+
     return true;
   }
 
@@ -585,7 +660,15 @@ export class MyProjectsComponent implements OnInit {
     const request: RetrainingConfigRequest = {
       enabled: this.projectForm.retrainingEnabled,
       frequencyType: this.projectForm.retrainingFrequencyType || 'WEEK',
-      frequencyValue: this.projectForm.retrainingFrequencyValue || 1
+      frequencyValue: this.projectForm.retrainingFrequencyValue || 1,
+      strategy: this.projectForm.retrainingStrategy || 'FULL_SMART',
+      failureMonitoringEnabled: this.projectForm.failureMonitoringEnabled,
+      performanceMonitoringEnabled: this.projectForm.performanceMonitoringEnabled,
+      dataDriftMonitoringEnabled: this.projectForm.dataDriftMonitoringEnabled,
+      monitoringLookbackHours: this.projectForm.monitoringLookbackHours || 24,
+      minPredictionsForMonitoring: this.projectForm.minPredictionsForMonitoring || 5,
+      maxPredictionErrorRatePercent: this.projectForm.maxPredictionErrorRatePercent ?? 20,
+      dataDriftThresholdPercent: this.projectForm.dataDriftThresholdPercent ?? 25
     };
 
     this.retrainingService.saveProjectConfig(projectId, request).subscribe({
@@ -801,6 +884,85 @@ export class MyProjectsComponent implements OnInit {
 
   getRetrainingBadgeClass(project: MlProjectResponse): string {
     return this.isRetrainingEnabled(project)
+      ? 'bg-green-50 text-green-700 ring-1 ring-green-100 dark:bg-green-900/20 dark:text-green-300 dark:ring-green-900/30'
+      : 'bg-gray-50 text-gray-600 ring-1 ring-gray-100 dark:bg-gray-900/40 dark:text-gray-400 dark:ring-gray-800';
+  }
+
+
+  getRetrainingStrategyLabel(strategy: RetrainingStrategy | string | null | undefined): string {
+    const value = String(strategy || 'FULL_SMART').toUpperCase();
+
+    if (value === 'SCHEDULED_ONLY') {
+      return 'Planifié uniquement';
+    }
+
+    if (value === 'SCHEDULED_WITH_MONITORING') {
+      return 'Planifié + monitoring';
+    }
+
+    if (value === 'SMART_MONITORING_ONLY') {
+      return 'Monitoring intelligent';
+    }
+
+    return 'Full smart';
+  }
+
+  getRetrainingStrategyDescription(strategy: RetrainingStrategy | string | null | undefined): string {
+    const value = String(strategy || 'FULL_SMART').toUpperCase();
+
+    if (value === 'SCHEDULED_ONLY') {
+      return 'La plateforme relance le training à chaque échéance, sans vérifier les signaux de monitoring.';
+    }
+
+    if (value === 'SCHEDULED_WITH_MONITORING') {
+      return 'La plateforme vérifie les erreurs, la performance et le drift avant de relancer.';
+    }
+
+    if (value === 'SMART_MONITORING_ONLY') {
+      return 'La plateforme relance seulement si un signal de monitoring justifie un nouveau training.';
+    }
+
+    return 'Mode complet : fréquence + erreurs récentes + performance + data drift avant décision.';
+  }
+
+  getMonitoringSummary(config: RetrainingConfigResponse | null): string {
+    if (!config || !config.enabled) {
+      return 'Monitoring inactif tant que le réentraînement est désactivé.';
+    }
+
+    const activeChecks: string[] = [];
+
+    if (config.failureMonitoringEnabled) {
+      activeChecks.push('échecs');
+    }
+
+    if (config.performanceMonitoringEnabled) {
+      activeChecks.push('performance');
+    }
+
+    if (config.dataDriftMonitoringEnabled) {
+      activeChecks.push('data drift');
+    }
+
+    return activeChecks.length > 0
+      ? 'Contrôles actifs : ' + activeChecks.join(', ')
+      : 'Aucun contrôle intelligent activé.';
+  }
+
+  getRetrainingDecisionLabel(config: RetrainingConfigResponse | null): string {
+    if (!config) {
+      return '-';
+    }
+
+    return config.lastDecisionReason || config.lastTriggerReason || 'Aucune décision récente.';
+  }
+
+  getMonitoringFlagLabel(enabled: boolean | null | undefined): string {
+    return enabled ? 'Activé' : 'Désactivé';
+  }
+
+  getMonitoringFlagClass(enabled: boolean | null | undefined): string {
+    return enabled
       ? 'bg-green-50 text-green-700 ring-1 ring-green-100 dark:bg-green-900/20 dark:text-green-300 dark:ring-green-900/30'
       : 'bg-gray-50 text-gray-600 ring-1 ring-gray-100 dark:bg-gray-900/40 dark:text-gray-400 dark:ring-gray-800';
   }

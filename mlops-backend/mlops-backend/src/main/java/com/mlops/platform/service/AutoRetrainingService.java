@@ -1,6 +1,7 @@
 package com.mlops.platform.service;
 
 import com.mlops.platform.dto.MlExperimentResponse;
+import com.mlops.platform.dto.RetrainingDecisionResult;
 import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.entity.NotificationTargetType;
 import com.mlops.platform.entity.NotificationType;
@@ -20,17 +21,20 @@ public class AutoRetrainingService {
     private final MlExperimentService mlExperimentService;
     private final MlProjectRepository mlProjectRepository;
     private final NotificationService notificationService;
+    private final RetrainingDecisionService retrainingDecisionService;
 
     public AutoRetrainingService(
             RetrainingConfigRepository retrainingConfigRepository,
             MlExperimentService mlExperimentService,
             MlProjectRepository mlProjectRepository,
-            NotificationService notificationService
+            NotificationService notificationService,
+            RetrainingDecisionService retrainingDecisionService
     ) {
         this.retrainingConfigRepository = retrainingConfigRepository;
         this.mlExperimentService = mlExperimentService;
         this.mlProjectRepository = mlProjectRepository;
         this.notificationService = notificationService;
+        this.retrainingDecisionService = retrainingDecisionService;
     }
 
     public void launchScheduledRetraining(Long configId) {
@@ -64,16 +68,51 @@ public class AutoRetrainingService {
         }
 
         try {
+            RetrainingDecisionResult decision = retrainingDecisionService.evaluateBeforeRetraining(config);
+
+            if (decision == null || !decision.isShouldRetrain()) {
+                LocalDateTime now = LocalDateTime.now();
+                LocalDateTime next = config.calculateNextRetrainingDate(now);
+                String reason = decision != null ? decision.getReason() : "Aucune décision de monitoring disponible.";
+
+                releaseAfterSkipped(configId, next, reason);
+
+                notifyRetrainingInfo(
+                        projectId,
+                        null,
+                        "Réentraînement ignoré",
+                        "Le monitoring ne justifie pas un nouveau réentraînement. "
+                                + reason
+                                + " Prochaine vérification : " + next + "."
+                );
+
+                System.out.println("[AUTO_RETRAINING] Skipped by monitoring decision. "
+                        + "configId=" + configId
+                        + ", projectId=" + projectId
+                        + ", nextRetrainingAt=" + next
+                        + ", reason=" + reason);
+                return;
+            }
+
+            String trigger = decision.getTriggerType() != null
+                    ? decision.getTriggerType().name()
+                    : "UNKNOWN";
+
             notifyRetrainingInfo(
                     projectId,
                     null,
                     "Réentraînement lancé",
-                    "Le réentraînement automatique vient d'être lancé."
+                    "Le réentraînement automatique vient d'être lancé. Déclencheur : "
+                            + trigger
+                            + ". Raison : "
+                            + decision.getReason()
             );
 
-            System.out.println("[AUTO_RETRAINING] Starting scheduled retraining from CURRENT PRODUCTION version. "
+            System.out.println("[AUTO_RETRAINING] Starting retraining from CURRENT PRODUCTION version. "
                     + "configId=" + configId
                     + ", projectId=" + projectId
+                    + ", trigger=" + trigger
+                    + ", decision=" + decision.getReason()
                     + ", fallbackSourceExperimentId=" + config.getSourceExperimentId());
 
             MlExperimentResponse newExperiment = mlExperimentService.retrainFromCurrentProductionExperiment(
@@ -159,6 +198,20 @@ public class AutoRetrainingService {
         retrainingConfigRepository.releaseAfterFailure(
                 configId,
                 nextRetrainingAt,
+                LocalDateTime.now()
+        );
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void releaseAfterSkipped(
+            Long configId,
+            LocalDateTime nextRetrainingAt,
+            String decisionReason
+    ) {
+        retrainingConfigRepository.releaseAfterSkipped(
+                configId,
+                nextRetrainingAt,
+                safeMessage(decisionReason),
                 LocalDateTime.now()
         );
     }
