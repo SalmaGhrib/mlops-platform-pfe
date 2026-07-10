@@ -4,7 +4,7 @@ import com.mlops.platform.repository.NotificationRepository;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import java.time.LocalDateTime;
 
 @Service
@@ -20,8 +20,15 @@ public class NotificationCleanupScheduler {
      * Supprime automatiquement les notifications âgées de plus de 24h.
      * Exécution toutes les heures.
      */
-    @Scheduled(fixedDelay = 3600000, initialDelay = 60000)
-    @Transactional
+@Scheduled(
+        fixedDelay = 3600000,
+        initialDelay = 60000
+)
+@SchedulerLock(
+        name = "notificationCleanupScheduler",
+        lockAtMostFor = "10m",
+        lockAtLeastFor = "1m"
+)    @Transactional
     public void deleteOldNotifications() {
         LocalDateTime limit = LocalDateTime.now().minusDays(1);
 
