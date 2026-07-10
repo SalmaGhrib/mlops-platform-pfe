@@ -10,6 +10,7 @@ import com.mlops.platform.service.MonitoringService;
 import com.mlops.platform.service.NotificationService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
@@ -58,6 +59,7 @@ public class MonitoringAlertScheduler {
     }
 
     @Scheduled(fixedDelayString = "${app.monitoring.alerts.delay-ms:60000}")
+    @SchedulerLock(name = "monitoringAlertScheduler", lockAtMostFor = "10m", lockAtLeastFor = "30s")
     public void checkMonitoringAlerts() {
         if (!monitoringAlertsEnabled) {
             return;

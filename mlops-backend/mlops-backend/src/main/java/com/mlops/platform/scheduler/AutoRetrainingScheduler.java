@@ -5,6 +5,7 @@ import com.mlops.platform.repository.RetrainingConfigRepository;
 import com.mlops.platform.service.AutoRetrainingService;
 import jakarta.annotation.PostConstruct;
 import org.springframework.scheduling.annotation.Scheduled;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -32,7 +33,8 @@ public class AutoRetrainingScheduler {
         System.out.println("[AUTO_RETRAINING] Scheduler loaded");
     }
 
-    @Scheduled(fixedDelay = 10000)
+    @Scheduled(fixedDelayString = "${app.retraining.scheduler.delay-ms:60000}")
+    @SchedulerLock(name = "autoRetrainingScheduler", lockAtMostFor = "60m", lockAtLeastFor = "30s")
     public void checkScheduledRetraining() {
         if (!schedulerRunning.compareAndSet(false, true)) {
             System.out.println("[AUTO_RETRAINING] Previous scheduler cycle still running. Skipped.");

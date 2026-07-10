@@ -20,15 +20,16 @@ public class NotificationCleanupScheduler {
      * Supprime automatiquement les notifications âgées de plus de 24h.
      * Exécution toutes les heures.
      */
-@Scheduled(
+    @Scheduled(
         fixedDelay = 3600000,
         initialDelay = 60000
 )
-@SchedulerLock(
+    @SchedulerLock(
         name = "notificationCleanupScheduler",
         lockAtMostFor = "10m",
         lockAtLeastFor = "1m"
-)    @Transactional
+)
+    @Transactional
     public void deleteOldNotifications() {
         LocalDateTime limit = LocalDateTime.now().minusDays(1);
 

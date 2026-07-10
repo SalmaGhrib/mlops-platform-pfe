@@ -37,7 +37,7 @@ export class ModelDeploymentsComponent implements OnInit, OnDestroy {
   savingShares: Record<number, boolean> = {};
 
   private refreshIntervalId: any = null;
-  private readonly autoRefreshMs = 5000;
+  private readonly autoRefreshMs = 30000;
 
   constructor(private modelRegistryService: ModelRegistryService) {}
 

@@ -14,7 +14,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-
+import java.net.URI;
+import org.springframework.web.util.UriComponentsBuilder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -2102,27 +2103,35 @@ private boolean isRealPlatformRun(MlflowRunDetails details) {
     return getLatestVersionsFromRegisteredModel(registeredModelName);
 }
 
-private List<MlflowModelVersionDto> searchAllModelVersions(String registeredModelName) {
+private List<MlflowModelVersionDto> searchAllModelVersions(
+        String registeredModelName
+) {
     List<MlflowModelVersionDto> result = new ArrayList<>();
 
+    if (registeredModelName == null || registeredModelName.isBlank()) {
+        return result;
+    }
+
+    String cleanName = registeredModelName.trim();
+    String filter = "name = '" + escapeMlflowFilterValue(cleanName) + "'";
+    String pageToken = null;
+
     try {
-        if (registeredModelName == null || registeredModelName.isBlank()) {
-            return result;
-        }
-
-        String cleanName = registeredModelName.trim();
-        String filter = "name = '" + escapeMlflowFilterValue(cleanName) + "'";
-        String pageToken = null;
-
         do {
-            StringBuilder urlBuilder = new StringBuilder(cleanMlflowUri(mlflowTrackingUri))
-                    .append("/api/2.0/mlflow/model-versions/search?filter=")
-                    .append(URLEncoder.encode(filter, StandardCharsets.UTF_8));
+            UriComponentsBuilder uriBuilder = UriComponentsBuilder
+                    .fromHttpUrl(cleanMlflowUri(mlflowTrackingUri))
+                    .path("/api/2.0/mlflow/model-versions/search")
+                    .queryParam("filter", filter)
+                    .queryParam("max_results", 1000);
 
             if (pageToken != null && !pageToken.isBlank()) {
-                urlBuilder.append("&page_token=")
-                        .append(URLEncoder.encode(pageToken, StandardCharsets.UTF_8));
+                uriBuilder.queryParam("page_token", pageToken);
             }
+
+            URI uri = uriBuilder
+                    .build()
+                    .encode()
+                    .toUri();
 
             HttpHeaders headers = new HttpHeaders();
             headers.setAccept(List.of(MediaType.APPLICATION_JSON));
@@ -2130,15 +2139,24 @@ private List<MlflowModelVersionDto> searchAllModelVersions(String registeredMode
             HttpEntity<Void> entity = new HttpEntity<>(headers);
 
             ResponseEntity<String> response = restTemplate.exchange(
-                    urlBuilder.toString(),
+                    uri,
                     HttpMethod.GET,
                     entity,
                     String.class
             );
 
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                System.err.println(
+                        "[MLFLOW] model-versions/search failed"
+                                + ", model=" + cleanName
+                                + ", status=" + response.getStatusCode()
+                );
+                return result;
+            }
+
             String body = response.getBody();
 
-            if (!response.getStatusCode().is2xxSuccessful() || body == null || body.isBlank()) {
+            if (body == null || body.isBlank()) {
                 return result;
             }
 
@@ -2147,7 +2165,12 @@ private List<MlflowModelVersionDto> searchAllModelVersions(String registeredMode
 
             if (modelVersions.isArray()) {
                 for (JsonNode versionNode : modelVersions) {
-                    result.add(mapMlflowVersionNode(versionNode, cleanName));
+                    MlflowModelVersionDto dto =
+                            mapMlflowVersionNode(versionNode, cleanName);
+
+                    if (dto != null) {
+                        result.add(dto);
+                    }
                 }
             }
 
@@ -2159,17 +2182,31 @@ private List<MlflowModelVersionDto> searchAllModelVersions(String registeredMode
 
         } while (pageToken != null);
 
-        result.sort((a, b) -> compareVersionStrings(b.getVersion(), a.getVersion()));
+        result.sort(
+                (first, second) -> compareVersionStrings(
+                        second.getVersion(),
+                        first.getVersion()
+                )
+        );
 
         return result;
 
     } catch (Exception e) {
         String message = e.getMessage();
 
-        if (message != null && message.contains("RESOURCE_DOES_NOT_EXIST")) {
-            System.out.println("[MLFLOW] Registered model not found: " + registeredModelName);
+        if (message != null
+                && message.contains("RESOURCE_DOES_NOT_EXIST")) {
+            System.out.println(
+                    "[MLFLOW] Registered model not found: " + cleanName
+            );
         } else {
-            System.out.println("[MLFLOW] searchAllModelVersions failed for " + registeredModelName + ": " + message);
+            System.err.println(
+                    "[MLFLOW] searchAllModelVersions failed for "
+                            + cleanName
+                            + ": "
+                            + message
+            );
+            e.printStackTrace();
         }
 
         return result;

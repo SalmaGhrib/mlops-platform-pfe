@@ -9,6 +9,7 @@ import com.mlops.platform.repository.MlExperimentRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -52,7 +53,8 @@ public class CustomDockerRunWatcher {
         this.trainingOutputAnalyzerService = trainingOutputAnalyzerService;
     }
 
-    @Scheduled(fixedDelayString = "${app.custom-docker.watcher.delay-ms:10000}")
+    @Scheduled(fixedDelayString = "${app.custom-docker.watcher.delay-ms:30000}")
+    @SchedulerLock(name = "customDockerRunWatcher", lockAtMostFor = "30m", lockAtLeastFor = "20s")
     @Transactional
     public void watchCustomDockerRuns() {
         if (!watcherEnabled) {

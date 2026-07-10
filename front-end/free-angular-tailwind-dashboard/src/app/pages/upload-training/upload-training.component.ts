@@ -357,7 +357,7 @@ getDetectedComponentsCount(): number {
         return;
       }
 
-      this.experimentService.syncProjectResults(this.selectedProjectId).subscribe({
+      this.experimentService.getExperimentsByProject(this.selectedProjectId).subscribe({
         next: (experiments: MlExperimentResponse[]) => {
           this.experiments = this.normalizeExperiments(experiments || []);
 
@@ -369,13 +369,15 @@ getDetectedComponentsCount(): number {
 
           if (!hasRunningExperiment) {
             this.stopPollingExperiments();
+            this.syncExperimentsForSelectedProject();
           }
         },
         error: () => {
+          this.stopPollingExperiments();
           this.loadExperimentsForSelectedProject();
         },
       });
-    }, 5000);
+    }, 10000);
   }
 
   stopPollingExperiments(): void {

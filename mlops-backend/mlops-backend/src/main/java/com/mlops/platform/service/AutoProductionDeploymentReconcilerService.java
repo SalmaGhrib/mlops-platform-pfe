@@ -8,6 +8,7 @@ import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.repository.MlExperimentRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Service;
 
 import java.net.URLEncoder;
@@ -51,6 +52,7 @@ public class AutoProductionDeploymentReconcilerService {
             fixedDelayString = "${app.mlops.production-reconciler.delay-ms:30000}",
             initialDelayString = "${app.mlops.production-reconciler.initial-delay-ms:20000}"
     )
+    @SchedulerLock(name = "productionDeploymentReconciler", lockAtMostFor = "30m", lockAtLeastFor = "30s")
     public void reconcileProductionDeployments() {
         if (!autoDeployEnabled || !reconcilerEnabled) {
             return;
