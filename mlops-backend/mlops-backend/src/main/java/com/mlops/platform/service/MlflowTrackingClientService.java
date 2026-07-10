@@ -812,7 +812,9 @@ private boolean canAttachMlflowRunToExperimentFromRegistry(
         return false;
     }
 
-    if (details.getRunId() == null || details.getRunId().isBlank()) {
+    String runId = details.getRunId();
+
+    if (runId == null || runId.isBlank()) {
         return false;
     }
 
@@ -821,72 +823,63 @@ private boolean canAttachMlflowRunToExperimentFromRegistry(
     }
 
     /*
-     * Ne jamais voler un run déjà lié à une autre ligne MySQL.
+     * Règle définitive :
+     * le fallback sans tags d'identité est autorisé uniquement pour STANDARD_RUNTIME.
+     * Pour CUSTOM_DOCKERFILE, le rattachement doit être strict et passer par
+     * matchesExperimentIdentity(). Cela empêche plusieurs lignes MySQL de recevoir
+     * la même ModelVersion MLflow.
      */
-    Optional<MlExperiment> alreadyLinked = mlExperimentRepository.findByMlflowRunId(details.getRunId().trim());
+    String runtimeMode = experiment.getRuntimeMode();
 
-    if (alreadyLinked.isPresent()
-            && alreadyLinked.get().getId() != null
-            && experiment.getId() != null
-            && !alreadyLinked.get().getId().equals(experiment.getId())) {
+    boolean standardRuntime =
+            runtimeMode == null
+                    || runtimeMode.isBlank()
+                    || runtimeMode.equalsIgnoreCase("STANDARD_RUNTIME");
+
+    if (!standardRuntime) {
         return false;
     }
 
-    /*
-     * On ne fait ce fallback que pour les lignes qui attendent encore MLflow.
-     */
-    if (experiment.getMlflowRunId() != null && !experiment.getMlflowRunId().isBlank()) {
+    /* Ne jamais utiliser un run déjà lié à une autre expérience MySQL. */
+    Optional<MlExperiment> alreadyLinked =
+            mlExperimentRepository.findByMlflowRunId(runId.trim());
+
+    if (alreadyLinked.isPresent()) {
+        MlExperiment linked = alreadyLinked.get();
+
+        if (linked.getId() != null
+                && experiment.getId() != null
+                && !linked.getId().equals(experiment.getId())) {
+            return false;
+        }
+    }
+
+    /* Ce fallback ne s'applique qu'aux lignes qui attendent encore MLflow. */
+    if (experiment.getMlflowRunId() != null
+            && !experiment.getMlflowRunId().isBlank()) {
         return false;
     }
 
-   String runtimeMode = experiment.getRuntimeMode();
-
-boolean standardRuntime =
-        runtimeMode == null
-                || runtimeMode.isBlank()
-                || runtimeMode.equalsIgnoreCase("STANDARD_RUNTIME");
-
-boolean customDocker =
-        runtimeMode != null
-                && runtimeMode.equalsIgnoreCase("CUSTOM_DOCKERFILE");
-
-boolean scheduledCustomDocker =
-        customDocker
-                && experiment.getExperimentName() != null
-                && experiment.getExperimentName().startsWith("scheduled_retraining_");
-
-if (!standardRuntime && !customDocker && !scheduledCustomDocker) {
-    return false;
-}
-    /*
-     * Sécurité : si Kubeflow n'est pas terminé, on ne rattache pas un run au hasard.
-     */
     String kubeflowStatus = experiment.getKubeflowStatus();
 
     boolean kubeflowSucceeded =
-            kubeflowStatus != null
-                    && (
-                    kubeflowStatus.toUpperCase(Locale.ROOT).contains("SUCCEEDED")
-                            || kubeflowStatus.toUpperCase(Locale.ROOT).contains("SUCCESS")
-                            || kubeflowStatus.toUpperCase(Locale.ROOT).contains("COMPLETED")
-            );
+            kubeflowStatus == null
+                    || kubeflowStatus.isBlank()
+                    || kubeflowStatus.toUpperCase(Locale.ROOT).contains("SUCCEEDED")
+                    || kubeflowStatus.toUpperCase(Locale.ROOT).contains("SUCCESS")
+                    || kubeflowStatus.toUpperCase(Locale.ROOT).contains("COMPLETED");
 
-    boolean hasKubeflowIdentity =
-            experiment.getKubeflowRunId() != null && !experiment.getKubeflowRunId().isBlank();
-
-    if (!kubeflowSucceeded && hasKubeflowIdentity) {
+    if (!kubeflowSucceeded) {
         return false;
     }
 
-    String status = details.getStatus();
+    String mlflowStatus = details.getStatus();
 
     boolean mlflowFinished =
-            status != null
-                    && (
-                    status.equalsIgnoreCase("FINISHED")
-                            || status.equalsIgnoreCase("COMPLETED")
-                            || status.equalsIgnoreCase("SUCCEEDED")
-            );
+            mlflowStatus != null
+                    && (mlflowStatus.equalsIgnoreCase("FINISHED")
+                    || mlflowStatus.equalsIgnoreCase("COMPLETED")
+                    || mlflowStatus.equalsIgnoreCase("SUCCEEDED"));
 
     if (!mlflowFinished) {
         return false;
@@ -895,30 +888,29 @@ if (!standardRuntime && !customDocker && !scheduledCustomDocker) {
     String runRegisteredModel = firstNotBlank(
             details.getRegisteredModelName(),
             details.getTag("registered_model_name"),
-            details.getTag("registeredModelName"),
-            expectedRegisteredModelName
+            details.getTag("registeredModelName")
     );
 
     if (runRegisteredModel == null || runRegisteredModel.isBlank()) {
         return false;
     }
 
-    List<String> expectedNames = buildRegisteredModelNameCandidates(expectedRegisteredModelName);
-    boolean sameRegistry = expectedNames.stream()
-            .anyMatch(name -> name != null && name.equalsIgnoreCase(runRegisteredModel.trim()));
+    boolean sameRegistry = buildRegisteredModelNameCandidates(expectedRegisteredModelName)
+            .stream()
+            .anyMatch(name -> name != null
+                    && name.equalsIgnoreCase(runRegisteredModel.trim()));
 
     if (!sameRegistry) {
         return false;
     }
 
-    /*
-     * Il faut au minimum une version modèle ou des métriques.
-     */
     boolean hasModelVersion =
-            details.getModelVersion() != null && !details.getModelVersion().isBlank();
+            details.getModelVersion() != null
+                    && !details.getModelVersion().isBlank();
 
     boolean hasMetrics =
-            details.getMetrics() != null && !details.getMetrics().isEmpty();
+            details.getMetrics() != null
+                    && !details.getMetrics().isEmpty();
 
     return hasModelVersion || hasMetrics;
 }

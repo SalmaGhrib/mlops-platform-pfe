@@ -2657,6 +2657,10 @@ def run_custom_model_pipeline(config_path: str) -> Dict[str, Any]:
         mlflow.set_tag("runner", "universal-custom-model-runner")
         mlflow.set_tag("runner_contract", "universal_model_adapter_multi_strategy")
         mlflow.set_tag("project_type", project_type)
+        mlflow.set_tag("mlops.managed", "true")
+        mlflow.set_tag("platform.managed", "true")
+        mlflow.set_tag("platform_runner", "true")
+        mlflow.set_tag("runtime_mode", "CUSTOM_DOCKERFILE")
 
         mlflow.set_tag("requested_experiment_name", requested_experiment_name)
         mlflow.set_tag("mlflow_experiment_status", str(mlflow_experiment_info.get("status", "")))

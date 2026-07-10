@@ -1473,10 +1473,45 @@ getDetectedComponentsCount(): number {
   }
 
   isProductionExperiment(experiment: MlExperimentResponse): boolean {
-    return this.toBoolean(experiment.production ?? experiment.isProduction ?? experiment['is_production']) &&
-      experiment.status === 'COMPLETED' &&
-      this.hasValidScoreForVersioning(experiment) &&
-      this.getModelVersion(experiment) !== '-';
+    if (!experiment || experiment.status !== 'COMPLETED') {
+      return false;
+    }
+
+    if (!this.toBoolean(
+      experiment.production ??
+      experiment.isProduction ??
+      experiment['is_production']
+    )) {
+      return false;
+    }
+
+    if (!this.hasValidScoreForVersioning(experiment)) {
+      return false;
+    }
+
+    const modelVersion = this.getModelVersion(experiment);
+
+    const productionVersionValue =
+      experiment.productionVersion ??
+      experiment.productionModelVersion ??
+      experiment['production_version'] ??
+      experiment['productionVersion'] ??
+      null;
+
+    const productionVersion =
+      productionVersionValue === null ||
+      productionVersionValue === undefined ||
+      productionVersionValue === ''
+        ? '-'
+        : String(productionVersionValue);
+
+    /*
+     * Le badge Production apparaît uniquement si la version du run est exactement
+     * la version portée par l'alias MLflow @production.
+     */
+    return modelVersion !== '-'
+      && productionVersion !== '-'
+      && modelVersion === productionVersion;
   }
 
   hasAlgorithmReplacementForRun(experiment: MlExperimentResponse): boolean {

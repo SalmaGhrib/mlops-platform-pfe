@@ -4637,7 +4637,14 @@ private void refreshProductionVersionFlagsForProject(MlProject project, String r
     }
 
     String cleanRegisteredModelName = registeredModelName.trim();
-    String registryProductionVersion = mlflowTrackingClientService.getProductionVersion(cleanRegisteredModelName);
+    String registryProductionVersion = mlflowTrackingClientService
+            .getProductionVersion(cleanRegisteredModelName);
+
+    if (hasText(registryProductionVersion)) {
+        registryProductionVersion = registryProductionVersion.trim();
+    } else {
+        registryProductionVersion = null;
+    }
 
     List<MlExperiment> experiments = mlExperimentRepository
             .findByProjectAndRegisteredModelNameOrderByCreatedAtDesc(
@@ -4649,75 +4656,55 @@ private void refreshProductionVersionFlagsForProject(MlProject project, String r
         return;
     }
 
-    /*
-     * Règle métier définitive :
-     * - pas de métrique principale => pas de version plateforme
-     * - pas de score global => pas de version plateforme
-     * - pas de version plateforme => jamais Production
-     * - une seule ligne Production par registered_model_name
-     */
+    MlExperiment productionExperiment = null;
+
     for (MlExperiment experiment : experiments) {
         if (experiment == null) {
             continue;
         }
 
-        if (!isEligiblePlatformVersion(experiment)) {
-            clearVersioningAndProduction(experiment);
-        } else {
-            experiment.setProduction(false);
-            experiment.setProductionVersion(null);
-        }
-    }
-
-    MlExperiment productionCandidate = null;
-
-    if (hasText(registryProductionVersion)) {
-        String cleanProductionVersion = registryProductionVersion.trim();
-
-        for (MlExperiment experiment : experiments) {
-            if (!isEligibleProductionCandidate(experiment, cleanProductionVersion)) {
-                continue;
-            }
-
-            if (productionCandidate == null
-                    || compareProductionCandidates(experiment, productionCandidate) > 0) {
-                productionCandidate = experiment;
-            }
-        }
-    }
-
-    if (productionCandidate == null) {
-        for (MlExperiment experiment : experiments) {
-            if (!isEligiblePlatformVersion(experiment)) {
-                continue;
-            }
-
-            if (productionCandidate == null
-                    || compareProductionCandidates(experiment, productionCandidate) > 0) {
-                productionCandidate = experiment;
-            }
-        }
-    }
-
-    if (productionCandidate != null) {
-        productionCandidate.setProduction(true);
-        productionCandidate.setProductionVersion(productionCandidate.getModelVersion());
-
-        try {
-            mlflowTrackingClientService.setProductionAliasSafe(
+        /*
+         * Source de vérité de modelVersion : la ModelVersion MLflow dont
+         * run_id correspond exactement au mlflowRunId de cette ligne.
+         * On ne recopie jamais productionVersion dans modelVersion.
+         */
+        if (hasText(experiment.getMlflowRunId())) {
+            String exactVersion = mlflowTrackingClientService.findModelVersionByRunId(
                     cleanRegisteredModelName,
-                    productionCandidate.getModelVersion()
+                    experiment.getMlflowRunId().trim()
             );
-        } catch (Exception e) {
-            System.out.println("[PRODUCTION_GUARD] Could not sync MLflow production alias for model="
-                    + cleanRegisteredModelName
-                    + ", version="
-                    + productionCandidate.getModelVersion()
-                    + ", reason="
-                    + e.getMessage());
+
+            if (hasText(exactVersion)) {
+                experiment.setModelVersion(exactVersion.trim());
+            }
+        }
+
+        experiment.setProductionVersion(registryProductionVersion);
+        experiment.setProduction(false);
+
+        boolean exactProductionRun =
+                registryProductionVersion != null
+                        && hasText(experiment.getModelVersion())
+                        && registryProductionVersion.equals(experiment.getModelVersion().trim())
+                        && isEligiblePlatformVersion(experiment);
+
+        if (exactProductionRun
+                && (productionExperiment == null
+                || compareProductionCandidates(experiment, productionExperiment) > 0)) {
+            productionExperiment = experiment;
         }
     }
 
+    if (productionExperiment != null) {
+        productionExperiment.setProduction(true);
+    }
+
+    /*
+     * Important : cette méthode ne modifie jamais l'alias MLflow.
+     * L'alias est modifié uniquement par le workflow explicite de promotion,
+     * après validation du candidat. Une simple synchronisation ne doit pas
+     * changer la version Production.
+     */
     mlExperimentRepository.saveAll(experiments);
     mlExperimentRepository.flush();
 }
