@@ -377,14 +377,9 @@ public DeleteProjectResponse deleteProjectCascade(String authHeader, Long projec
         modelDeploymentService.deleteDeploymentsForProject(projectId);
         System.out.println("[DELETE PROJECT] Deployments deleted for projectId=" + projectId);
     } catch (Exception e) {
-        System.out.println("[DELETE PROJECT] Failed to delete deployments for projectId=" + projectId);
+        // External/Kubernetes cleanup is best-effort. Local deletion must remain possible.
+        System.out.println("[DELETE PROJECT] Deployment cleanup skipped for projectId=" + projectId);
         System.out.println("[DELETE PROJECT] Reason=" + e.getMessage());
-
-        throw new RuntimeException(
-                "Impossible de supprimer le projet car ses déploiements n'ont pas pu être supprimés. Cause: "
-                        + e.getMessage(),
-                e
-        );
     }
 
     /*
@@ -455,19 +450,9 @@ public DeleteProjectResponse deleteProjectCascade(String authHeader, Long projec
     }
 
     /*
-     * 5. Supprimer aussi l'expérience MLflow si elle porte le nom du registered model.
+     * Never use the registered model name as an MLflow experiment name.
+     * A registered model and an experiment are two different resources.
      */
-    try {
-        boolean deletedExperiment =
-                mlflowTrackingClientService.deleteMlflowExperimentByName(registeredModelName);
-
-        System.out.println("[DELETE PROJECT] MLflow experiment deleted="
-                + deletedExperiment + " name=" + registeredModelName);
-
-    } catch (Exception e) {
-        System.out.println("[DELETE PROJECT] Failed to delete MLflow experiment=" + registeredModelName);
-        System.out.println("[DELETE PROJECT] Reason=" + e.getMessage());
-    }
 
     /*
      * 6. Supprimer les fichiers physiques du disque.

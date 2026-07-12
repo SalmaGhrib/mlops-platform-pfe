@@ -245,6 +245,20 @@ public class MlExperimentService {
         experiment.setTargetColumn(cleanTargetColumn);
 
         /*
+         * Create the MLflow experiment once, but never block the upload if MLflow is
+         * temporarily unavailable. The training job can still create/use it later.
+         */
+        try {
+            String mlflowExperimentId = mlflowTrackingClientService
+                    .getOrCreateExperimentId(mlflowExperimentName);
+            experiment.setMlflowExperimentId(mlflowExperimentId);
+        } catch (Exception e) {
+            System.out.println("[UPLOAD] MLflow experiment preparation skipped. projectId="
+                    + projectId + ", name=" + mlflowExperimentName + ", reason=" + e.getMessage());
+            experiment.setMlflowExperimentId(null);
+        }
+
+        /*
          * CUSTOM_DOCKERFILE:
          * No injection, no replacement.
          */
@@ -253,7 +267,7 @@ public class MlExperimentService {
             experiment.setKubeflowRunName(null);
             experiment.setKubeflowStatus(null);
             experiment.setMlflowRunId(null);
-            experiment.setMlflowExperimentId(null);
+            // Keep the MLflow experiment id prepared above.
             experiment.setModelVersion(null);
             experiment.setLatestVersion(null);
             experiment.setProductionVersion(null);

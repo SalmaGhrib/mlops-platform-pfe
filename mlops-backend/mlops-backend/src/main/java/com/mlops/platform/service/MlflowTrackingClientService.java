@@ -14,6 +14,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpStatusCodeException;
 import java.net.URI;
 import org.springframework.web.util.UriComponentsBuilder;
 import java.net.URLEncoder;
@@ -233,39 +235,29 @@ public class MlflowTrackingClientService {
     }
 
     public MlflowRunDetails syncExperimentWithMlflow(MlExperiment experiment) {
-    if (experiment == null) {
-        return null;
-    }
-
-    MlflowRunDetails runDetails = findBestMlflowRunForExperiment(experiment);
-
-    if (runDetails == null) {
-        return null;
-    }
-
-    if (runDetails.getExperimentId() == null || runDetails.getExperimentId().isBlank()) {
-        /*
-         * Attention :
-         * mlflowExperimentName = pp11
-         * registeredModelName = pp11_model
-         *
-         * On ne doit pas utiliser registeredModelName comme nom d'expérience MLflow
-         * sauf en dernier fallback très léger.
-         */
-        String experimentName = firstNotBlank(
-                experiment.getMlflowExperimentName(),
-                experiment.getProject() != null ? experiment.getProject().getName() : null,
-                extractBaseExperimentNameFromRegisteredModel(experiment.getRegisteredModelName()),
-                experiment.getExperimentName()
-        );
-
-        if (experimentName != null && !experimentName.isBlank()) {
-            runDetails.setExperimentId(findExperimentIdByName(experimentName));
+        if (experiment == null) {
+            return null;
         }
-    }
 
-    return runDetails;
-}
+        MlflowRunDetails runDetails = findBestMlflowRunForExperiment(experiment);
+
+        if (runDetails == null) {
+            return null;
+        }
+
+        if (runDetails.getExperimentId() == null || runDetails.getExperimentId().isBlank()) {
+            String experimentName = firstNotBlank(
+                    experiment.getMlflowExperimentName(),
+                    experiment.getProject() != null ? experiment.getProject().getName() : null
+            );
+
+            if (experimentName != null && !experimentName.isBlank()) {
+                runDetails.setExperimentId(findExperimentIdByName(experimentName));
+            }
+        }
+
+        return runDetails;
+    }
 
 public void setModelAlias(String registeredModelName, String modelVersion, String alias) {
     try {
@@ -592,37 +584,14 @@ private List<String> buildMlflowExperimentNameCandidates(MlExperiment experiment
         return candidates;
     }
 
-    /*
-     * Priorité 1 :
-     * Le vrai nom de l'expérience MLflow.
-     * Exemple : pp11
-     */
     addCandidate(candidates, experiment.getMlflowExperimentName());
 
-    /*
-     * Priorité 2 :
-     * Nom du projet.
-     * Exemple : pp11
-     */
     if (experiment.getProject() != null) {
         addCandidate(candidates, experiment.getProject().getName());
     }
 
-    /*
-     * Priorité 3 :
-     * Base du registered model.
-     * Exemple : pp11_model -> pp11
-     */
-    addCandidate(
-            candidates,
-            extractBaseExperimentNameFromRegisteredModel(experiment.getRegisteredModelName())
-    );
-
-    /*
-     * Priorité 4 :
-     * Si experimentName représente vraiment un nom de run,
-     * il peut parfois aussi être utilisé comme fallback, mais il ne doit pas passer avant pp11.
-     */
+    // The registered model name must never be used as an MLflow experiment name.
+    // The run name remains only a final compatibility fallback.
     addCandidate(candidates, experiment.getExperimentName());
 
     return candidates;
@@ -1387,25 +1356,25 @@ result.add(details);
         }
     }
 
-    private String findExperimentIdByName(String experimentName) {
-        try {
-            if (experimentName == null || experimentName.isBlank()) {
-                return null;
-            }
+    public String findExperimentIdByName(String experimentName) {
+        if (experimentName == null || experimentName.isBlank()) {
+            return null;
+        }
 
+        String cleanName = experimentName.trim();
+
+        try {
             String url = cleanMlflowUri(mlflowTrackingUri)
                     + "/api/2.0/mlflow/experiments/get-by-name?experiment_name="
-                    + URLEncoder.encode(experimentName.trim(), StandardCharsets.UTF_8);
+                    + URLEncoder.encode(cleanName, StandardCharsets.UTF_8);
 
             HttpHeaders headers = new HttpHeaders();
             headers.setAccept(List.of(MediaType.APPLICATION_JSON));
 
-            HttpEntity<Void> entity = new HttpEntity<>(headers);
-
             ResponseEntity<String> response = restTemplate.exchange(
                     url,
                     HttpMethod.GET,
-                    entity,
+                    new HttpEntity<Void>(headers),
                     String.class
             );
 
@@ -1414,23 +1383,129 @@ result.add(details);
             }
 
             String body = response.getBody();
-
             if (body == null || body.isBlank()) {
                 return null;
             }
 
             JsonNode root = objectMapper.readTree(body);
-            JsonNode experiment = root.path("experiment");
+            String experimentId = root.path("experiment").path("experiment_id").asText(null);
+            return experimentId == null || experimentId.isBlank() ? null : experimentId;
 
-            if (experiment.isMissingNode() || experiment.isNull()) {
+        } catch (HttpClientErrorException.NotFound e) {
+            System.out.println("[MLFLOW] Experiment not found yet: " + cleanName);
+            return null;
+        } catch (HttpStatusCodeException e) {
+            String responseBody = e.getResponseBodyAsString();
+            if (e.getStatusCode() == HttpStatus.NOT_FOUND
+                    || (responseBody != null && responseBody.contains("RESOURCE_DOES_NOT_EXIST"))) {
+                System.out.println("[MLFLOW] Experiment not found yet: " + cleanName);
                 return null;
             }
-
-            return experiment.path("experiment_id").asText(null);
-
-        } catch (Exception e) {
-            System.out.println("Erreur findExperimentIdByName : " + e.getMessage());
+            System.err.println("[MLFLOW] findExperimentIdByName failed. name=" + cleanName
+                    + ", status=" + e.getStatusCode() + ", response=" + responseBody);
             return null;
+        } catch (Exception e) {
+            System.err.println("[MLFLOW] findExperimentIdByName failed. name=" + cleanName
+                    + ", reason=" + e.getMessage());
+            return null;
+        }
+    }
+
+    public String createExperiment(String experimentName) {
+        if (experimentName == null || experimentName.isBlank()) {
+            throw new IllegalArgumentException("MLflow experiment name is required.");
+        }
+
+        String cleanName = experimentName.trim();
+        String existingId = findExperimentIdByName(cleanName);
+        if (existingId != null && !existingId.isBlank()) {
+            return existingId;
+        }
+
+        try {
+            String url = cleanMlflowUri(mlflowTrackingUri)
+                    + "/api/2.0/mlflow/experiments/create";
+
+            String requestBody = "{\"name\":\"" + jsonEscape(cleanName) + "\"}";
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    new HttpEntity<>(requestBody, headers),
+                    String.class
+            );
+
+            String body = response.getBody();
+            if (!response.getStatusCode().is2xxSuccessful() || body == null || body.isBlank()) {
+                throw new IllegalStateException("MLflow did not return an experiment id.");
+            }
+
+            String experimentId = objectMapper.readTree(body).path("experiment_id").asText(null);
+            if (experimentId == null || experimentId.isBlank()) {
+                throw new IllegalStateException("MLflow experiment id is missing.");
+            }
+
+            System.out.println("[MLFLOW] Experiment created. name=" + cleanName + ", id=" + experimentId);
+            return experimentId;
+
+        } catch (HttpStatusCodeException e) {
+            String responseBody = e.getResponseBodyAsString();
+            if (responseBody != null && responseBody.contains("RESOURCE_ALREADY_EXISTS")) {
+                String existing = findExperimentIdByName(cleanName);
+                if (existing != null && !existing.isBlank()) {
+                    return existing;
+                }
+            }
+            throw new IllegalStateException("Unable to create MLflow experiment " + cleanName
+                    + ". Response: " + responseBody, e);
+        } catch (Exception e) {
+            throw new IllegalStateException("Unable to create MLflow experiment " + cleanName, e);
+        }
+    }
+
+    public String getOrCreateExperimentId(String experimentName) {
+        String existingId = findExperimentIdByName(experimentName);
+        return existingId != null && !existingId.isBlank()
+                ? existingId
+                : createExperiment(experimentName);
+    }
+
+    public boolean deleteExperimentById(String experimentId) {
+        if (experimentId == null || experimentId.isBlank()) {
+            return true;
+        }
+
+        try {
+            String url = cleanMlflowUri(mlflowTrackingUri)
+                    + "/api/2.0/mlflow/experiments/delete";
+            String requestBody = "{\"experiment_id\":\"" + jsonEscape(experimentId.trim()) + "\"}";
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    new HttpEntity<>(requestBody, headers),
+                    String.class
+            );
+            return response.getStatusCode().is2xxSuccessful();
+        } catch (HttpStatusCodeException e) {
+            String body = e.getResponseBodyAsString();
+            if (e.getStatusCode() == HttpStatus.NOT_FOUND
+                    || (body != null && body.contains("RESOURCE_DOES_NOT_EXIST"))) {
+                return true;
+            }
+            System.err.println("[MLFLOW] deleteExperimentById failed. id=" + experimentId
+                    + ", status=" + e.getStatusCode() + ", response=" + body);
+            return false;
+        } catch (Exception e) {
+            System.err.println("[MLFLOW] deleteExperimentById failed. id=" + experimentId
+                    + ", reason=" + e.getMessage());
+            return false;
         }
     }
 
