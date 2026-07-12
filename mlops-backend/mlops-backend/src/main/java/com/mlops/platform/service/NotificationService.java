@@ -8,6 +8,8 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
 import java.lang.reflect.Method;
+import java.time.Clock;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -82,10 +84,6 @@ public class NotificationService {
 
     for (User user : users) {
         if (!isAdminUser(user)) {
-            if (!isAdminUser(user)) {
-    System.out.println("[NOTIFICATION] Skipped non-admin userId=" + user.getId());
-    continue;
-}
             continue;
         }
 
@@ -317,14 +315,18 @@ public void notifyBackendLatencyAlert(Long alertTargetId, double latencyMs) {
     }
 
     public List<NotificationResponse> getMyNotifications(User user) {
-        return notificationRepository.findTop20ByUserOrderByCreatedAtDesc(user)
+        LocalDateTime cutoff = LocalDateTime.now(Clock.systemUTC()).minusHours(24);
+        return notificationRepository
+                .findTop20ByUserAndCreatedAtGreaterThanEqualOrderByCreatedAtDesc(user, cutoff)
                 .stream()
                 .map(NotificationResponse::new)
                 .toList();
     }
 
     public long countUnread(User user) {
-        return notificationRepository.countByUserAndReadFalse(user);
+        LocalDateTime cutoff = LocalDateTime.now(Clock.systemUTC()).minusHours(24);
+        return notificationRepository
+                .countByUserAndReadFalseAndCreatedAtGreaterThanEqual(user, cutoff);
     }
 
     public void markAsRead(User user, Long notificationId) {

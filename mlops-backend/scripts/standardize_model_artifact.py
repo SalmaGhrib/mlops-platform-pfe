@@ -300,6 +300,87 @@ def set_production_alias_safe(
     )
 
 
+PREDICTIVE_MODEL_KEYS = [
+    "model", "pipeline", "estimator", "predictor", "classifier", "regressor",
+    "trained_model", "best_model", "final_model", "network", "module",
+]
+
+
+def is_predictive_object(value: Any) -> bool:
+    return value is not None and (hasattr(value, "predict") or callable(value))
+
+
+def extract_predictive_model(
+    loaded_object: Any,
+    depth: int = 0,
+    visited: Optional[set] = None,
+) -> tuple[Any, Dict[str, Any]]:
+    if visited is None:
+        visited = set()
+    if depth > 8:
+        raise RuntimeError("Maximum nested model depth exceeded.")
+    if loaded_object is None:
+        raise RuntimeError("Loaded artifact is None.")
+
+    object_id = id(loaded_object)
+    if object_id in visited:
+        raise RuntimeError("Circular reference detected inside model bundle.")
+    visited.add(object_id)
+
+    if is_predictive_object(loaded_object):
+        return loaded_object, {}
+
+    if isinstance(loaded_object, dict):
+        metadata = {
+            key: value for key, value in loaded_object.items()
+            if key not in PREDICTIVE_MODEL_KEYS
+        }
+        ordered_keys = [key for key in PREDICTIVE_MODEL_KEYS if key in loaded_object]
+        ordered_keys += [key for key in loaded_object if key not in ordered_keys]
+        for key in ordered_keys:
+            try:
+                model, nested_metadata = extract_predictive_model(
+                    loaded_object[key], depth + 1, visited.copy()
+                )
+                return model, {
+                    **metadata,
+                    **nested_metadata,
+                    "_model_bundle_key": key,
+                }
+            except RuntimeError:
+                continue
+        raise RuntimeError(
+            "The artifact is a dictionary, but no predictive object was found. "
+            f"Available keys: {list(loaded_object.keys())}"
+        )
+
+    if isinstance(loaded_object, (list, tuple)):
+        for index, candidate in enumerate(loaded_object):
+            try:
+                model, metadata = extract_predictive_model(
+                    candidate, depth + 1, visited.copy()
+                )
+                metadata["_model_bundle_index"] = index
+                return model, metadata
+            except RuntimeError:
+                continue
+
+    for attribute_name in PREDICTIVE_MODEL_KEYS:
+        if hasattr(loaded_object, attribute_name):
+            try:
+                model, metadata = extract_predictive_model(
+                    getattr(loaded_object, attribute_name), depth + 1, visited.copy()
+                )
+                metadata["_model_bundle_attribute"] = attribute_name
+                return model, metadata
+            except RuntimeError:
+                continue
+
+    raise RuntimeError(
+        "Loaded object is not predictive and no nested predictive object was found. "
+        f"type={type(loaded_object).__name__}"
+    )
+
 def validate_pickle_like_model(model_path: Path) -> Any:
     model = joblib.load(model_path)
 
@@ -343,7 +424,7 @@ def standardize_pickle_like_model(
 ) -> Dict[str, Any]:
     client = MlflowClient()
 
-    model = validate_pickle_like_model(model_path)
+    model, bundle_metadata = validate_pickle_like_model(model_path)
 
     requirements = read_requirements(
         artifact_root,
@@ -362,6 +443,21 @@ def standardize_pickle_like_model(
             standardization_type="sklearn_joblib",
             artifact_root=artifact_root,
         )
+
+        if bundle_metadata:
+            mlflow.set_tag(
+                "mlops.bundle.metadata",
+                json.dumps(bundle_metadata, ensure_ascii=False, default=str)[:4000],
+            )
+            mlflow.set_tag(
+                "mlops.bundle.model_key",
+                str(
+                    bundle_metadata.get(
+                        "_model_bundle_key",
+                        bundle_metadata.get("_model_bundle_attribute", "direct"),
+                    )
+                ),
+            )
 
         mlflow.sklearn.log_model(
             sk_model=model,

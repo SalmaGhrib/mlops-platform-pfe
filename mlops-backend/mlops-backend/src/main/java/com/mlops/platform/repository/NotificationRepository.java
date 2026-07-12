@@ -13,11 +13,11 @@ import java.util.List;
 @Repository
 public interface NotificationRepository extends JpaRepository<Notification, Long> {
 
-    List<Notification> findTop20ByUserOrderByCreatedAtDesc(User user);
+    List<Notification> findTop20ByUserAndCreatedAtGreaterThanEqualOrderByCreatedAtDesc(User user, LocalDateTime createdAt);
 
     List<Notification> findByUserOrderByCreatedAtDesc(User user);
 
-    long countByUserAndReadFalse(User user);
+    long countByUserAndReadFalseAndCreatedAtGreaterThanEqual(User user, LocalDateTime createdAt);
 
     List<Notification> findByUserAndReadFalseOrderByCreatedAtDesc(User user);
 

@@ -6,6 +6,8 @@ import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.entity.NotificationTargetType;
 import com.mlops.platform.entity.NotificationType;
 import com.mlops.platform.entity.RetrainingConfig;
+import com.mlops.platform.entity.RetrainingStrategy;
+import com.mlops.platform.entity.RetrainingTriggerType;
 import com.mlops.platform.repository.MlProjectRepository;
 import com.mlops.platform.repository.RetrainingConfigRepository;
 import org.springframework.stereotype.Service;
@@ -68,7 +70,18 @@ public class AutoRetrainingService {
         }
 
         try {
-            RetrainingDecisionResult decision = retrainingDecisionService.evaluateBeforeRetraining(config);
+            RetrainingDecisionResult decision;
+
+            if (config.getStrategy() == null
+                    || config.getStrategy() == RetrainingStrategy.SCHEDULED_ONLY) {
+                // Mode simple : chaque échéance déclenche réellement un run.
+                decision = new RetrainingDecisionResult();
+                decision.setShouldRetrain(true);
+                decision.setTriggerType(RetrainingTriggerType.SCHEDULED);
+                decision.setReason("Échéance planifiée atteinte.");
+            } else {
+                decision = retrainingDecisionService.evaluateBeforeRetraining(config);
+            }
 
             if (decision == null || !decision.isShouldRetrain()) {
                 LocalDateTime now = LocalDateTime.now();

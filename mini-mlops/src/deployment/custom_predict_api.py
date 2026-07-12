@@ -2,6 +2,9 @@ import io
 import os
 import time
 import json
+import pickle
+
+import joblib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -213,6 +216,140 @@ def list_available_files(local_dir: Optional[str]) -> List[str]:
     ]
 
 
+PICKLE_EXTENSIONS = {".pkl", ".joblib", ".pickle", ".sav"}
+PREDICTIVE_MODEL_KEYS = [
+    "model", "pipeline", "estimator", "predictor", "classifier", "regressor",
+    "trained_model", "best_model", "final_model", "network", "module",
+]
+
+
+def is_predictive_object(value: Any) -> bool:
+    return value is not None and (hasattr(value, "predict") or callable(value))
+
+
+def extract_predictive_model(
+    loaded_object: Any,
+    depth: int = 0,
+    visited: Optional[set] = None,
+) -> Tuple[Any, Dict[str, Any]]:
+    if visited is None:
+        visited = set()
+    if depth > 8:
+        raise ValueError("Maximum nested model depth exceeded.")
+    if loaded_object is None:
+        raise ValueError("Loaded artifact is None.")
+
+    object_id = id(loaded_object)
+    if object_id in visited:
+        raise ValueError("Circular reference detected inside model bundle.")
+    visited.add(object_id)
+
+    if is_predictive_object(loaded_object):
+        return loaded_object, {}
+
+    if isinstance(loaded_object, dict):
+        metadata = {
+            key: value for key, value in loaded_object.items()
+            if key not in PREDICTIVE_MODEL_KEYS
+        }
+        ordered_keys = [key for key in PREDICTIVE_MODEL_KEYS if key in loaded_object]
+        ordered_keys += [key for key in loaded_object if key not in ordered_keys]
+        for key in ordered_keys:
+            try:
+                model, nested_metadata = extract_predictive_model(
+                    loaded_object[key], depth + 1, visited.copy()
+                )
+                return model, {
+                    **metadata,
+                    **nested_metadata,
+                    "_model_bundle_key": key,
+                }
+            except ValueError:
+                continue
+        raise ValueError(
+            "No predictive model found inside dictionary. "
+            f"Available keys: {list(loaded_object.keys())}"
+        )
+
+    if isinstance(loaded_object, (list, tuple)):
+        for index, candidate in enumerate(loaded_object):
+            try:
+                model, metadata = extract_predictive_model(
+                    candidate, depth + 1, visited.copy()
+                )
+                metadata["_model_bundle_index"] = index
+                return model, metadata
+            except ValueError:
+                continue
+
+    for attribute_name in PREDICTIVE_MODEL_KEYS:
+        if hasattr(loaded_object, attribute_name):
+            try:
+                model, metadata = extract_predictive_model(
+                    getattr(loaded_object, attribute_name), depth + 1, visited.copy()
+                )
+                metadata["_model_bundle_attribute"] = attribute_name
+                return model, metadata
+            except ValueError:
+                continue
+
+    raise ValueError(
+        "Loaded artifact does not contain a predictive model. "
+        f"type={type(loaded_object).__name__}"
+    )
+
+
+def find_pickle_model_file(local_dir: str) -> str:
+    local_path = Path(local_dir)
+    if not local_path.exists():
+        raise FileNotFoundError(f"Artifact directory does not exist: {local_dir}")
+
+    candidates = [
+        path for path in local_path.rglob("*")
+        if path.is_file() and path.suffix.lower() in PICKLE_EXTENSIONS
+    ]
+    if not candidates:
+        raise FileNotFoundError(
+            "No pickle/joblib model found. "
+            f"available_files={list_available_files(local_dir)}"
+        )
+
+    preferred_names = [
+        "model.pkl", "model.joblib", "pipeline.pkl", "pipeline.joblib",
+        "trained_model.pkl", "best_model.pkl", "final_model.pkl",
+    ]
+    for preferred_name in preferred_names:
+        for candidate in candidates:
+            if candidate.name.lower() == preferred_name:
+                return str(candidate)
+
+    candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return str(candidates[0])
+
+
+def load_pickle_artifact(local_dir: str) -> Tuple[Any, Dict[str, Any], str]:
+    model_path = find_pickle_model_file(local_dir)
+    try:
+        loaded_object = joblib.load(model_path)
+    except Exception as joblib_error:
+        try:
+            with open(model_path, "rb") as file:
+                loaded_object = pickle.load(file)
+        except Exception as pickle_error:
+            raise RuntimeError(
+                f"Unable to load {model_path} with joblib or pickle. "
+                f"joblib_error={joblib_error}; pickle_error={pickle_error}"
+            ) from pickle_error
+
+    model, metadata = extract_predictive_model(loaded_object)
+    print(
+        "[PICKLE LOADER] Predictive object extracted. "
+        f"path={model_path}, container_type={type(loaded_object).__name__}, "
+        f"model_type={type(model).__name__}, metadata_keys={list(metadata.keys())}"
+    )
+    return model, metadata, model_path
+
+
 # ============================================================
 # MODEL LOADING
 # ============================================================
@@ -313,6 +450,30 @@ def load_model_from_registry(
     # ------------------------------------------------------------
     # 3) Fallback TorchScript artifact-only
     # ------------------------------------------------------------
+    # ------------------------------------------------------------
+    # 3) Fallback pickle / joblib bundle
+    # ------------------------------------------------------------
+    try:
+        if local_dir is None:
+            local_dir = mlflow.artifacts.download_artifacts(model_uri)
+        raw_model, metadata, raw_model_path = load_pickle_artifact(local_dir)
+        loaded = {
+            "type": "raw_predictive",
+            "model": raw_model,
+            "metadata": metadata,
+            "model_uri": model_uri,
+            "version_info": version_info,
+            "local_dir": local_dir,
+            "model_path": raw_model_path,
+            "loaded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        loaded_models[cache_key] = loaded
+        print(f"[MODEL LOADER] Pickle/joblib model loaded successfully: {raw_model_path}")
+        return loaded, model_uri, version_info
+    except Exception as pickle_exc:
+        pyfunc_errors.append(f"pickle_fallback_error={repr(pickle_exc)}")
+        print(f"[MODEL LOADER] Pickle/joblib fallback failed: {repr(pickle_exc)}")
+
     try:
         import torch
 
@@ -572,6 +733,65 @@ def prepare_torch_input_from_dataframe(df: pd.DataFrame):
 # PREDICTION
 # ============================================================
 
+def prepare_input_for_loaded_model(
+    loaded: Dict[str, Any],
+    dataframe: pd.DataFrame,
+) -> pd.DataFrame:
+    metadata = loaded.get("metadata") or {}
+    feature_columns = (
+        metadata.get("feature_columns")
+        or metadata.get("features")
+        or metadata.get("input_columns")
+        or metadata.get("columns")
+    )
+
+    model = loaded.get("model")
+    if not feature_columns and model is not None:
+        detected_columns = getattr(model, "feature_names_in_", None)
+        if detected_columns is not None:
+            feature_columns = list(detected_columns)
+
+    if not feature_columns:
+        return dataframe
+
+    feature_columns = [str(column) for column in feature_columns]
+    target_column = (
+        metadata.get("target_column")
+        or metadata.get("target")
+        or metadata.get("label_column")
+    )
+    if target_column and target_column in dataframe.columns:
+        dataframe = dataframe.drop(columns=[target_column])
+
+    missing_columns = [
+        column for column in feature_columns if column not in dataframe.columns
+    ]
+    if missing_columns:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Some required model features are missing.",
+                "missing_columns": missing_columns,
+                "expected_columns": feature_columns,
+                "received_columns": list(dataframe.columns),
+            },
+        )
+
+    return dataframe[feature_columns]
+
+
+def predict_with_raw_model(loaded: Dict[str, Any], model_input: pd.DataFrame) -> Any:
+    model = loaded.get("model")
+    prepared_input = prepare_input_for_loaded_model(loaded, model_input)
+    if hasattr(model, "predict"):
+        return model.predict(prepared_input)
+    if callable(model):
+        return model(prepared_input)
+    raise TypeError(
+        f"Extracted object is not predictive: {type(model).__name__}"
+    )
+
+
 def make_predictions(loaded: Dict[str, Any], model_input: pd.DataFrame):
     model_type = loaded.get("type")
     model = loaded.get("model")
@@ -591,6 +811,25 @@ def make_predictions(loaded: Dict[str, Any], model_input: pd.DataFrame):
             return normalize_prediction_output(predictions)
 
         except Exception as exc:
+            # A pyfunc wrapper can load successfully while wrapping a dictionary.
+            # In that case, retry with the real predictive object from the artifact.
+            try:
+                local_dir = loaded.get("local_dir")
+                if not local_dir:
+                    local_dir = mlflow.artifacts.download_artifacts(loaded["model_uri"])
+                raw_model, metadata, raw_model_path = load_pickle_artifact(local_dir)
+                fallback_loaded = {
+                    **loaded,
+                    "type": "raw_predictive",
+                    "model": raw_model,
+                    "metadata": metadata,
+                    "model_path": raw_model_path,
+                    "local_dir": local_dir,
+                }
+                predictions = predict_with_raw_model(fallback_loaded, model_input)
+                return normalize_prediction_output(predictions)
+            except Exception as fallback_exc:
+                raw_model_fallback_error = str(fallback_exc)
             error_detail = {
                 "message": "Prediction failed for MLflow pyfunc model.",
                 "error": str(exc),
@@ -603,11 +842,34 @@ def make_predictions(loaded: Dict[str, Any], model_input: pd.DataFrame):
             if isinstance(model_input, pd.DataFrame):
                 error_detail["received_columns"] = list(model_input.columns)
 
+            error_detail["raw_model_fallback_error"] = raw_model_fallback_error
             raise HTTPException(status_code=400, detail=error_detail)
 
     # ------------------------------------------------------------
     # Cas PyTorch / TorchScript artifact
     # ------------------------------------------------------------
+    # ------------------------------------------------------------
+    # Cas modèle sklearn/XGBoost/LightGBM extrait d'un bundle
+    # ------------------------------------------------------------
+    if model_type == "raw_predictive":
+        try:
+            predictions = predict_with_raw_model(loaded, model_input)
+            return normalize_prediction_output(predictions)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Prediction failed for extracted pickle/joblib model.",
+                    "error": str(exc),
+                    "model_type": type(model).__name__,
+                    "model_path": loaded.get("model_path"),
+                    "metadata_keys": list((loaded.get("metadata") or {}).keys()),
+                    "received_columns": list(model_input.columns),
+                },
+            )
+
     if model_type == "torch":
         try:
             import torch

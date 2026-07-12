@@ -4,6 +4,7 @@ import com.mlops.platform.entity.RetrainingConfig;
 import com.mlops.platform.repository.RetrainingConfigRepository;
 import com.mlops.platform.service.AutoRetrainingService;
 import jakarta.annotation.PostConstruct;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Component;
@@ -20,6 +21,12 @@ public class AutoRetrainingScheduler {
 
     private final AtomicBoolean schedulerRunning = new AtomicBoolean(false);
 
+    @Value("${app.retraining.scheduler.enabled:true}")
+    private boolean schedulerEnabled;
+
+    @Value("${app.retraining.scheduler.stuck-timeout-minutes:30}")
+    private long stuckTimeoutMinutes;
+
     public AutoRetrainingScheduler(
             RetrainingConfigRepository retrainingConfigRepository,
             AutoRetrainingService autoRetrainingService
@@ -33,9 +40,16 @@ public class AutoRetrainingScheduler {
         System.out.println("[AUTO_RETRAINING] Scheduler loaded");
     }
 
-    @Scheduled(fixedDelayString = "${app.retraining.scheduler.delay-ms:60000}")
-    @SchedulerLock(name = "autoRetrainingScheduler", lockAtMostFor = "60m", lockAtLeastFor = "30s")
+    @Scheduled(
+            fixedDelayString = "${app.retraining.scheduler.delay-ms:60000}",
+            initialDelayString = "${app.retraining.scheduler.initial-delay-ms:30000}"
+    )
+    @SchedulerLock(name = "autoRetrainingScheduler", lockAtMostFor = "5m", lockAtLeastFor = "10s")
     public void checkScheduledRetraining() {
+        if (!schedulerEnabled) {
+            return;
+        }
+
         if (!schedulerRunning.compareAndSet(false, true)) {
             System.out.println("[AUTO_RETRAINING] Previous scheduler cycle still running. Skipped.");
             return;
@@ -44,11 +58,16 @@ public class AutoRetrainingScheduler {
         try {
             LocalDateTime now = LocalDateTime.now();
 
+            LocalDateTime cutoff = now.minusMinutes(Math.max(5L, stuckTimeoutMinutes));
+            int reset = retrainingConfigRepository.resetStuckRunningConfigs(cutoff, now);
+            if (reset > 0) {
+                System.out.println("[AUTO_RETRAINING] Reset stuck configs=" + reset);
+            }
+
             System.out.println("[AUTO_RETRAINING] Checking configs at " + now);
 
             List<RetrainingConfig> configs =
-                    retrainingConfigRepository
-                            .findByEnabledTrueAndRunningFalseAndNextRetrainingAtIsNotNullAndNextRetrainingAtLessThanEqual(now);
+                    retrainingConfigRepository.findDueConfigs(now);
 
             System.out.println("[AUTO_RETRAINING] Found configs = " + configs.size());
 

@@ -7,6 +7,7 @@ import com.mlops.platform.entity.NotificationTargetType;
 import com.mlops.platform.entity.NotificationType;
 import com.mlops.platform.entity.RetrainingConfig;
 import com.mlops.platform.entity.RetrainingFrequencyType;
+import com.mlops.platform.entity.RetrainingStrategy;
 import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.MlProjectRepository;
 import com.mlops.platform.repository.RetrainingConfigRepository;
@@ -91,6 +92,12 @@ public class RetrainingConfigService {
         config.setEnabled(enabled);
         config.setFrequencyType(frequencyType);
         config.setFrequencyValue(frequencyValue);
+
+        // Le mode simple doit lancer à chaque échéance. Les stratégies smart
+        // ne sont appliquées que si le frontend les demande explicitement.
+        if (request == null || request.getStrategy() == null) {
+            config.setStrategy(RetrainingStrategy.SCHEDULED_ONLY);
+        }
         applyMonitoringSettings(config, request);
         config.setRunning(false);
         config.setManualTriggerRequested(false);
@@ -138,6 +145,7 @@ public class RetrainingConfigService {
         request.setEnabled(true);
         request.setFrequencyType(RetrainingFrequencyType.WEEK);
         request.setFrequencyValue(1);
+        request.setStrategy(RetrainingStrategy.SCHEDULED_ONLY);
 
         return saveOrUpdateConfig(projectId, sourceExperimentId, request);
     }

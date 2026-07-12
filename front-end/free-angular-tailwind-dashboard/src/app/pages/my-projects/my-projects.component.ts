@@ -102,7 +102,7 @@ export class MyProjectsComponent implements OnInit {
       retrainingEnabled: false,
       retrainingFrequencyType: 'WEEK',
       retrainingFrequencyValue: 1,
-      retrainingStrategy: 'FULL_SMART',
+      retrainingStrategy: 'SCHEDULED_ONLY',
       failureMonitoringEnabled: true,
       performanceMonitoringEnabled: true,
       dataDriftMonitoringEnabled: true,
@@ -202,7 +202,7 @@ export class MyProjectsComponent implements OnInit {
       retrainingEnabled: false,
       retrainingFrequencyType: 'WEEK',
       retrainingFrequencyValue: 1,
-      retrainingStrategy: 'FULL_SMART',
+      retrainingStrategy: 'SCHEDULED_ONLY',
       failureMonitoringEnabled: true,
       performanceMonitoringEnabled: true,
       dataDriftMonitoringEnabled: true,
@@ -234,7 +234,7 @@ export class MyProjectsComponent implements OnInit {
         this.projectForm.retrainingEnabled = config.enabled ?? false;
         this.projectForm.retrainingFrequencyType = config.frequencyType || 'WEEK';
         this.projectForm.retrainingFrequencyValue = config.frequencyValue || 1;
-        this.projectForm.retrainingStrategy = config.strategy || 'FULL_SMART';
+        this.projectForm.retrainingStrategy = config.strategy || 'SCHEDULED_ONLY';
         this.projectForm.failureMonitoringEnabled = config.failureMonitoringEnabled ?? true;
         this.projectForm.performanceMonitoringEnabled = config.performanceMonitoringEnabled ?? true;
         this.projectForm.dataDriftMonitoringEnabled = config.dataDriftMonitoringEnabled ?? true;
@@ -249,7 +249,7 @@ export class MyProjectsComponent implements OnInit {
         this.projectForm.retrainingEnabled = false;
         this.projectForm.retrainingFrequencyType = 'WEEK';
         this.projectForm.retrainingFrequencyValue = 1;
-        this.projectForm.retrainingStrategy = 'FULL_SMART';
+        this.projectForm.retrainingStrategy = 'SCHEDULED_ONLY';
         this.projectForm.failureMonitoringEnabled = true;
         this.projectForm.performanceMonitoringEnabled = true;
         this.projectForm.dataDriftMonitoringEnabled = true;
@@ -310,7 +310,7 @@ export class MyProjectsComponent implements OnInit {
       }
 
       if (!this.projectForm.retrainingStrategy) {
-        this.projectForm.retrainingStrategy = 'FULL_SMART';
+        this.projectForm.retrainingStrategy = 'SCHEDULED_ONLY';
       }
 
       this.projectForm.monitoringLookbackHours = this.projectForm.monitoringLookbackHours || 24;
@@ -661,7 +661,7 @@ export class MyProjectsComponent implements OnInit {
       enabled: this.projectForm.retrainingEnabled,
       frequencyType: this.projectForm.retrainingFrequencyType || 'WEEK',
       frequencyValue: this.projectForm.retrainingFrequencyValue || 1,
-      strategy: this.projectForm.retrainingStrategy || 'FULL_SMART',
+      strategy: this.projectForm.retrainingStrategy || 'SCHEDULED_ONLY',
       failureMonitoringEnabled: this.projectForm.failureMonitoringEnabled,
       performanceMonitoringEnabled: this.projectForm.performanceMonitoringEnabled,
       dataDriftMonitoringEnabled: this.projectForm.dataDriftMonitoringEnabled,
@@ -890,7 +890,7 @@ export class MyProjectsComponent implements OnInit {
 
 
   getRetrainingStrategyLabel(strategy: RetrainingStrategy | string | null | undefined): string {
-    const value = String(strategy || 'FULL_SMART').toUpperCase();
+    const value = String(strategy || 'SCHEDULED_ONLY').toUpperCase();
 
     if (value === 'SCHEDULED_ONLY') {
       return 'Planifié uniquement';
@@ -908,7 +908,7 @@ export class MyProjectsComponent implements OnInit {
   }
 
   getRetrainingStrategyDescription(strategy: RetrainingStrategy | string | null | undefined): string {
-    const value = String(strategy || 'FULL_SMART').toUpperCase();
+    const value = String(strategy || 'SCHEDULED_ONLY').toUpperCase();
 
     if (value === 'SCHEDULED_ONLY') {
       return 'La plateforme relance le training à chaque échéance, sans vérifier les signaux de monitoring.';

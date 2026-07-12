@@ -61,6 +61,6 @@ data:
   APP_KANIKO_CACHE_REPO: "acrmlopssalma.azurecr.io/mlops-kaniko-cache"
 
   # Désactivés par défaut pour éviter le spam quand Prometheus/retraining n'est pas configuré.
-  APP_RETRAINING_SCHEDULER_ENABLED: "false"
+  APP_RETRAINING_SCHEDULER_ENABLED: "true"
   APP_MONITORING_ALERTS_ENABLED: "false"
   APP_MONITORING_ALERTS_DELAY_MS: "60000"

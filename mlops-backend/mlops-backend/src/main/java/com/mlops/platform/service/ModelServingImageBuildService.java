@@ -53,6 +53,9 @@ import io
 import os
 import time
 import json
+import pickle
+
+import joblib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -260,6 +263,30 @@ def load_model_from_registry(model_name: str, model_alias: str = "production") -
         print(f"[MODEL LOADER] Local artifact pyfunc error: {repr(exc)}")
         print(f"[MODEL LOADER] available_files={list_available_files(local_dir)}")
 
+    # ------------------------------------------------------------
+    # 3) Fallback pickle / joblib bundle
+    # ------------------------------------------------------------
+    try:
+        if local_dir is None:
+            local_dir = mlflow.artifacts.download_artifacts(model_uri)
+        raw_model, metadata, raw_model_path = load_pickle_artifact(local_dir)
+        loaded = {
+            "type": "raw_predictive",
+            "model": raw_model,
+            "metadata": metadata,
+            "model_uri": model_uri,
+            "version_info": version_info,
+            "local_dir": local_dir,
+            "model_path": raw_model_path,
+            "loaded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        loaded_models[cache_key] = loaded
+        print(f"[MODEL LOADER] Pickle/joblib model loaded successfully: {raw_model_path}")
+        return loaded, model_uri, version_info
+    except Exception as pickle_exc:
+        pyfunc_errors.append(f"pickle_fallback_error={repr(pickle_exc)}")
+        print(f"[MODEL LOADER] Pickle/joblib fallback failed: {repr(pickle_exc)}")
+
     try:
         import torch
         if local_dir is None:
@@ -424,6 +451,65 @@ def prepare_torch_input_from_dataframe(df: pd.DataFrame):
         raise HTTPException(status_code=400, detail={"message": "Cannot convert tabular input to float32 for torch model.", "error": str(exc), "received_columns": list(df.columns)})
     return torch.tensor(arr, dtype=torch.float32)
 
+def prepare_input_for_loaded_model(
+    loaded: Dict[str, Any],
+    dataframe: pd.DataFrame,
+) -> pd.DataFrame:
+    metadata = loaded.get("metadata") or {}
+    feature_columns = (
+        metadata.get("feature_columns")
+        or metadata.get("features")
+        or metadata.get("input_columns")
+        or metadata.get("columns")
+    )
+
+    model = loaded.get("model")
+    if not feature_columns and model is not None:
+        detected_columns = getattr(model, "feature_names_in_", None)
+        if detected_columns is not None:
+            feature_columns = list(detected_columns)
+
+    if not feature_columns:
+        return dataframe
+
+    feature_columns = [str(column) for column in feature_columns]
+    target_column = (
+        metadata.get("target_column")
+        or metadata.get("target")
+        or metadata.get("label_column")
+    )
+    if target_column and target_column in dataframe.columns:
+        dataframe = dataframe.drop(columns=[target_column])
+
+    missing_columns = [
+        column for column in feature_columns if column not in dataframe.columns
+    ]
+    if missing_columns:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Some required model features are missing.",
+                "missing_columns": missing_columns,
+                "expected_columns": feature_columns,
+                "received_columns": list(dataframe.columns),
+            },
+        )
+
+    return dataframe[feature_columns]
+
+
+def predict_with_raw_model(loaded: Dict[str, Any], model_input: pd.DataFrame) -> Any:
+    model = loaded.get("model")
+    prepared_input = prepare_input_for_loaded_model(loaded, model_input)
+    if hasattr(model, "predict"):
+        return model.predict(prepared_input)
+    if callable(model):
+        return model(prepared_input)
+    raise TypeError(
+        f"Extracted object is not predictive: {type(model).__name__}"
+    )
+
+
 def make_predictions(loaded: Dict[str, Any], model_input: pd.DataFrame):
     model_type = loaded.get("type")
     model = loaded.get("model")
@@ -434,6 +520,25 @@ def make_predictions(loaded: Dict[str, Any], model_input: pd.DataFrame):
             predictions = model.predict(model_input)
             return normalize_prediction_output(predictions)
         except Exception as exc:
+            # A pyfunc wrapper can load successfully while wrapping a dictionary.
+            # In that case, retry with the real predictive object from the artifact.
+            try:
+                local_dir = loaded.get("local_dir")
+                if not local_dir:
+                    local_dir = mlflow.artifacts.download_artifacts(loaded["model_uri"])
+                raw_model, metadata, raw_model_path = load_pickle_artifact(local_dir)
+                fallback_loaded = {
+                    **loaded,
+                    "type": "raw_predictive",
+                    "model": raw_model,
+                    "metadata": metadata,
+                    "model_path": raw_model_path,
+                    "local_dir": local_dir,
+                }
+                predictions = predict_with_raw_model(fallback_loaded, model_input)
+                return normalize_prediction_output(predictions)
+            except Exception as fallback_exc:
+                raw_model_fallback_error = str(fallback_exc)
             pixel_columns_retry_error = None
 
             if isinstance(model_input, pd.DataFrame) and "pixels" in model_input.columns:
@@ -453,7 +558,30 @@ def make_predictions(loaded: Dict[str, Any], model_input: pd.DataFrame):
                 error_detail["received_columns"] = list(model_input.columns)
             if pixel_columns_retry_error:
                 error_detail["pixel_columns_retry_error"] = pixel_columns_retry_error
+            error_detail["raw_model_fallback_error"] = raw_model_fallback_error
             raise HTTPException(status_code=400, detail=error_detail)
+    # ------------------------------------------------------------
+    # Cas modèle sklearn/XGBoost/LightGBM extrait d'un bundle
+    # ------------------------------------------------------------
+    if model_type == "raw_predictive":
+        try:
+            predictions = predict_with_raw_model(loaded, model_input)
+            return normalize_prediction_output(predictions)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Prediction failed for extracted pickle/joblib model.",
+                    "error": str(exc),
+                    "model_type": type(model).__name__,
+                    "model_path": loaded.get("model_path"),
+                    "metadata_keys": list((loaded.get("metadata") or {}).keys()),
+                    "received_columns": list(model_input.columns),
+                },
+            )
+
     if model_type == "torch":
         try:
             import torch

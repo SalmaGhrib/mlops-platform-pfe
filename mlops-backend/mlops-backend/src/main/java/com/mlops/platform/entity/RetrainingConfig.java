@@ -29,7 +29,7 @@ public class RetrainingConfig {
      */
     @Enumerated(EnumType.STRING)
     @Column(name = "strategy")
-    private RetrainingStrategy strategy = RetrainingStrategy.SCHEDULED_WITH_MONITORING;
+    private RetrainingStrategy strategy = RetrainingStrategy.SCHEDULED_ONLY;
 
     @Column(name = "failure_monitoring_enabled", nullable = false)
     private boolean failureMonitoringEnabled = true;
@@ -122,7 +122,7 @@ public class RetrainingConfig {
 
     public void normalizeMonitoringSettings() {
         if (this.strategy == null) {
-            this.strategy = RetrainingStrategy.SCHEDULED_WITH_MONITORING;
+            this.strategy = RetrainingStrategy.SCHEDULED_ONLY;
         }
 
         if (this.monitoringLookbackHours == null || this.monitoringLookbackHours <= 0) {
@@ -225,7 +225,7 @@ public class RetrainingConfig {
     }
 
     public void setStrategy(RetrainingStrategy strategy) {
-        this.strategy = strategy != null ? strategy : RetrainingStrategy.SCHEDULED_WITH_MONITORING;
+        this.strategy = strategy != null ? strategy : RetrainingStrategy.SCHEDULED_ONLY;
     }
 
     public boolean isFailureMonitoringEnabled() {

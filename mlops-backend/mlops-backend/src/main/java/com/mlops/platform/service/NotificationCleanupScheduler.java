@@ -5,6 +5,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import java.time.Clock;
 import java.time.LocalDateTime;
 
 @Service
@@ -21,8 +22,8 @@ public class NotificationCleanupScheduler {
      * Exécution toutes les heures.
      */
     @Scheduled(
-        fixedDelay = 3600000,
-        initialDelay = 60000
+        fixedDelayString = "${app.notifications.cleanup.delay-ms:900000}",
+        initialDelayString = "${app.notifications.cleanup.initial-delay-ms:15000}"
 )
     @SchedulerLock(
         name = "notificationCleanupScheduler",
@@ -31,7 +32,7 @@ public class NotificationCleanupScheduler {
 )
     @Transactional
     public void deleteOldNotifications() {
-        LocalDateTime limit = LocalDateTime.now().minusDays(1);
+        LocalDateTime limit = LocalDateTime.now(Clock.systemUTC()).minusHours(24);
 
         try {
             notificationRepository.deleteByCreatedAtBefore(limit);

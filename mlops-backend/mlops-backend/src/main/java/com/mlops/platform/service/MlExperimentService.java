@@ -526,10 +526,6 @@ experiment.setMessage(
     List<MlExperiment> visibleExperiments =
             filterAndDeduplicateVisibleExperiments(experiments);
 
-    for (MlExperiment experiment : visibleExperiments) {
-        notifyTerminalExperimentIfNeeded(experiment);
-    }
-
     return visibleExperiments
             .stream()
             .map(this::mapToResponse)
@@ -776,17 +772,6 @@ experiment.setMessage(
     List<MlExperiment> visibleExperiments =
             filterAndDeduplicateVisibleExperiments(experiments);
 
-    /*
-     * 7) Créer les notifications manquantes pour les runs déjà terminés.
-     *
-     * Important :
-     * - Si le run est COMPLETED => notification succès.
-     * - Si le run est FAILED => notification échec.
-     * - Pas de doublon car NotificationService vérifie déjà si la notification existe.
-     */
-    for (MlExperiment experiment : visibleExperiments) {
-        notifyTerminalExperimentIfNeeded(experiment);
-    }
 
     /*
      * 8) Retourner la réponse Angular.
@@ -3879,6 +3864,15 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
             return;
         }
 
+        // Notification uniquement lors d'une vraie transition vers un état terminal.
+        // Une lecture/synchronisation d'un ancien run déjà terminal ne doit rien créer.
+        if (previousStatus == null
+                || previousStatus == ExperimentStatus.COMPLETED
+                || previousStatus == ExperimentStatus.FAILED
+                || previousStatus == currentStatus) {
+            return;
+        }
+
         try {
             if (currentStatus == ExperimentStatus.COMPLETED) {
                 notificationService.notifyRunCompleted(experiment);
@@ -5485,32 +5479,9 @@ private boolean isValidProductionRetrainingSource(
 }
 
 private void notifyTerminalExperimentIfNeeded(MlExperiment experiment) {
-    if (experiment == null || experiment.getId() == null || experiment.getStatus() == null) {
-        return;
-    }
-
-    if (experiment.getStatus() != ExperimentStatus.COMPLETED
-            && experiment.getStatus() != ExperimentStatus.FAILED) {
-        return;
-    }
-
-    try {
-        if (experiment.getStatus() == ExperimentStatus.COMPLETED) {
-            notificationService.notifyRunCompleted(experiment);
-            return;
-        }
-
-        if (experiment.getStatus() == ExperimentStatus.FAILED) {
-            notificationService.notifyRunFailed(experiment);
-        }
-
-    } catch (Exception e) {
-        System.out.println("[NOTIFICATION] Could not create terminal notification for experimentId="
-                + experiment.getId()
-                + ", status="
-                + experiment.getStatus());
-        System.out.println("[NOTIFICATION] Reason: " + e.getMessage());
-    }
+    // Intentionnellement vide : les notifications sont émises uniquement
+    // au moment d'une vraie transition de statut via
+    // notifyExperimentStatusChangedIfNeeded(...).
 }
 
     public static class ScriptAnalysisResult {
