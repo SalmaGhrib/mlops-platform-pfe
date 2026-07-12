@@ -46,7 +46,7 @@ public class KubernetesBuildService {
     @Value("${app.kaniko.image:gcr.io/kaniko-project/executor:latest}")
     private String kanikoImage;
 
-    @Value("${app.docker.registry:docker.io/salmaghrib2003}")
+    @Value("${app.docker.registry:acrmlopssalma.azurecr.io}")
     private String dockerRegistry;
 
     @Value("${app.docker.custom-image-prefix:mlops-custom}")
@@ -66,6 +66,9 @@ private String uploadsMountPath;
 
     @Value("${app.kaniko.docker-config-secret:kaniko-docker-config}")
     private String kanikoDockerConfigSecret;
+
+    @Value("${app.kaniko.cache-repo:acrmlopssalma.azurecr.io/mlops-kaniko-cache}")
+    private String kanikoCacheRepo;
 
     @Value("${app.platform-runner.path:/app/mini-mlops/src/custom_models/platform_runner.py}")
     private String platformRunnerPath;
@@ -2557,10 +2560,14 @@ if __name__ == "__main__":
         args.add("--image-download-retry=3");
         args.add("--image-fs-extract-retry=3");
 
-        args.add("--cache=true");
-        args.add("--cache-repo=docker.io/salmaghrib2003/mlops-kaniko-cache-v2");
-        args.add("--cache-ttl=168h");
-        args.add("--cache-copy-layers=true");
+        if (kanikoCacheRepo != null && !kanikoCacheRepo.isBlank()) {
+            args.add("--cache=true");
+            args.add("--cache-repo=" + kanikoCacheRepo.trim());
+            args.add("--cache-ttl=168h");
+            args.add("--cache-copy-layers=true");
+        } else {
+            args.add("--cache=false");
+        }
 
         if (isLocalInsecureRegistry(imageUri)) {
             args.add("--insecure");
@@ -2776,7 +2783,7 @@ if __name__ == "__main__":
 
     private String normalizeRegistryForKubernetes(String registry) {
         if (registry == null || registry.isBlank()) {
-            return "docker.io/salmaghrib2003";
+            return "acrmlopssalma.azurecr.io";
         }
 
         String clean = registry.trim();

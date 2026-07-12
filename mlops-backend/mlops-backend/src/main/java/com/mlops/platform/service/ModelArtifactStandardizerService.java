@@ -34,7 +34,7 @@ public class ModelArtifactStandardizerService {
     @Value("${app.model-standardizer.target-artifact-path:standardized_model}")
     private String targetArtifactPath;
 
-    @Value("${mlflow.tracking.uri:http://127.0.0.1:5000}")
+    @Value("${mlflow.tracking.uri:http://mlflow-service.mlops.svc.cluster.local:5000}")
     private String mlflowTrackingUri;
 
     public ModelArtifactStandardizerService(
@@ -172,8 +172,8 @@ public class ModelArtifactStandardizerService {
 
             if (hasText(newVersion)) {
                 experiment.setModelVersion(newVersion);
-                experiment.setProductionVersion(newVersion);
-                experiment.setProduction(true);
+                // Standardization creates/updates an artifact; it must not promote it.
+                experiment.setProduction(false);
 
                 experiment.setMessage(
                         appendMessage(

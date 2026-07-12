@@ -34,6 +34,16 @@ data:
 
   APP_KUBERNETES_NAMESPACE: "mlops"
 
+  APP_PIPELINE_GATEWAY_URL: "http://pipeline-gateway.mlops.svc.cluster.local:8001/upload-and-run-custom-model"
+  APP_RUNTIME_ANALYSIS_API_URL: "http://pipeline-gateway.mlops.svc.cluster.local:8001/api/runtime/analyze-script"
+  APP_DOCKER_REGISTRY: "acrmlopssalma.azurecr.io"
+  APP_DOCKER_CUSTOM_IMAGE_PREFIX: "mlops-custom"
+  APP_DOCKER_IMAGE_PULL_SECRET: ""
+  APP_PLATFORM_RUNNER_PATH: "/app/mini-mlops/src/custom_models/platform_runner.py"
+  APP_PLATFORM_RUNTIME_ROOT: "/app/mini-mlops"
+  APP_SERVING_TEMPLATE_DIR: "/app/mini-mlops/serving-template"
+  APP_SERVING_LOCAL_DOCKER_BUILD_ENABLED: "false"
+
   # Fonctions nécessaires au cycle MLOps automatique sur AKS.
   APP_CUSTOM_DOCKER_WATCHER_ENABLED: "true"
   APP_CUSTOM_DOCKER_WATCHER_DELAY_MS: "30000"
@@ -45,10 +55,10 @@ data:
   APP_MLOPS_PRODUCTION_RECONCILER_INITIAL_DELAY_MS: "30000"
 
   APP_SERVING_DEDICATED_IMAGE_ENABLED: "true"
-  APP_DEPLOYMENT_DEFAULT_DOCKER_IMAGE: "docker.io/salmaghrib2003/mlops-generic-model-server:v6"
+  APP_DEPLOYMENT_DEFAULT_DOCKER_IMAGE: "acrmlopssalma.azurecr.io/mlops-generic-model-server:v6"
   APP_SERVING_BUILD_DIR: "/tmp/mlops/generated-serving-images"
   APP_KANIKO_DOCKER_CONFIG_SECRET: "kaniko-docker-config"
-  APP_KANIKO_CACHE_REPO: "docker.io/salmaghrib2003/mlops-kaniko-cache-v2"
+  APP_KANIKO_CACHE_REPO: "acrmlopssalma.azurecr.io/mlops-kaniko-cache"
 
   # Désactivés par défaut pour éviter le spam quand Prometheus/retraining n'est pas configuré.
   APP_RETRAINING_SCHEDULER_ENABLED: "false"

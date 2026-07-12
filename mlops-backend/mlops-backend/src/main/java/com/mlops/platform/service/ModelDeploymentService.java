@@ -112,7 +112,7 @@ public class ModelDeploymentService {
     @Value("${app.serving.dedicated-image.enabled:true}")
     private boolean dedicatedServingImageEnabled;
 
-    @Value("${app.deployment.default-docker-image:docker.io/salmaghrib2003/mlops-generic-model-server:latest}")
+    @Value("${app.deployment.default-docker-image:acrmlopssalma.azurecr.io/mlops-generic-model-server:v6}")
     private String defaultDockerImage;
 
     @Value("${app.mlops.auto-deploy.enabled:true}")

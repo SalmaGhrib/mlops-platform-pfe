@@ -28,7 +28,7 @@ public class MlflowRegistryClientService {
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
-    @Value("${app.mlflow.tracking-url:http://127.0.0.1:5000}")
+    @Value("${app.mlflow.tracking-url:http://mlflow-service.mlops.svc.cluster.local:5000}")
     private String mlflowTrackingUrl;
 
     @Value("${app.mlflow.production-alias:production}")
@@ -335,7 +335,7 @@ public class MlflowRegistryClientService {
      */
     private String normalizeBaseUrl(String url) {
         if (url == null || url.isBlank()) {
-            return "http://127.0.0.1:5000";
+            return "http://mlflow-service.mlops.svc.cluster.local:5000";
         }
 
         String cleanUrl = url.trim();

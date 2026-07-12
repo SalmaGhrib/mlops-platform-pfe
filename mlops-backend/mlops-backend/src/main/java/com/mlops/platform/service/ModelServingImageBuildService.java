@@ -666,14 +666,14 @@ private String kanikoImage;
 @Value("${app.kaniko.docker-config-secret:kaniko-docker-config}")
 private String kanikoDockerConfigSecret;
 
-@Value("${app.kaniko.cache-repo:docker.io/salmaghrib2003/mlops-kaniko-cache-v2}")
+@Value("${app.kaniko.cache-repo:acrmlopssalma.azurecr.io/mlops-kaniko-cache}")
 private String kanikoCacheRepo;
 
 @Value("${app.serving.kaniko.timeout-seconds:1200}")
 private long servingKanikoTimeoutSeconds;
     
 
-    @Value("${app.docker.registry:docker.io/salmaghrib2003}")
+    @Value("${app.docker.registry:acrmlopssalma.azurecr.io}")
     private String dockerRegistry;
 
     public String buildServingImageForModel(

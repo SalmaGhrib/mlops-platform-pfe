@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: mlops-backend
-          image: docker.io/salmaghrib2003/mlops-backend:latest
+          image: acrmlopssalma.azurecr.io/mlops-backend:stable
           imagePullPolicy: Always
           ports:
             - containerPort: 8081

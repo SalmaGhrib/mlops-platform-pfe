@@ -23,7 +23,7 @@ import java.util.*;
 @Service
 public class MlflowTrackingClientService {
 
-    @Value("${mlflow.tracking.uri:http://127.0.0.1:5000}")
+    @Value("${mlflow.tracking.uri:http://mlflow-service.mlops.svc.cluster.local:5000}")
     private String mlflowTrackingUri;
 
     private final RestTemplate restTemplate = new RestTemplate();
@@ -1971,19 +1971,20 @@ public boolean deleteMlflowExperimentByName(String experimentName) {
             experiment.setLatestVersion(latestVersion);
         }
 
-        if (productionVersion != null && !productionVersion.isBlank()) {
-            experiment.setProductionVersion(productionVersion);
-            experiment.setProduction(
-                    experiment.getModelVersion() != null
-                            && experiment.getModelVersion().equals(productionVersion)
-            );
-        }
-
-        if (experiment.getProductionVersion() != null
-                && experiment.getModelVersion() != null
-                && experiment.getProductionVersion().equals(experiment.getModelVersion())) {
-            experiment.setProduction(true);
-        }
+        experiment.setProductionVersion(productionVersion);
+        experiment.setProduction(
+                productionVersion != null
+                        && versionForRun != null
+                        && productionVersion.equals(versionForRun)
+                        && experiment.getMlflowRunId().equals(
+                                versions.stream()
+                                        .filter(v -> v != null && productionVersion.equals(v.getVersion()))
+                                        .map(MlflowModelVersionDto::getRunId)
+                                        .filter(id -> id != null && !id.isBlank())
+                                        .findFirst()
+                                        .orElse("")
+                        )
+        );
     }
 
     private int compareVersionStrings(String a, String b) {
@@ -2268,13 +2269,36 @@ private List<MlflowModelVersionDto> getLatestVersionsFromRegisteredModel(String 
 
         dto.setRegisteredModelName(versionNode.path("name").asText(defaultModelName));
         dto.setVersion(versionNode.path("version").asText(null));
-        dto.setRunId(versionNode.path("run_id").asText(null));
+        String source = versionNode.path("source").asText(null);
+        String runId = versionNode.path("run_id").asText(null);
+        if (runId == null || runId.isBlank()) {
+            runId = extractRunIdFromModelSource(source);
+        }
+        dto.setRunId(runId);
         dto.setStatus(versionNode.path("status").asText(null));
-        dto.setSource(versionNode.path("source").asText(null));
+        dto.setSource(source);
         dto.setCurrentStage(versionNode.path("current_stage").asText(null));
         dto.setProduction(false);
 
         return dto;
+    }
+
+    private String extractRunIdFromModelSource(String source) {
+        if (source == null || source.isBlank()) {
+            return null;
+        }
+        String normalized = source.replace("\\", "/").trim();
+        int artifactsIndex = normalized.lastIndexOf("/artifacts/");
+        if (artifactsIndex <= 0) {
+            return null;
+        }
+        String beforeArtifacts = normalized.substring(0, artifactsIndex);
+        int slashIndex = beforeArtifacts.lastIndexOf('/');
+        if (slashIndex < 0 || slashIndex >= beforeArtifacts.length() - 1) {
+            return null;
+        }
+        String candidate = beforeArtifacts.substring(slashIndex + 1).trim();
+        return candidate.isBlank() ? null : candidate;
     }
 
     public Map<String, Double> getMetricsByRunId(String runId) {
@@ -2848,7 +2872,7 @@ private List<MlflowModelVersionDto> getLatestVersionsFromRegisteredModel(String 
 
     private String cleanMlflowUri(String uri) {
         if (uri == null || uri.isBlank()) {
-            return "http://127.0.0.1:5000";
+            return "http://mlflow-service.mlops.svc.cluster.local:5000";
         }
 
         if (uri.endsWith("/")) {

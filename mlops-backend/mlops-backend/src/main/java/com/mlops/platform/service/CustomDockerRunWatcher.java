@@ -30,7 +30,7 @@ public class CustomDockerRunWatcher {
     @Value("${app.custom-docker.watcher.enabled:true}")
     private boolean watcherEnabled;
 
-    @Value("${mlflow.tracking.uri:http://127.0.0.1:5000}")
+    @Value("${mlflow.tracking.uri:http://mlflow-service.mlops.svc.cluster.local:5000}")
     private String localMlflowTrackingUri;
 
     public CustomDockerRunWatcher(
@@ -685,9 +685,10 @@ public class CustomDockerRunWatcher {
 
         managedExperiment.setRegisteredModelName(registeredModelName);
         managedExperiment.setModelName(registeredModelName);
-        managedExperiment.setModelVersion(productionVersion);
+        // Never copy the current production alias into this run's own version.
+        // The exact version is assigned later only by MLflow run_id/source matching.
         managedExperiment.setProductionVersion(productionVersion);
-        managedExperiment.setProduction(true);
+        managedExperiment.setProduction(false);
         managedExperiment.setErrorMessage(null);
 
         managedExperiment.setMessage(
@@ -732,7 +733,7 @@ public class CustomDockerRunWatcher {
             String url = localMlflowTrackingUri;
 
             if (url == null || url.isBlank()) {
-                url = "http://127.0.0.1:5000";
+                url = "http://mlflow-service.mlops.svc.cluster.local:5000";
             }
 
             if (url.endsWith("/")) {
