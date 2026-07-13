@@ -36,9 +36,9 @@ app = FastAPI(
     title="Mini MLOps Generic Prediction API",
     description=(
         "Generic prediction API for MLflow production models. "
-        "Supports MLflow pyfunc models and artifact-only TorchScript .pt/.pth models."
+        "Supports MLflow PyFunc, pickle/joblib bundles and TorchScript/PyTorch artifacts."
     ),
-    version="5.0.0",
+    version="6.2.1-universal-prediction",
 )
 
 loaded_models: Dict[str, Dict[str, Any]] = {}
@@ -342,6 +342,13 @@ def load_pickle_artifact(local_dir: str) -> Tuple[Any, Dict[str, Any], str]:
             ) from pickle_error
 
     model, metadata = extract_predictive_model(loaded_object)
+
+    if not is_predictive_object(model):
+        raise TypeError(
+            "Extracted object is not predictive. "
+            f"type={type(model).__name__}"
+        )
+
     print(
         "[PICKLE LOADER] Predictive object extracted. "
         f"path={model_path}, container_type={type(loaded_object).__name__}, "

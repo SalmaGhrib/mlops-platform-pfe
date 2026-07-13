@@ -28,7 +28,7 @@ public class ModelServingImageBuildService {
      * Cette version empêche définitivement les images dédiées de repartir avec
      * un ancien main.py qui demande --config ou qui charge mal MLflow.
      */
-    private static final String SAFE_SERVING_TEMPLATE_VERSION = "2026-07-05-fastapi-universal-prediction-v4";
+    private static final String SAFE_SERVING_TEMPLATE_VERSION = "2026-07-13-fastapi-universal-prediction-v5";
 
     private static final String SAFE_DOCKERFILE_TEMPLATE = """
 FROM python:3.10-slim
@@ -160,6 +160,223 @@ def list_available_files(local_dir: Optional[str]) -> List[str]:
     if not local_path.exists():
         return []
     return [str(p.relative_to(local_path)) for p in local_path.rglob("*") if p.is_file()]
+
+
+PICKLE_EXTENSIONS = {
+    ".pkl",
+    ".joblib",
+    ".pickle",
+    ".sav",
+}
+
+PREDICTIVE_MODEL_KEYS = [
+    "model",
+    "pipeline",
+    "estimator",
+    "predictor",
+    "classifier",
+    "regressor",
+    "trained_model",
+    "best_model",
+    "final_model",
+    "network",
+    "module",
+]
+
+
+def is_predictive_object(value: Any) -> bool:
+    return value is not None and (
+        hasattr(value, "predict")
+        or callable(value)
+    )
+
+
+def extract_predictive_model(
+    loaded_object: Any,
+    depth: int = 0,
+    visited: Optional[set] = None,
+) -> Tuple[Any, Dict[str, Any]]:
+    if visited is None:
+        visited = set()
+
+    if depth > 8:
+        raise ValueError("Maximum nested model depth exceeded.")
+
+    if loaded_object is None:
+        raise ValueError("Loaded artifact is None.")
+
+    object_id = id(loaded_object)
+
+    if object_id in visited:
+        raise ValueError(
+            "Circular reference detected inside model bundle."
+        )
+
+    visited.add(object_id)
+
+    if is_predictive_object(loaded_object):
+        return loaded_object, {}
+
+    if isinstance(loaded_object, dict):
+        metadata = {
+            key: value
+            for key, value in loaded_object.items()
+            if key not in PREDICTIVE_MODEL_KEYS
+        }
+
+        ordered_keys = [
+            key
+            for key in PREDICTIVE_MODEL_KEYS
+            if key in loaded_object
+        ]
+        ordered_keys += [
+            key
+            for key in loaded_object
+            if key not in ordered_keys
+        ]
+
+        for key in ordered_keys:
+            try:
+                model, nested_metadata = extract_predictive_model(
+                    loaded_object[key],
+                    depth + 1,
+                    visited.copy(),
+                )
+
+                return model, {
+                    **metadata,
+                    **nested_metadata,
+                    "_model_bundle_key": key,
+                }
+
+            except ValueError:
+                continue
+
+        raise ValueError(
+            "No predictive model found inside dictionary. "
+            f"Available keys: {list(loaded_object.keys())}"
+        )
+
+    if isinstance(loaded_object, (list, tuple)):
+        for index, candidate in enumerate(loaded_object):
+            try:
+                model, metadata = extract_predictive_model(
+                    candidate,
+                    depth + 1,
+                    visited.copy(),
+                )
+
+                metadata["_model_bundle_index"] = index
+                return model, metadata
+
+            except ValueError:
+                continue
+
+    for attribute_name in PREDICTIVE_MODEL_KEYS:
+        if not hasattr(loaded_object, attribute_name):
+            continue
+
+        try:
+            model, metadata = extract_predictive_model(
+                getattr(loaded_object, attribute_name),
+                depth + 1,
+                visited.copy(),
+            )
+
+            metadata["_model_bundle_attribute"] = attribute_name
+            return model, metadata
+
+        except ValueError:
+            continue
+
+    raise ValueError(
+        "Loaded artifact does not contain a predictive model. "
+        f"type={type(loaded_object).__name__}"
+    )
+
+
+def find_pickle_model_file(local_dir: str) -> str:
+    local_path = Path(local_dir)
+
+    if not local_path.exists():
+        raise FileNotFoundError(
+            f"Artifact directory does not exist: {local_dir}"
+        )
+
+    candidates = [
+        path
+        for path in local_path.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in PICKLE_EXTENSIONS
+    ]
+
+    if not candidates:
+        raise FileNotFoundError(
+            "No pickle/joblib model found. "
+            f"available_files={list_available_files(local_dir)}"
+        )
+
+    preferred_names = [
+        "model.pkl",
+        "model.joblib",
+        "pipeline.pkl",
+        "pipeline.joblib",
+        "trained_model.pkl",
+        "best_model.pkl",
+        "final_model.pkl",
+    ]
+
+    for preferred_name in preferred_names:
+        for candidate in candidates:
+            if candidate.name.lower() == preferred_name:
+                return str(candidate)
+
+    candidates.sort(
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+    return str(candidates[0])
+
+
+def load_pickle_artifact(
+    local_dir: str,
+) -> Tuple[Any, Dict[str, Any], str]:
+    model_path = find_pickle_model_file(local_dir)
+
+    try:
+        loaded_object = joblib.load(model_path)
+
+    except Exception as joblib_error:
+        try:
+            with open(model_path, "rb") as file:
+                loaded_object = pickle.load(file)
+
+        except Exception as pickle_error:
+            raise RuntimeError(
+                f"Unable to load {model_path} with joblib or pickle. "
+                f"joblib_error={joblib_error}; "
+                f"pickle_error={pickle_error}"
+            ) from pickle_error
+
+    model, metadata = extract_predictive_model(loaded_object)
+
+    if not is_predictive_object(model):
+        raise TypeError(
+            "Extracted object is not predictive. "
+            f"type={type(model).__name__}"
+        )
+
+    print(
+        "[PICKLE LOADER] Predictive object extracted. "
+        f"path={model_path}, "
+        f"container_type={type(loaded_object).__name__}, "
+        f"model_type={type(model).__name__}, "
+        f"metadata_keys={list(metadata.keys())}"
+    )
+
+    return model, metadata, model_path
+
 
 def resolve_mlflow_model_path_from_downloaded_dir(local_dir: str) -> str:
     if not local_dir:
@@ -1133,7 +1350,8 @@ private List<String> servingOnlyRequirements() {
             "uvicorn[standard]==0.32.1",
             "python-multipart==0.0.20",
             "pydantic==2.10.4",
-            "pillow==10.4.0"
+            "pillow==10.4.0",
+            "joblib==1.4.2"
     );
 }
 
