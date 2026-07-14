@@ -6,7 +6,6 @@ import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.repository.MlExperimentRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -45,7 +44,6 @@ public class ModelArtifactStandardizerService {
         this.mlflowTrackingClientService = mlflowTrackingClientService;
     }
 
-    @Transactional
     public StandardizationResult standardizeIfNeeded(MlExperiment experiment) {
         if (!standardizerEnabled) {
             return StandardizationResult.skipped("Model artifact standardizer disabled.");
@@ -102,7 +100,7 @@ public class ModelArtifactStandardizerService {
             command.add(targetArtifactPath);
 
             command.add("--set_production_alias");
-            command.add("true");
+            command.add("false");
 
             System.out.println("[MODEL_STANDARDIZER] Starting standardization for experimentId="
                     + experiment.getId()
@@ -187,16 +185,6 @@ public class ModelArtifactStandardizerService {
                 experiment.setErrorMessage(null);
 
                 mlExperimentRepository.saveAndFlush(experiment);
-
-                /*
-                 * Sécurité :
-                 * Le script Python met déjà l'alias production.
-                 * On le refait côté Java pour garantir la cohérence.
-                 */
-                mlflowTrackingClientService.setProductionAliasSafe(
-                        experiment.getRegisteredModelName(),
-                        newVersion
-                );
 
             } else if (alreadyMlflowModel) {
                 experiment.setMessage(

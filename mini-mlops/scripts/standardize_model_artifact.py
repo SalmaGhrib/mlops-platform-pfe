@@ -381,16 +381,15 @@ def extract_predictive_model(
         f"type={type(loaded_object).__name__}"
     )
 
-def validate_pickle_like_model(model_path: Path) -> Any:
-    model = joblib.load(model_path)
-
+def validate_pickle_like_model(model_path: Path) -> tuple[Any, Dict[str, Any]]:
+    loaded = joblib.load(model_path)
+    model, metadata = extract_predictive_model(loaded)
     if not hasattr(model, "predict") and not callable(model):
         raise RuntimeError(
             "Loaded object is not predictive. "
             f"It has no predict() method and is not callable. type={type(model)}"
         )
-
-    return model
+    return model, metadata
 
 
 def apply_common_mlflow_tags(
@@ -857,7 +856,8 @@ def main() -> int:
 
     try:
         mlflow.set_tracking_uri(args.mlflow_tracking_uri)
-        set_alias = args.set_production_alias.strip().lower() == "true"
+        # Registration and production promotion are intentionally separated.
+        set_alias = False
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)

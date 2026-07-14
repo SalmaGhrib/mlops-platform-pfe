@@ -3,6 +3,8 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 
+import { finalize } from 'rxjs/operators';
+
 import {
   AlgorithmReplacementPayload,
   AnalyzeModelFileResponse,
@@ -1082,9 +1084,10 @@ getDetectedComponentsCount(): number {
       customImageUri: this.customImageUri?.trim() || selectedProject.customImageUri || null,
     };
 
-    this.experimentService.uploadAndRunCustomModel(request).subscribe({
+    this.experimentService.uploadAndRunCustomModel(request)
+      .pipe(finalize(() => { this.launching = false; }))
+      .subscribe({
       next: (experiment: MlExperimentResponse) => {
-        this.launching = false;
         this.successMessage = this.isCustomDockerfileMode()
           ? 'Pipeline lancé en mode Dockerfile personnalisé.'
           : 'Pipeline lancé avec succès. Synchronisation MLflow en cours...';
@@ -1099,7 +1102,6 @@ getDetectedComponentsCount(): number {
         this.startPollingExperiments();
       },
       error: (error) => {
-        this.launching = false;
         this.errorMessage = this.extractErrorMessage(
           error,
           'Erreur lors du lancement du pipeline.'

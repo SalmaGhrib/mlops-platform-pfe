@@ -6,7 +6,6 @@ import com.mlops.platform.entity.MlExperimentMetric;
 import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.repository.MlExperimentMetricRepository;
 import com.mlops.platform.repository.MlExperimentRepository;
-import jakarta.transaction.Transactional;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -55,7 +54,6 @@ public class CustomDockerRunWatcher {
 
     @Scheduled(fixedDelayString = "${app.custom-docker.watcher.delay-ms:30000}")
     @SchedulerLock(name = "customDockerRunWatcher", lockAtMostFor = "30m", lockAtLeastFor = "20s")
-    @Transactional
     public void watchCustomDockerRuns() {
         if (!watcherEnabled) {
             return;

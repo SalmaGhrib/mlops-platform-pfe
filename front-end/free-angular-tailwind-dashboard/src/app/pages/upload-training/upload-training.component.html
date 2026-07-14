@@ -260,13 +260,14 @@
               <input
                 id="datasetFileInput"
                 type="file"
+                accept=".csv,.tsv,.json,.parquet,.xlsx,.xls,.zip,.tar,.gz,.tgz"
                 (change)="onDatasetFileSelected($event)"
                 class="block h-12 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 file:mr-4 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
               />
 
               @if (datasetFile) {
                 <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                  Dataset sélectionné :
+                  Dataset sélectionné (fichier ou archive ZIP/TAR d’un dossier) :
                   <span class="font-medium">
                     {{ datasetFile.name }}
                   </span>

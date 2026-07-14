@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import importlib.util
 import math
 import os
 import pickle
@@ -11,6 +12,8 @@ import subprocess
 import sys
 import time
 import traceback
+import tarfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -34,6 +37,11 @@ SUPPORTED_MODEL_EXTENSIONS = {
     ".h5",
     ".keras",
     ".onnx",
+    ".sav",
+    ".cbm",
+    ".bst",
+    ".ubj",
+    ".torchscript",
 }
 
 METRIC_REGEX = re.compile(
@@ -90,46 +98,95 @@ class UserMlflowModelCandidate:
 
 
 class TorchPyFuncWrapper(mlflow.pyfunc.PythonModel):
+    def _load_source_module(self, source_path: Optional[str]):
+        if not source_path:
+            return None
+        spec = importlib.util.spec_from_file_location("platform_user_model_module", source_path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def _rebuild_checkpoint(self, checkpoint: Dict[str, Any], source_path: Optional[str]):
+        import torch
+        module = self._load_source_module(source_path)
+        if module is None:
+            raise RuntimeError("PyTorch checkpoint requires the training source file to rebuild the model class.")
+        class_name = checkpoint.get("architecture") or checkpoint.get("class_name") or checkpoint.get("model_class")
+        if not class_name or not hasattr(module, str(class_name)):
+            raise RuntimeError(f"Model class {class_name!r} was not found in the training source.")
+        model_class = getattr(module, str(class_name))
+        constructor_args = checkpoint.get("constructor_args") or {}
+        number_of_classes = checkpoint.get("number_of_classes") or checkpoint.get("num_classes")
+        attempts = []
+        if isinstance(constructor_args, dict):
+            attempts.append(((), constructor_args))
+        if number_of_classes is not None:
+            attempts.extend([
+                ((int(number_of_classes),), {}),
+                ((), {"number_of_classes": int(number_of_classes)}),
+                ((), {"num_classes": int(number_of_classes)}),
+                ((), {"n_classes": int(number_of_classes)}),
+            ])
+        attempts.append(((), {}))
+        last_error = None
+        model = None
+        for args, kwargs in attempts:
+            try:
+                model = model_class(*args, **kwargs)
+                break
+            except Exception as exc:
+                last_error = exc
+        if model is None:
+            raise RuntimeError(f"Could not instantiate {class_name}: {last_error}")
+        state = checkpoint.get("model_state_dict") or checkpoint.get("state_dict")
+        if state is None:
+            raise RuntimeError("Checkpoint dictionary does not contain model_state_dict/state_dict.")
+        model.load_state_dict(state)
+        self.image_size = checkpoint.get("image_size")
+        self.labels = checkpoint.get("labels") or []
+        return model
+
     def load_context(self, context):
         try:
             import torch
         except ImportError as exc:
-            raise RuntimeError("PyTorch is required to log .pt/.pth models") from exc
-
-        model_path = context.artifacts["model_path"]
-        self.model = torch.load(model_path, map_location="cpu")
-
+            raise RuntimeError("PyTorch is required to load .pt/.pth models") from exc
+        loaded = torch.load(context.artifacts["model_path"], map_location="cpu")
+        if isinstance(loaded, dict):
+            loaded = self._rebuild_checkpoint(loaded, context.artifacts.get("source_file"))
+        self.model = loaded
         if hasattr(self.model, "eval"):
             self.model.eval()
 
     def _prepare_input(self, model_input):
         if hasattr(model_input, "to_numpy"):
             return model_input.to_numpy()
-
         if isinstance(model_input, list):
             return model_input
-
         if hasattr(model_input, "values"):
             return model_input.values
-
         return model_input
 
     def predict(self, context, model_input):
+        import numpy as np
         import torch
-
         input_data = self._prepare_input(model_input)
-
-        if isinstance(input_data, list):
-            input_data = torch.tensor(input_data, dtype=torch.float32)
-        elif hasattr(input_data, "shape"):
-            input_data = torch.tensor(input_data, dtype=torch.float32)
-
+        if not isinstance(input_data, torch.Tensor):
+            input_data = torch.tensor(np.asarray(input_data), dtype=torch.float32)
+        if input_data.ndim == 1:
+            input_data = input_data.unsqueeze(0)
+        image_size = getattr(self, "image_size", None)
+        if image_size and input_data.ndim == 2:
+            size = int(image_size[0] if isinstance(image_size, (list, tuple)) else image_size)
+            expected = 3 * size * size
+            if input_data.shape[1] == expected:
+                input_data = input_data.reshape(-1, 3, size, size)
         with torch.no_grad():
             output = self.model(input_data)
-
         if isinstance(output, torch.Tensor):
-            return output.cpu().numpy()
-
+            return output.detach().cpu().numpy()
         return output
 
 
@@ -1067,6 +1124,75 @@ def build_recovered_mlflow_warning(
     }
 
 
+ARCHIVE_EXTENSIONS = {".zip", ".tar", ".tgz", ".gz"}
+
+
+def _safe_extract_zip(archive_path: Path, destination: Path) -> None:
+    destination = destination.resolve()
+    with zipfile.ZipFile(archive_path) as archive:
+        for entry in archive.infolist():
+            target = (destination / entry.filename).resolve()
+            if not target.is_relative_to(destination):
+                raise ValueError(f"Unsafe archive entry: {entry.filename}")
+        archive.extractall(destination)
+
+
+def _safe_extract_tar(archive_path: Path, destination: Path) -> None:
+    destination = destination.resolve()
+    with tarfile.open(archive_path) as archive:
+        for member in archive.getmembers():
+            target = (destination / member.name).resolve()
+            if not target.is_relative_to(destination):
+                raise ValueError(f"Unsafe archive entry: {member.name}")
+        archive.extractall(destination)
+
+
+def materialize_dataset_source(workspace: Path, dataset_path: Optional[Path]) -> Optional[Path]:
+    """Return a usable file or directory for CSV, ZIP, TAR/TGZ and folder datasets."""
+    if dataset_path is None:
+        return None
+    source = dataset_path.resolve()
+    if not source.exists():
+        raise FileNotFoundError(f"Dataset not found: {source}")
+    if source.is_dir():
+        return source
+
+    lower_name = source.name.lower()
+    if lower_name.endswith('.zip'):
+        target = workspace / '.platform_dataset'
+        if target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True, exist_ok=True)
+        _safe_extract_zip(source, target)
+        children = [item for item in target.iterdir() if item.name != '__MACOSX']
+        return children[0] if len(children) == 1 and children[0].is_dir() else target
+
+    if lower_name.endswith(('.tar', '.tar.gz', '.tgz')):
+        target = workspace / '.platform_dataset'
+        if target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True, exist_ok=True)
+        _safe_extract_tar(source, target)
+        children = [item for item in target.iterdir()]
+        return children[0] if len(children) == 1 and children[0].is_dir() else target
+    return source
+
+
+def materialize_dataset_alias(source: Path, destination: Path) -> None:
+    source = source.resolve()
+    destination = destination.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() or destination.is_symlink():
+        return
+    try:
+        destination.symlink_to(source, target_is_directory=source.is_dir())
+    except Exception:
+        if source.is_dir():
+            shutil.copytree(source, destination, dirs_exist_ok=True)
+        else:
+            shutil.copy2(source, destination)
+
+
 def extract_hardcoded_dataset_paths(script_path: Optional[Path]) -> List[str]:
     """
     Détecte les chemins de datasets écrits en dur dans les scripts utilisateurs.
@@ -1120,83 +1246,44 @@ def create_dataset_aliases(
     workspace: Path,
     dataset_path: Optional[Path],
     script_path: Optional[Path] = None,
-) -> None:
-    """
-    Rend le dataset accessible aux scripts utilisateurs même s'ils n'utilisent pas
-    les arguments fournis par la plateforme.
-
-    La plateforme crée plusieurs alias :
-    - /workspace/dataset.csv
-    - /workspace/data.csv
-    - /workspace/train.csv
-    - /workspace/input.csv
-    - /workspace/data/<nom_original>
-    - /workspace/data/iris.csv
-    - tout chemin .csv détecté dans le script, ex : data/iris.csv
-
-    Cela permet de supporter des scripts simples sans code MLflow et sans argparse.
-    """
+) -> Optional[Path]:
+    """Expose uploaded CSV/files, archives and complete dataset folders under common paths."""
     if dataset_path is None:
-        return
+        return None
 
-    dataset_path = dataset_path.resolve()
     workspace = workspace.resolve()
+    source = materialize_dataset_source(workspace, dataset_path)
+    if source is None:
+        return None
 
-    if not dataset_path.exists():
-        print(f"[PLATFORM] Dataset path does not exist: {dataset_path}")
-        return
+    if source.is_dir():
+        aliases = ["data", "dataset", "datasets", "input_data"]
+        for alias in aliases:
+            materialize_dataset_alias(source, workspace / alias)
+        print(f"[PLATFORM_DATASET] Directory dataset ready: source={source}")
+        return source
 
-    original_name = dataset_path.name or "dataset.csv"
-
+    original_name = source.name or "dataset.csv"
     aliases = [
-        "dataset.csv",
-        "data.csv",
-        "train.csv",
-        "input.csv",
-        original_name,
-        f"data/{original_name}",
-        "data/dataset.csv",
-        "data/data.csv",
-        "data/train.csv",
-        "data/input.csv",
-        "data/iris.csv",
-        "datasets/dataset.csv",
-        "datasets/data.csv",
-        f"datasets/{original_name}",
+        original_name, "dataset.csv", "data.csv", "train.csv", "input.csv",
+        f"data/{original_name}", "data/dataset.csv", "data/data.csv", "data/train.csv",
+        f"datasets/{original_name}", "datasets/dataset.csv",
     ]
-
     aliases.extend(extract_hardcoded_dataset_paths(script_path))
-
-    unique_aliases: List[str] = []
     seen = set()
-
     for alias in aliases:
-        if not alias:
+        normalized = str(alias or '').replace('\\', '/').strip()
+        if not normalized or normalized.startswith('/') or '..' in Path(normalized).parts:
             continue
-
-        normalized = str(alias).replace("\\", "/").strip()
-
-        # Sécurité : on refuse les chemins absolus et les chemins qui sortent du workspace.
-        if normalized.startswith("/") or normalized.startswith("../") or "/../" in normalized:
+        if normalized in seen:
             continue
-
-        if normalized not in seen:
-            seen.add(normalized)
-            unique_aliases.append(normalized)
-
-    for alias in unique_aliases:
-        alias_path = workspace / alias
-
+        seen.add(normalized)
         try:
-            alias_path.parent.mkdir(parents=True, exist_ok=True)
-
-            if alias_path.exists():
-                continue
-
-            shutil.copyfile(dataset_path, alias_path)
-            print(f"[PLATFORM] Dataset alias created: {alias_path}")
+            materialize_dataset_alias(source, workspace / normalized)
+            print(f"[PLATFORM_DATASET] Alias created: {workspace / normalized}")
         except Exception as exc:
-            print(f"[PLATFORM] Could not create dataset alias {alias_path}: {exc}")
+            print(f"[PLATFORM_DATASET] Could not create alias {normalized}: {exc}")
+    return source
 
 def build_script_commands(
     script_path: Path,
@@ -1282,6 +1369,8 @@ def run_user_script(
     workspace: Path,
     entrypoint: str,
     dataset_path: Optional[Path],
+    platform_run_id: Optional[str] = None,
+    platform_experiment_id: Optional[str] = None,
 ) -> subprocess.CompletedProcess:
     workspace = workspace.resolve()
     script_path = workspace / entrypoint
@@ -1294,7 +1383,9 @@ def run_user_script(
     if dataset_path is not None:
         dataset_path = dataset_path.resolve()
 
-    create_dataset_aliases(workspace, dataset_path, script_path=script_path)
+    dataset_path = create_dataset_aliases(
+        workspace, dataset_path, script_path=script_path
+    )
 
     env = {
         **os.environ,
@@ -1302,7 +1393,15 @@ def run_user_script(
         "MLOPS_OUTPUT_DIR": str(output_dir),
         "WORKSPACE_DIR": str(workspace),
         "PLATFORM_OUTPUT_DIR": str(output_dir),
+        "PLATFORM_MANAGED_MLFLOW": "true",
+        "PLATFORM_ENTRYPOINT": entrypoint,
     }
+    if platform_run_id:
+        env["PLATFORM_MLFLOW_RUN_ID"] = str(platform_run_id)
+        env["MLFLOW_RUN_ID"] = str(platform_run_id)
+    if platform_experiment_id:
+        env["PLATFORM_MLFLOW_EXPERIMENT_ID"] = str(platform_experiment_id)
+        env["MLFLOW_EXPERIMENT_ID"] = str(platform_experiment_id)
 
     if dataset_path is not None:
         env.update(
@@ -1416,16 +1515,37 @@ def try_log_pickle_model(
         return None
 
 
+def _find_training_source(model_path: Path) -> Optional[Path]:
+    entrypoint = _clean_env_value(os.environ.get("PLATFORM_ENTRYPOINT"))
+    candidates = []
+    if entrypoint:
+        candidates.append(Path(os.environ.get("WORKSPACE_DIR", ".")) / entrypoint)
+    for parent in [model_path.parent, *model_path.parents[:4]]:
+        candidates.extend([parent / "train.py", parent / "training.py", parent / "main.py"])
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
 def try_log_pytorch_model(model_path: Path) -> Optional[str]:
     try:
+        artifacts = {"model_path": str(model_path)}
+        source_file = _find_training_source(model_path)
+        if source_file:
+            artifacts["source_file"] = str(source_file)
         mlflow.pyfunc.log_model(
             artifact_path="model",
             python_model=TorchPyFuncWrapper(),
-            artifacts={"model_path": str(model_path)},
+            artifacts=artifacts,
+            pip_requirements=["mlflow", "torch", "numpy", "pandas"],
         )
-        return mlflow.get_artifact_uri("model")
+        # Validate now, not only during deployment.
+        model_uri = mlflow.get_artifact_uri("model")
+        mlflow.pyfunc.load_model(model_uri)
+        return model_uri
     except Exception as exc:
-        print(f"[PLATFORM_MODEL] pytorch pyfunc log_model failed for {model_path}: {exc}")
+        print(f"[PLATFORM_MODEL] pytorch pyfunc log/load failed for {model_path}: {exc}")
         return None
 
 
@@ -1511,12 +1631,24 @@ def run_standard_runtime(
     os.environ["PLATFORM_REGISTERED_MODEL_NAME"] = platform_registered_model_name
     os.environ["PLATFORM_OUTPUT_DIR"] = str(workspace / "outputs")
 
+    # Create the single official platform run first. The user script receives this run id
+    # and can use MLflow without creating a second random run.
+    initial_run = mlflow.start_run(run_name=run_name)
+    platform_run_id = initial_run.info.run_id
+    platform_experiment_id = initial_run.info.experiment_id
+    mlflow.set_tag("platform_runner", "true")
+    mlflow.set_tag("mlops.managed", "true")
+    mlflow.set_tag("validation_status", "PENDING")
+    mlflow.end_run()
+
     script_start_time_ms = int(time.time() * 1000)
 
     result = run_user_script(
         workspace=workspace,
         entrypoint=str(script_path.name),
         dataset_path=dataset_path,
+        platform_run_id=platform_run_id,
+        platform_experiment_id=platform_experiment_id,
     )
 
     script_end_time_ms = int(time.time() * 1000)
@@ -1557,7 +1689,7 @@ def run_standard_runtime(
         else None
     )
 
-    with mlflow.start_run(run_name=run_name):
+    with mlflow.start_run(run_id=platform_run_id):
         mlflow.set_tag("platform_runner", "true")
         mlflow.set_tag("mlops.managed", "true")
         mlflow.set_tag("runtime_mode", os.environ.get("RUNTIME_MODE", "CUSTOM_DOCKERFILE"))
@@ -1646,6 +1778,24 @@ def run_standard_runtime(
                     companion_artifacts=companion_artifacts,
                 )
                 artifact_results.append(artifact_result)
+                try:
+                    mlflow.log_artifact(str(primary_model_path), artifact_path="raw_model")
+                    manifest = build_model_manifest(
+                        primary_model_path, companion_artifacts, metrics, workspace
+                    )
+                    mlflow.log_text(
+                        json.dumps(manifest, indent=2, ensure_ascii=False, default=str),
+                        artifact_file="platform_model/model-manifest.json",
+                    )
+                    mlflow.log_artifact(str(script_path), artifact_path="source")
+                    requirements_file = workspace / "requirements.txt"
+                    dockerfile = workspace / "Dockerfile"
+                    if requirements_file.exists():
+                        mlflow.log_artifact(str(requirements_file), artifact_path="source")
+                    if dockerfile.exists():
+                        mlflow.log_artifact(str(dockerfile), artifact_path="source")
+                except Exception as exc:
+                    print(f"[PLATFORM_MODEL] Could not log manifest/source artifacts: {exc}")
 
                 if artifact_result.get("logged_model_uri"):
                     logged_model_uri = artifact_result["logged_model_uri"]
@@ -1682,20 +1832,27 @@ def run_standard_runtime(
                     # ce run à SA version MLflow Registry.
                     mlflow.set_tag("model_version", platform_model_version)
                     mlflow.set_tag("registered_model_version", platform_model_version)
-                    mlflow.set_tag("production_version", platform_model_version)
                     mlflow.set_tag("platform_model_registered", "true")
+                    mlflow.set_tag("validation_status", "PENDING")
                     mlflow.set_tag(
                         "platform_model_uri",
                         f"models:/{platform_registered_model_name}/{platform_model_version}",
                     )
-                    mlflow.set_tag(
-                        "platform_model_alias_uri",
-                        f"models:/{platform_registered_model_name}@production",
-                    )
-
-                    set_platform_production_alias(
-                        registered_model_name=platform_registered_model_name,
-                        model_version=platform_model_version,
+                    client = MlflowClient()
+                    for key, value in {
+                        "platform_run_id": platform_run_id,
+                        "platform_experiment_id": str(platform_experiment_id),
+                        "validation_status": "PENDING",
+                    }.items():
+                        client.set_model_version_tag(
+                            name=platform_registered_model_name,
+                            version=platform_model_version,
+                            key=key,
+                            value=value,
+                        )
+                    print(
+                        "[PLATFORM_MODEL] Version registered as PENDING. "
+                        "Promotion is delegated to the backend validation/promotion service."
                     )
 
                     print(
@@ -1783,9 +1940,9 @@ def run_standard_runtime(
                 "enregistrer de version de modèle dans MLflow Registry."
             ),
             "suggestion": (
-                "Le script doit sauvegarder le modèle dans outputs/model.pkl, "
-                "outputs/model.joblib, artifacts/model.pkl ou artifacts/model.joblib. "
-                "La plateforme se charge ensuite de l'enregistrement MLflow automatiquement."
+                "Le script doit produire au moins un artefact prédictif supporté "
+                "(.pkl, .joblib, .pt, .pth, .keras, .h5, .onnx, .cbm, .bst, .ubj). "
+                "La plateforme se charge de sa détection et de son enregistrement MLflow."
             ),
             "detected_model_files": [str(path) for path in model_artifacts],
             "logged_model_uri": logged_model_uri,
