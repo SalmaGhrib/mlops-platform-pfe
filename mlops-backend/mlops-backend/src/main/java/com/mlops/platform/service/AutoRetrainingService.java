@@ -24,19 +24,22 @@ public class AutoRetrainingService {
     private final MlProjectRepository mlProjectRepository;
     private final NotificationService notificationService;
     private final RetrainingDecisionService retrainingDecisionService;
+    private final RetrainingSourceResolverService sourceResolver;
 
     public AutoRetrainingService(
             RetrainingConfigRepository retrainingConfigRepository,
             MlExperimentService mlExperimentService,
             MlProjectRepository mlProjectRepository,
             NotificationService notificationService,
-            RetrainingDecisionService retrainingDecisionService
+            RetrainingDecisionService retrainingDecisionService,
+            RetrainingSourceResolverService sourceResolver
     ) {
         this.retrainingConfigRepository = retrainingConfigRepository;
         this.mlExperimentService = mlExperimentService;
         this.mlProjectRepository = mlProjectRepository;
         this.notificationService = notificationService;
         this.retrainingDecisionService = retrainingDecisionService;
+        this.sourceResolver = sourceResolver;
     }
 
     public void launchScheduledRetraining(Long configId) {
@@ -121,16 +124,18 @@ public class AutoRetrainingService {
                             + decision.getReason()
             );
 
+            Long productionSourceExperimentId = sourceResolver.resolveSourceExperimentId(projectId);
+
             System.out.println("[AUTO_RETRAINING] Starting retraining from CURRENT PRODUCTION version. "
                     + "configId=" + configId
                     + ", projectId=" + projectId
                     + ", trigger=" + trigger
                     + ", decision=" + decision.getReason()
-                    + ", fallbackSourceExperimentId=" + config.getSourceExperimentId());
+                    + ", productionSourceExperimentId=" + productionSourceExperimentId);
 
             MlExperimentResponse newExperiment = mlExperimentService.retrainFromCurrentProductionExperiment(
                     projectId,
-                    config.getSourceExperimentId()
+                    productionSourceExperimentId
             );
 
             LocalDateTime now = LocalDateTime.now();

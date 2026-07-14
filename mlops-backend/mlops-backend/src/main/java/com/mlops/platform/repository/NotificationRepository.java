@@ -21,11 +21,12 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
 
     List<Notification> findByUserAndReadFalseOrderByCreatedAtDesc(User user);
 
-    boolean existsByUserAndTypeAndTargetTypeAndTargetId(
+    boolean existsByUserAndTypeAndTargetTypeAndTargetIdAndTitle(
             User user,
             NotificationType type,
             NotificationTargetType targetType,
-            Long targetId
+            Long targetId,
+            String title
     );
 
     void deleteByCreatedAtBefore(LocalDateTime dateTime);

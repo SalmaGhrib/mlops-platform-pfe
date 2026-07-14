@@ -41,11 +41,17 @@ public class NotificationService {
         return null;
     }
 
-    boolean alreadyExists = notificationRepository.existsByUserAndTypeAndTargetTypeAndTargetId(
-            user,
+    User recipient = userRepository.findById(user.getId()).orElse(null);
+    if (recipient == null) {
+        return null;
+    }
+
+    boolean alreadyExists = notificationRepository.existsByUserAndTypeAndTargetTypeAndTargetIdAndTitle(
+            recipient,
             type,
             targetType,
-            targetId
+            targetId,
+            title
     );
 
     if (alreadyExists) {
@@ -53,7 +59,7 @@ public class NotificationService {
     }
 
     Notification notification = new Notification();
-    notification.setUser(user);
+    notification.setUser(recipient);
     notification.setTitle(title);
     notification.setMessage(message);
     notification.setType(type);
@@ -66,7 +72,7 @@ public class NotificationService {
     NotificationResponse response = new NotificationResponse(saved);
 
     messagingTemplate.convertAndSend(
-            "/topic/users/" + user.getId() + "/notifications",
+            "/topic/users/" + recipient.getId() + "/notifications",
             response
     );
 
@@ -87,11 +93,12 @@ public class NotificationService {
             continue;
         }
 
-        boolean alreadyExists = notificationRepository.existsByUserAndTypeAndTargetTypeAndTargetId(
+        boolean alreadyExists = notificationRepository.existsByUserAndTypeAndTargetTypeAndTargetIdAndTitle(
                 user,
                 type,
                 targetType,
-                targetId
+                targetId,
+                title
         );
 
         if (alreadyExists) {
@@ -131,14 +138,6 @@ public void notifyDeploymentOutOfSync(Long deploymentId, User owner, String depl
     notifyUser(
             owner,
             title,
-            message,
-            NotificationType.DEPLOYMENT_OUT_OF_SYNC,
-            NotificationTargetType.DEPLOYMENT,
-            deploymentId
-    );
-
-    notifyAdmins(
-            "Déploiement désynchronisé",
             message,
             NotificationType.DEPLOYMENT_OUT_OF_SYNC,
             NotificationTargetType.DEPLOYMENT,
@@ -225,13 +224,7 @@ public void notifyBackendLatencyAlert(Long alertTargetId, double latencyMs) {
                 experiment.getId()
         );
 
-        notifyAdmins(
-                "Run utilisateur terminé",
-                "Le run \"" + safeExperimentName(experiment) + "\" est terminé avec succès.",
-                NotificationType.RUN_COMPLETED,
-                NotificationTargetType.EXPERIMENT,
-                experiment.getId()
-        );
+
     }
 
     public void notifyRunFailed(MlExperiment experiment) {
@@ -257,13 +250,7 @@ public void notifyBackendLatencyAlert(Long alertTargetId, double latencyMs) {
                 experiment.getId()
         );
 
-        notifyAdmins(
-                "Run utilisateur échoué",
-                "Le run \"" + safeExperimentName(experiment) + "\" a échoué.",
-                NotificationType.RUN_FAILED,
-                NotificationTargetType.EXPERIMENT,
-                experiment.getId()
-        );
+
     }
 
     public void notifyDeploymentDeployed(Long deploymentId, User owner, String deploymentName) {
@@ -279,13 +266,6 @@ public void notifyBackendLatencyAlert(Long alertTargetId, double latencyMs) {
                 deploymentId
         );
 
-        notifyAdmins(
-                "Déploiement réussi",
-                message,
-                NotificationType.DEPLOYMENT_DEPLOYED,
-                NotificationTargetType.DEPLOYMENT,
-                deploymentId
-        );
     }
 
     public void notifyDeploymentFailed(Long deploymentId, User owner, String deploymentName, String errorMessage) {
@@ -305,13 +285,6 @@ public void notifyBackendLatencyAlert(Long alertTargetId, double latencyMs) {
                 deploymentId
         );
 
-        notifyAdmins(
-                "Déploiement échoué",
-                message,
-                NotificationType.DEPLOYMENT_FAILED,
-                NotificationTargetType.DEPLOYMENT,
-                deploymentId
-        );
     }
 
     public List<NotificationResponse> getMyNotifications(User user) {

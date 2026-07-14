@@ -23,17 +23,20 @@ public class RetrainingConfigService {
     private final MlProjectRepository mlProjectRepository;
     private final MlExperimentRepository mlExperimentRepository;
     private final NotificationService notificationService;
+    private final RetrainingSourceResolverService sourceResolver;
 
     public RetrainingConfigService(
             RetrainingConfigRepository retrainingConfigRepository,
             MlProjectRepository mlProjectRepository,
             MlExperimentRepository mlExperimentRepository,
-            NotificationService notificationService
+            NotificationService notificationService,
+            RetrainingSourceResolverService sourceResolver
     ) {
         this.retrainingConfigRepository = retrainingConfigRepository;
         this.mlProjectRepository = mlProjectRepository;
         this.mlExperimentRepository = mlExperimentRepository;
         this.notificationService = notificationService;
+        this.sourceResolver = sourceResolver;
     }
 
     @Transactional
@@ -67,10 +70,6 @@ public class RetrainingConfigService {
                 .orElseThrow(() -> new IllegalArgumentException("Project not found: " + projectId));
 
         boolean enabled = request != null && request.isEnabled();
-
-        if (requireSourceExperiment && enabled && sourceExperimentId == null) {
-            throw new IllegalArgumentException("sourceExperimentId is required when retraining is enabled from an experiment");
-        }
 
         if (sourceExperimentId != null) {
             validateSourceExperiment(projectId, sourceExperimentId);
@@ -112,6 +111,19 @@ public class RetrainingConfigService {
 
         RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
 
+        if (enabled) {
+            try {
+                Long resolvedSourceId = sourceResolver.resolveSourceExperimentId(projectId);
+                saved.setSourceExperimentId(resolvedSourceId);
+            } catch (IllegalStateException noProductionYet) {
+                // Un projet peut être configuré avant sa première Production.
+                // Le scheduler réparera automatiquement la source après promotion.
+                System.out.println("[RETRAINING_CONFIG] Enabled without Production source yet. projectId="
+                        + projectId
+                        + ", reason=" + noProductionYet.getMessage());
+            }
+        }
+
         notifyConfigChanged(project, saved, enabled ? "activé" : "désactivé");
 
         return saved;
@@ -135,10 +147,6 @@ public class RetrainingConfigService {
     ) {
         if (projectId == null) {
             throw new IllegalArgumentException("projectId is required");
-        }
-
-        if (sourceExperimentId == null) {
-            throw new IllegalArgumentException("sourceExperimentId is required");
         }
 
         RetrainingConfigRequest request = new RetrainingConfigRequest();

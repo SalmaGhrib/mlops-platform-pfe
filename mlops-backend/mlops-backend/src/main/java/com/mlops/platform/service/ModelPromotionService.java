@@ -6,6 +6,7 @@ import com.mlops.platform.entity.MlExperimentMetric;
 import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.repository.MlExperimentMetricRepository;
 import com.mlops.platform.repository.MlExperimentRepository;
+import com.mlops.platform.repository.RetrainingConfigRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,15 +24,18 @@ public class ModelPromotionService {
     private final MlExperimentRepository mlExperimentRepository;
     private final MlExperimentMetricRepository mlExperimentMetricRepository;
     private final MlflowTrackingClientService mlflowTrackingClientService;
+    private final RetrainingConfigRepository retrainingConfigRepository;
 
     public ModelPromotionService(
             MlExperimentRepository mlExperimentRepository,
             MlExperimentMetricRepository mlExperimentMetricRepository,
-            MlflowTrackingClientService mlflowTrackingClientService
+            MlflowTrackingClientService mlflowTrackingClientService,
+            RetrainingConfigRepository retrainingConfigRepository
     ) {
         this.mlExperimentRepository = mlExperimentRepository;
         this.mlExperimentMetricRepository = mlExperimentMetricRepository;
         this.mlflowTrackingClientService = mlflowTrackingClientService;
+        this.retrainingConfigRepository = retrainingConfigRepository;
     }
 
     /**
@@ -183,7 +187,21 @@ public class ModelPromotionService {
         bestExperiment.setProduction(true);
         bestExperiment.setProductionVersion(bestVersion);
 
-        return mlExperimentRepository.saveAndFlush(bestExperiment);
+        MlExperiment finalProduction = mlExperimentRepository.saveAndFlush(bestExperiment);
+
+        if (project.getId() != null && finalProduction.getId() != null) {
+            retrainingConfigRepository.synchronizeSourceExperiment(
+                    project.getId(),
+                    finalProduction.getId()
+            );
+
+            System.out.println("[RETRAINING_SOURCE] Updated after Production promotion. projectId="
+                    + project.getId()
+                    + ", sourceExperimentId=" + finalProduction.getId()
+                    + ", modelVersion=" + finalProduction.getModelVersion());
+        }
+
+        return finalProduction;
     }
 
     private boolean isEligibleExperiment(MlExperiment experiment) {

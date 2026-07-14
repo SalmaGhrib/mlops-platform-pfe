@@ -30,6 +30,7 @@ export interface NotificationResponse {
   read: boolean;
   adminNotification: boolean;
   createdAt: string;
+  recipientUserId: number | null;
 }
 
 @Injectable({
@@ -181,6 +182,19 @@ export class NotificationService {
   private handleIncomingNotification(message: IMessage): void {
     try {
       const notification = JSON.parse(message.body) as NotificationResponse;
+      const currentUserId = this.getUserIdFromToken();
+
+      if (
+        !currentUserId ||
+        !notification.recipientUserId ||
+        Number(notification.recipientUserId) !== Number(currentUserId)
+      ) {
+        console.warn('[NOTIFICATIONS] Ignored notification for another user', {
+          recipientUserId: notification.recipientUserId,
+          currentUserId,
+        });
+        return;
+      }
 
       const current = this.notificationsSubject.value || [];
       const exists = current.some((item) => item.id === notification.id);
@@ -242,11 +256,13 @@ export class NotificationService {
   }
 
   private getToken(): string | null {
+    // La session courante est prioritaire. Cela évite qu'un ancien token
+    // persistant d'un autre compte soit utilisé dans une deuxième session.
     return (
-      localStorage.getItem('mlops_token') ||
       sessionStorage.getItem('mlops_token') ||
-      localStorage.getItem('token') ||
-      sessionStorage.getItem('token')
+      sessionStorage.getItem('token') ||
+      localStorage.getItem('mlops_token') ||
+      localStorage.getItem('token')
     );
   }
 
@@ -264,7 +280,11 @@ export class NotificationService {
         return null;
       }
 
-      const decodedPayload = JSON.parse(atob(payload));
+      const normalizedPayload = payload
+        .replace(/-/g, '+')
+        .replace(/_/g, '/')
+        .padEnd(Math.ceil(payload.length / 4) * 4, '=');
+      const decodedPayload = JSON.parse(atob(normalizedPayload));
 
       return (
         decodedPayload.userId ||

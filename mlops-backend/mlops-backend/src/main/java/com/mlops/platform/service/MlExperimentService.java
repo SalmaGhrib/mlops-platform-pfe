@@ -4953,7 +4953,6 @@ private void applyExecutionTimestampsForStatus(MlExperiment experiment, Experime
     }
 }
 
-@org.springframework.transaction.annotation.Transactional
 public MlExperimentResponse retrainFromExistingExperiment(
         Long projectId,
         Long sourceExperimentId
@@ -5317,7 +5316,6 @@ private MlExperimentResponse launchScheduledStandardRuntimeRetraining(
     }
 }
 
-@org.springframework.transaction.annotation.Transactional
 public MlExperimentResponse retrainFromCurrentProductionExperiment(
         Long projectId,
         Long fallbackSourceExperimentId

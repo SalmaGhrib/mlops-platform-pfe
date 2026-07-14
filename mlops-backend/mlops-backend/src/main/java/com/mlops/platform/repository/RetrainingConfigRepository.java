@@ -17,6 +17,28 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
 
     Optional<RetrainingConfig> findByProjectId(Long projectId);
 
+    @Query("""
+            SELECT c
+            FROM RetrainingConfig c
+            WHERE c.enabled = true
+            ORDER BY c.id ASC
+            """)
+    List<RetrainingConfig> findEnabledConfigs();
+
+    @Modifying
+    @Transactional
+    @Query("""
+            UPDATE RetrainingConfig c
+            SET c.sourceExperimentId = :sourceExperimentId,
+                c.updatedAt = CURRENT_TIMESTAMP
+            WHERE c.projectId = :projectId
+              AND (c.sourceExperimentId IS NULL OR c.sourceExperimentId <> :sourceExperimentId)
+            """)
+    int synchronizeSourceExperiment(
+            @Param("projectId") Long projectId,
+            @Param("sourceExperimentId") Long sourceExperimentId
+    );
+
     /*
      * Scheduler query.
      * We keep the derived query for compatibility, but the scheduler now uses

@@ -18,6 +18,7 @@ public class NotificationResponse {
     private Long targetId;
     private Boolean read;
     private Boolean adminNotification;
+    private Long recipientUserId;
 
     /*
      * Important :
@@ -40,6 +41,7 @@ public class NotificationResponse {
         this.targetId = notification.getTargetId();
         this.read = notification.getRead();
         this.adminNotification = notification.getAdminNotification();
+        this.recipientUserId = notification.getUser() != null ? notification.getUser().getId() : null;
         this.createdAt = toUtcIsoString(notification.getCreatedAt());
     }
 
@@ -83,6 +85,10 @@ public class NotificationResponse {
 
     public Boolean getAdminNotification() {
         return adminNotification;
+    }
+
+    public Long getRecipientUserId() {
+        return recipientUserId;
     }
 
     public String getCreatedAt() {
