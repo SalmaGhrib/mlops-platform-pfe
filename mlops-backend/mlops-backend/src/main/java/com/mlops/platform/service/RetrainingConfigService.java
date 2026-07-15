@@ -66,10 +66,29 @@ public class RetrainingConfigService {
             throw new IllegalArgumentException("projectId is required");
         }
 
-        MlProject project = mlProjectRepository.findById(projectId)
-                .orElseThrow(() -> new IllegalArgumentException("Project not found: " + projectId));
+        if (request == null) {
+            throw new IllegalArgumentException("Retraining configuration request is required");
+        }
 
-        boolean enabled = request != null && request.isEnabled();
+        MlProject project = mlProjectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Project not found: " + projectId
+                ));
+
+        boolean enabled = request.isEnabled();
+
+        if (requireSourceExperiment && sourceExperimentId == null && enabled) {
+            /*
+             * Pour un projet déjà en Production, la source sera retrouvée plus bas
+             * avec RetrainingSourceResolverService. On ne bloque donc pas la création
+             * de la configuration si l'identifiant n'est pas transmis par le frontend.
+             */
+            System.out.println(
+                    "[RETRAINING_CONFIG] sourceExperimentId not provided; "
+                            + "Production source will be resolved automatically. projectId="
+                            + projectId
+            );
+        }
 
         if (sourceExperimentId != null) {
             validateSourceExperiment(projectId, sourceExperimentId);
@@ -78,6 +97,8 @@ public class RetrainingConfigService {
         RetrainingConfig config = retrainingConfigRepository
                 .findByProjectId(projectId)
                 .orElseGet(RetrainingConfig::new);
+
+        boolean newConfig = config.getId() == null;
 
         RetrainingFrequencyType frequencyType = resolveFrequencyType(request);
         Integer frequencyValue = resolveFrequencyValue(request);
@@ -92,14 +113,26 @@ public class RetrainingConfigService {
         config.setFrequencyType(frequencyType);
         config.setFrequencyValue(frequencyValue);
 
-        // Le mode simple doit lancer à chaque échéance. Les stratégies smart
-        // ne sont appliquées que si le frontend les demande explicitement.
-        if (request == null || request.getStrategy() == null) {
+        /*
+         * En l'absence de stratégie explicite, on applique le mode planifié simple.
+         */
+        if (request.getStrategy() == null) {
             config.setStrategy(RetrainingStrategy.SCHEDULED_ONLY);
         }
+
         applyMonitoringSettings(config, request);
-        config.setRunning(false);
-        config.setManualTriggerRequested(false);
+
+        /*
+         * Une simple modification ne doit jamais forcer running=false
+         * lorsqu'un réentraînement est réellement en cours.
+         */
+        if (newConfig) {
+            config.setRunning(false);
+            config.setManualTriggerRequested(false);
+        } else if (!enabled) {
+            config.setManualTriggerRequested(false);
+        }
+
         config.setLastTriggerReason(enabled ? "CONFIG_UPDATED" : "DISABLED");
         config.setLastDecisionReason(null);
 
@@ -111,16 +144,26 @@ public class RetrainingConfigService {
 
         RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
 
+        /*
+         * Lorsque le réentraînement est activé, on rattache la configuration
+         * à l'expérience correspondant à la version Production courante.
+         */
         if (enabled) {
             try {
                 Long resolvedSourceId = sourceResolver.resolveSourceExperimentId(projectId);
                 saved.setSourceExperimentId(resolvedSourceId);
+                saved = retrainingConfigRepository.saveAndFlush(saved);
             } catch (IllegalStateException noProductionYet) {
-                // Un projet peut être configuré avant sa première Production.
-                // Le scheduler réparera automatiquement la source après promotion.
-                System.out.println("[RETRAINING_CONFIG] Enabled without Production source yet. projectId="
-                        + projectId
-                        + ", reason=" + noProductionYet.getMessage());
+                /*
+                 * Un projet peut être configuré avant sa première version Production.
+                 * Le scheduler pourra résoudre la source après promotion.
+                 */
+                System.out.println(
+                        "[RETRAINING_CONFIG] Enabled without Production source yet. projectId="
+                                + projectId
+                                + ", reason="
+                                + noProductionYet.getMessage()
+                );
             }
         }
 
@@ -170,9 +213,22 @@ public class RetrainingConfigService {
                 .findByProjectId(projectId)
                 .orElseGet(RetrainingConfig::new);
 
+        boolean newConfig = config.getId() == null;
+
         config.setProjectId(projectId);
         config.setEnabled(false);
-        config.setRunning(false);
+
+        /*
+         * Pour une nouvelle configuration uniquement, on initialise running.
+         * Pour une configuration existante, on conserve l'état réel du job.
+         */
+        if (newConfig) {
+            config.setRunning(false);
+        }
+
+        /*
+         * Une configuration désactivée ne doit garder aucune demande manuelle.
+         */
         config.setManualTriggerRequested(false);
         config.setLastTriggerReason("DISABLED");
         config.setLastDecisionReason(null);
@@ -211,10 +267,15 @@ public class RetrainingConfigService {
             );
         }
 
+        /*
+         * Le scheduler verra manualTriggerRequested=true et une date déjà échue.
+         */
         config.setRunning(false);
         config.setManualTriggerRequested(true);
         config.setLastTriggerReason("MANUAL");
-        config.setLastDecisionReason("Réentraînement manuel demandé par l'utilisateur.");
+        config.setLastDecisionReason(
+                "Réentraînement manuel demandé par l'utilisateur."
+        );
         config.setNextRetrainingAt(LocalDateTime.now().minusSeconds(5));
 
         RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
@@ -227,8 +288,10 @@ public class RetrainingConfigService {
         return saved;
     }
 
-
-    private void applyMonitoringSettings(RetrainingConfig config, RetrainingConfigRequest request) {
+    private void applyMonitoringSettings(
+            RetrainingConfig config,
+            RetrainingConfigRequest request
+    ) {
         if (config == null || request == null) {
             return;
         }
@@ -238,42 +301,62 @@ public class RetrainingConfigService {
         }
 
         if (request.getFailureMonitoringEnabled() != null) {
-            config.setFailureMonitoringEnabled(request.getFailureMonitoringEnabled());
+            config.setFailureMonitoringEnabled(
+                    request.getFailureMonitoringEnabled()
+            );
         }
 
         if (request.getPerformanceMonitoringEnabled() != null) {
-            config.setPerformanceMonitoringEnabled(request.getPerformanceMonitoringEnabled());
+            config.setPerformanceMonitoringEnabled(
+                    request.getPerformanceMonitoringEnabled()
+            );
         }
 
         if (request.getDataDriftMonitoringEnabled() != null) {
-            config.setDataDriftMonitoringEnabled(request.getDataDriftMonitoringEnabled());
+            config.setDataDriftMonitoringEnabled(
+                    request.getDataDriftMonitoringEnabled()
+            );
         }
 
         if (request.getMonitoringLookbackHours() != null) {
-            config.setMonitoringLookbackHours(request.getMonitoringLookbackHours());
+            config.setMonitoringLookbackHours(
+                    request.getMonitoringLookbackHours()
+            );
         }
 
         if (request.getMinPredictionsForMonitoring() != null) {
-            config.setMinPredictionsForMonitoring(request.getMinPredictionsForMonitoring());
+            config.setMinPredictionsForMonitoring(
+                    request.getMinPredictionsForMonitoring()
+            );
         }
 
         if (request.getMaxPredictionErrorRatePercent() != null) {
-            config.setMaxPredictionErrorRatePercent(request.getMaxPredictionErrorRatePercent());
+            config.setMaxPredictionErrorRatePercent(
+                    request.getMaxPredictionErrorRatePercent()
+            );
         }
 
         if (request.getPerformanceDropThresholdPercent() != null) {
-            config.setPerformanceDropThresholdPercent(request.getPerformanceDropThresholdPercent());
+            config.setPerformanceDropThresholdPercent(
+                    request.getPerformanceDropThresholdPercent()
+            );
         }
 
         if (request.getDataDriftThresholdPercent() != null) {
-            config.setDataDriftThresholdPercent(request.getDataDriftThresholdPercent());
+            config.setDataDriftThresholdPercent(
+                    request.getDataDriftThresholdPercent()
+            );
         }
 
         config.normalizeMonitoringSettings();
     }
 
-    private void validateSourceExperiment(Long projectId, Long sourceExperimentId) {
-        MlExperiment experiment = mlExperimentRepository.findById(sourceExperimentId)
+    private void validateSourceExperiment(
+            Long projectId,
+            Long sourceExperimentId
+    ) {
+        MlExperiment experiment = mlExperimentRepository
+                .findById(sourceExperimentId)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Source experiment not found: " + sourceExperimentId
                 ));
@@ -287,7 +370,9 @@ public class RetrainingConfigService {
         }
     }
 
-    private RetrainingFrequencyType resolveFrequencyType(RetrainingConfigRequest request) {
+    private RetrainingFrequencyType resolveFrequencyType(
+            RetrainingConfigRequest request
+    ) {
         if (request == null || request.getFrequencyType() == null) {
             return RetrainingFrequencyType.WEEK;
         }
@@ -295,32 +380,45 @@ public class RetrainingConfigService {
         return request.getFrequencyType();
     }
 
-    private Integer resolveFrequencyValue(RetrainingConfigRequest request) {
-        if (request == null || request.getFrequencyValue() == null || request.getFrequencyValue() <= 0) {
+    private Integer resolveFrequencyValue(
+            RetrainingConfigRequest request
+    ) {
+        if (request == null
+                || request.getFrequencyValue() == null
+                || request.getFrequencyValue() <= 0) {
             return 1;
         }
 
         return Math.min(request.getFrequencyValue(), 365);
     }
 
-    private void notifyConfigChanged(MlProject project, RetrainingConfig config, String action) {
+    private void notifyConfigChanged(
+            MlProject project,
+            RetrainingConfig config,
+            String action
+    ) {
         if (project == null || config == null) {
             return;
         }
 
         try {
-            String projectName = project.getName() != null && !project.getName().isBlank()
-                    ? project.getName()
-                    : "project " + project.getId();
+            String projectName =
+                    project.getName() != null && !project.getName().isBlank()
+                            ? project.getName()
+                            : "project " + project.getId();
 
-            String message = "Le réentraînement automatique du projet "
-                    + projectName
-                    + " a été "
-                    + action
-                    + ".";
+            String message =
+                    "Le réentraînement automatique du projet "
+                            + projectName
+                            + " a été "
+                            + action
+                            + ".";
 
             if (config.isEnabled() && config.getNextRetrainingAt() != null) {
-                message += " Prochaine exécution : " + config.getNextRetrainingAt() + ".";
+                message +=
+                        " Prochaine exécution : "
+                                + config.getNextRetrainingAt()
+                                + ".";
             }
 
             notificationService.notifyUser(
@@ -332,10 +430,13 @@ public class RetrainingConfigService {
                     project.getId()
             );
         } catch (Exception e) {
-            System.out.println("[AUTO_RETRAINING][NOTIFICATION] Cannot notify config change. projectId="
-                    + project.getId()
-                    + ", reason="
-                    + e.getMessage());
+            System.out.println(
+                    "[AUTO_RETRAINING][NOTIFICATION] "
+                            + "Cannot notify config change. projectId="
+                            + project.getId()
+                            + ", reason="
+                            + e.getMessage()
+            );
         }
     }
 }

@@ -564,6 +564,7 @@ export class MyProjectsComponent implements OnInit {
         name: this.projectForm.name.trim(),
         description: this.projectForm.description?.trim() || '',
         targetColumn: this.projectForm.targetColumn?.trim() || null,
+        projectType: this.projectForm.projectType,
         autoPromoteBestModel: this.projectForm.autoPromoteBestModel ?? true,
         runtimeMode: this.projectForm.runtimeMode || 'STANDARD_RUNTIME',
         dataType: finalDataType,
@@ -668,6 +669,7 @@ export class MyProjectsComponent implements OnInit {
       monitoringLookbackHours: this.projectForm.monitoringLookbackHours || 24,
       minPredictionsForMonitoring: this.projectForm.minPredictionsForMonitoring || 5,
       maxPredictionErrorRatePercent: this.projectForm.maxPredictionErrorRatePercent ?? 20,
+      performanceDropThresholdPercent: this.projectForm.performanceDropThresholdPercent ?? 10,
       dataDriftThresholdPercent: this.projectForm.dataDriftThresholdPercent ?? 25
     };
 

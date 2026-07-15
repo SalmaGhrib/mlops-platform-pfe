@@ -187,6 +187,18 @@ public class MlProjectService {
 
         project.setDescription(request.getDescription());
 
+        // Ces champs sont éditables depuis l'interface. Sans cette mise à jour,
+        // Angular affichait la nouvelle valeur mais la base conservait l'ancienne.
+        if (request.getProjectType() != null && !request.getProjectType().isBlank()) {
+            project.setProjectType(request.getProjectType());
+        }
+        if (request.getDataType() != null && !request.getDataType().isBlank()) {
+            project.setDataType(request.getDataType());
+        }
+        if (request.getRuntimeMode() != null && !request.getRuntimeMode().isBlank()) {
+            project.setRuntimeMode(request.getRuntimeMode());
+        }
+
         String targetColumn = cleanTargetColumn(request.getTargetColumn());
         project.setTargetColumn(targetColumn);
 

@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
@@ -28,7 +29,7 @@ public class ModelServingImageBuildService {
      * Cette version empêche définitivement les images dédiées de repartir avec
      * un ancien main.py qui demande --config ou qui charge mal MLflow.
      */
-    private static final String SAFE_SERVING_TEMPLATE_VERSION = "2026-07-13-fastapi-universal-prediction-v5";
+    private static final String SAFE_SERVING_TEMPLATE_VERSION = "2026-07-15-adaptive-image-text-tabular-v6";
 
     private static final String SAFE_DOCKERFILE_TEMPLATE = """
 FROM python:3.10-slim
@@ -1684,7 +1685,7 @@ public String buildServingImageForModel(
 
     Files.writeString(
             targetMainPy,
-            SAFE_MAIN_PY_TEMPLATE,
+            loadSafeMainPyTemplate(),
             StandardCharsets.UTF_8,
             StandardOpenOption.CREATE,
             StandardOpenOption.TRUNCATE_EXISTING
@@ -1696,6 +1697,26 @@ public String buildServingImageForModel(
     System.out.println("[SERVING_IMAGE] Safe Dockerfile generated at: " + targetDockerfile);
     System.out.println("[SERVING_IMAGE] Safe main.py generated at: " + targetMainPy);
     System.out.println("[SERVING_IMAGE] Serving template version=" + SAFE_SERVING_TEMPLATE_VERSION);
+}
+
+private String loadSafeMainPyTemplate() throws Exception {
+    String resourcePath = "serving-template/main.py";
+    ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+
+    try (InputStream input = classLoader.getResourceAsStream(resourcePath)) {
+        if (input == null) {
+            System.out.println("[SERVING_IMAGE] Classpath template not found; embedded fallback will be used: " + resourcePath);
+            return SAFE_MAIN_PY_TEMPLATE;
+        }
+
+        String template = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        if (template.isBlank()) {
+            throw new IllegalStateException("Serving main.py classpath template is empty: " + resourcePath);
+        }
+
+        System.out.println("[SERVING_IMAGE] Adaptive serving main.py loaded from classpath: " + resourcePath);
+        return template;
+    }
 }
 
 private String buildSafeServingDockerfile(String baseImage) {
