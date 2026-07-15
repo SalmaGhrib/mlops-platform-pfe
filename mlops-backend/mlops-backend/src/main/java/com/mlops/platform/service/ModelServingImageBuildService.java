@@ -174,7 +174,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 
         def find_torch_model_file(local_dir: str) -> str:
-            """
+            '''
             Cherche un fichier .pt ou .pth dans le dossier téléchargé depuis MLflow.
 
             Cas attendu après ta correction du custom_runner :
@@ -182,7 +182,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
               -> dossier local
                   -> model/
                       -> model.pt
-            """
+            '''
             local_path = Path(local_dir)
 
             if not local_path.exists():
@@ -209,13 +209,13 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 
         def resolve_mlflow_model_path_from_downloaded_dir(local_dir: str) -> str:
-            """
+            '''
             Retourne le bon dossier local à charger avec mlflow.pyfunc.load_model.
 
             Cas supportés :
             1. local_dir/MLmodel
             2. local_dir/model/MLmodel
-            """
+            '''
             if not local_dir:
                 raise FileNotFoundError("local_dir is empty.")
 
@@ -470,7 +470,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
             model_name: str,
             model_alias: str = "production",
         ) -> Tuple[Dict[str, Any], str, Dict[str, Any]]:
-            """
+            '''
             Charge un modèle depuis MLflow Registry.
 
             Cette version est plus robuste :
@@ -480,7 +480,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
                - local_dir/model/MLmodel
             3. Elle recharge le modèle pyfunc depuis le bon chemin local.
             4. Seulement si ce n'est vraiment pas un modèle MLflow, elle essaie le fallback TorchScript.
-            """
+            '''
             model_name = normalize_text(model_name)
             model_alias = normalize_text(model_alias) or "production"
 
@@ -742,7 +742,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 
         def normalize_image_array_for_mnist(arr: np.ndarray) -> np.ndarray:
-            """
+            '''
             Reproduit le preprocessing du train.py MNIST :
 
             transforms.ToTensor() -> valeurs entre 0 et 1
@@ -750,7 +750,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 
             Cette fonction gère aussi le cas fréquent d'une image noire sur fond blanc :
             si la moyenne est très élevée, on inverse l'image automatiquement.
-            """
+            '''
             arr = arr.astype(np.float32)
 
             if arr.max() > 1.0:
