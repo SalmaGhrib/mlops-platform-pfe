@@ -36,9 +36,9 @@ app = FastAPI(
     title="Mini MLOps Generic Prediction API",
     description=(
         "Generic prediction API for MLflow production models. "
-        "Supports MLflow pyfunc models and artifact-only TorchScript .pt/.pth models."
+        "Supports MLflow PyFunc, pickle/joblib bundles and TorchScript/PyTorch artifacts."
     ),
-    version="5.0.0",
+    version="6.2.1-universal-prediction",
 )
 
 loaded_models: Dict[str, Dict[str, Any]] = {}
@@ -327,6 +327,58 @@ def find_pickle_model_file(local_dir: str) -> str:
     return str(candidates[0])
 
 
+
+SIDE_CAR_METADATA_NAMES = {
+    "model_metadata.json",
+    "model-manifest.json",
+    "model_manifest.json",
+    "model_info.json",
+    "metadata.json",
+}
+
+
+def _deep_merge_dict(base: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
+    result = dict(base or {})
+    for key, value in (extra or {}).items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge_dict(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def load_sidecar_metadata(local_dir: str, model_path: Optional[str] = None) -> Dict[str, Any]:
+    root = Path(local_dir)
+    if not root.exists():
+        return {}
+
+    candidates: List[Path] = []
+    if model_path:
+        model_parent = Path(model_path).parent
+        candidates.extend(model_parent / name for name in SIDE_CAR_METADATA_NAMES)
+
+    for name in SIDE_CAR_METADATA_NAMES:
+        candidates.extend(root.rglob(name))
+
+    merged: Dict[str, Any] = {}
+    seen = set()
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = path
+        if resolved in seen or not path.is_file():
+            continue
+        seen.add(resolved)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+            if isinstance(payload, dict):
+                merged = _deep_merge_dict(merged, payload)
+        except Exception as exc:
+            print(f"[METADATA] Ignoring unreadable sidecar {path}: {exc}")
+
+    return merged
+
 def load_pickle_artifact(local_dir: str) -> Tuple[Any, Dict[str, Any], str]:
     model_path = find_pickle_model_file(local_dir)
     try:
@@ -341,7 +393,16 @@ def load_pickle_artifact(local_dir: str) -> Tuple[Any, Dict[str, Any], str]:
                 f"joblib_error={joblib_error}; pickle_error={pickle_error}"
             ) from pickle_error
 
-    model, metadata = extract_predictive_model(loaded_object)
+    model, bundle_metadata = extract_predictive_model(loaded_object)
+    sidecar_metadata = load_sidecar_metadata(local_dir, model_path)
+    metadata = _deep_merge_dict(sidecar_metadata, bundle_metadata)
+
+    if not is_predictive_object(model):
+        raise TypeError(
+            "Extracted object is not predictive. "
+            f"type={type(model).__name__}"
+        )
+
     print(
         "[PICKLE LOADER] Predictive object extracted. "
         f"path={model_path}, container_type={type(loaded_object).__name__}, "
@@ -729,6 +790,185 @@ def prepare_torch_input_from_dataframe(df: pd.DataFrame):
     return torch.tensor(arr, dtype=torch.float32)
 
 
+
+# ============================================================
+# ADAPTIVE IMAGE PREPROCESSING
+# ============================================================
+
+RGB_STATS_14_COLUMNS = [
+    "r_mean", "g_mean", "b_mean",
+    "r_std", "g_std", "b_std",
+    "r_min", "g_min", "b_min",
+    "r_max", "g_max", "b_max",
+    "brightness", "dominant_channel",
+]
+
+COLOR_STATS_11_COLUMNS = [
+    "r_mean", "g_mean", "b_mean",
+    "r_std", "g_std", "b_std",
+    "h_mean", "s_mean", "v_mean",
+    "brightness", "dominant_channel",
+]
+
+
+def _underlying_model_and_metadata(loaded: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
+    metadata = dict(loaded.get("metadata") or {})
+    model = loaded.get("model")
+
+    if loaded.get("type") == "pyfunc":
+        try:
+            local_dir = loaded.get("local_dir") or mlflow.artifacts.download_artifacts(loaded["model_uri"])
+            raw_model, raw_metadata, raw_path = load_pickle_artifact(local_dir)
+            loaded["local_dir"] = local_dir
+            loaded["raw_model"] = raw_model
+            loaded["raw_model_path"] = raw_path
+            loaded["metadata"] = _deep_merge_dict(metadata, raw_metadata)
+            return raw_model, loaded["metadata"]
+        except Exception as exc:
+            print(f"[IMAGE PREPROCESSING] Raw model inspection unavailable: {exc}")
+
+    return loaded.get("raw_model") or model, metadata
+
+
+def _expected_feature_names(model: Any, metadata: Dict[str, Any]) -> List[str]:
+    candidates = [
+        metadata.get("feature_names"),
+        metadata.get("feature_columns"),
+        metadata.get("features"),
+        metadata.get("input_columns"),
+        metadata.get("columns"),
+        (metadata.get("preprocessing") or {}).get("featureNames") if isinstance(metadata.get("preprocessing"), dict) else None,
+        (metadata.get("preprocessing") or {}).get("feature_names") if isinstance(metadata.get("preprocessing"), dict) else None,
+    ]
+    detected = getattr(model, "feature_names_in_", None)
+    if detected is not None:
+        candidates.insert(0, list(detected))
+
+    for value in candidates:
+        if isinstance(value, (list, tuple)) and value:
+            return [str(item) for item in value]
+    return []
+
+
+def _expected_feature_count(model: Any, metadata: Dict[str, Any], feature_names: List[str]) -> Optional[int]:
+    if feature_names:
+        return len(feature_names)
+    value = getattr(model, "n_features_in_", None)
+    if value is not None:
+        try:
+            return int(value)
+        except Exception:
+            pass
+    for key in ("feature_count", "n_features", "input_size"):
+        value = metadata.get(key)
+        if value is not None:
+            try:
+                return int(value)
+            except Exception:
+                pass
+    preprocessing = metadata.get("preprocessing")
+    if isinstance(preprocessing, dict):
+        for key in ("featureCount", "feature_count"):
+            value = preprocessing.get(key)
+            if value is not None:
+                try:
+                    return int(value)
+                except Exception:
+                    pass
+    return None
+
+
+def extract_rgb_statistics_14(image: Image.Image) -> pd.DataFrame:
+    rgb = np.asarray(image.convert("RGB").resize((64, 64)), dtype=np.float32) / 255.0
+    means = rgb.mean(axis=(0, 1))
+    stds = rgb.std(axis=(0, 1))
+    mins = rgb.min(axis=(0, 1))
+    maxs = rgb.max(axis=(0, 1))
+    values = [
+        float(means[0]), float(means[1]), float(means[2]),
+        float(stds[0]), float(stds[1]), float(stds[2]),
+        float(mins[0]), float(mins[1]), float(mins[2]),
+        float(maxs[0]), float(maxs[1]), float(maxs[2]),
+        float(rgb.mean()), float(np.argmax(means)),
+    ]
+    return pd.DataFrame([values], columns=RGB_STATS_14_COLUMNS)
+
+
+def extract_color_statistics_11(image: Image.Image) -> pd.DataFrame:
+    rgb_image = image.convert("RGB").resize((64, 64))
+    rgb = np.asarray(rgb_image, dtype=np.float32) / 255.0
+    hsv = np.asarray(rgb_image.convert("HSV"), dtype=np.float32) / 255.0
+    means = rgb.mean(axis=(0, 1))
+    stds = rgb.std(axis=(0, 1))
+    hsv_means = hsv.mean(axis=(0, 1))
+    values = [
+        float(means[0]), float(means[1]), float(means[2]),
+        float(stds[0]), float(stds[1]), float(stds[2]),
+        float(hsv_means[0]), float(hsv_means[1]), float(hsv_means[2]),
+        float(hsv_means[2]), float(np.argmax(means)),
+    ]
+    return pd.DataFrame([values], columns=COLOR_STATS_11_COLUMNS)
+
+
+def image_to_flat_pixels(image: Image.Image, feature_count: int, feature_names: Optional[List[str]] = None) -> pd.DataFrame:
+    side = int(round(feature_count ** 0.5))
+    if side * side != feature_count:
+        raise ValueError(f"Cannot infer a square image shape from feature_count={feature_count}.")
+    arr = np.asarray(image.convert("L").resize((side, side)), dtype=np.float32) / 255.0
+    values = arr.reshape(-1).astype(float).tolist()
+    columns = feature_names if feature_names and len(feature_names) == feature_count else [f"pixel_{i}" for i in range(feature_count)]
+    return pd.DataFrame([values], columns=columns)
+
+
+def prepare_adaptive_image_input(loaded: Dict[str, Any], image: Image.Image) -> Tuple[str, pd.DataFrame, List[str]]:
+    if loaded.get("type") == "torch":
+        rgb = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
+        return "image_raw_tensor", pd.DataFrame([{"image": rgb.tolist()}]), ["image"]
+
+    model, metadata = _underlying_model_and_metadata(loaded)
+    feature_names = _expected_feature_names(model, metadata)
+    feature_count = _expected_feature_count(model, metadata, feature_names)
+
+    preprocessing = metadata.get("preprocessing") if isinstance(metadata.get("preprocessing"), dict) else {}
+    preprocessing_type = normalize_text(
+        preprocessing.get("type")
+        or metadata.get("preprocessing_type")
+        or metadata.get("image_preprocessing")
+    ).lower()
+
+    feature_set = set(feature_names)
+    if preprocessing_type in {"rgb_statistics", "rgb_stats", "color_rgb_statistics"} or set(RGB_STATS_14_COLUMNS).issubset(feature_set) or feature_count == 14:
+        frame = extract_rgb_statistics_14(image)
+        if feature_names and set(feature_names) == set(frame.columns):
+            frame = frame[feature_names]
+        return "image_rgb_statistics_14", frame, list(frame.columns)
+
+    if preprocessing_type in {"color_statistics", "rgb_hsv_statistics", "color_stats_11"} or set(COLOR_STATS_11_COLUMNS).issubset(feature_set) or feature_count == 11:
+        frame = extract_color_statistics_11(image)
+        if feature_names and set(feature_names) == set(frame.columns):
+            frame = frame[feature_names]
+        return "image_color_statistics_11", frame, list(frame.columns)
+
+    if preprocessing_type in {"flattened_pixels", "pixels", "mnist"} or (feature_count is not None and feature_count > 0 and int(round(feature_count ** 0.5)) ** 2 == feature_count):
+        count = feature_count or 784
+        frame = image_to_flat_pixels(image, count, feature_names)
+        return f"image_flattened_pixels_{count}", frame, list(frame.columns)
+
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "message": "Image preprocessing cannot be inferred safely for this model.",
+            "model_type": type(model).__name__ if model is not None else None,
+            "expected_feature_count": feature_count,
+            "expected_feature_names": feature_names,
+            "metadata_keys": list(metadata.keys()),
+            "hint": (
+                "Store preprocessing metadata with the model (preprocessing.type and feature names), "
+                "or package preprocessing and estimator together in a Pipeline/MLflow PyFunc model."
+            ),
+        },
+    )
+
 # ============================================================
 # PREDICTION
 # ============================================================
@@ -1022,56 +1262,27 @@ async def predict_image(
     image_file: UploadFile = File(...),
     model_name: str = Form(...),
     model_alias: str = Form("production"),
-    image_size: int = Form(28),
-    grayscale: bool = Form(True),
-    auto_invert: bool = Form(True),
 ):
     try:
         model_name = normalize_text(model_name)
         model_alias = normalize_text(model_alias) or "production"
-
         if not model_name:
             raise ValueError("model_name is required.")
 
-        if image_size <= 0:
-            raise ValueError("image_size must be positive.")
-
         content = await image_file.read()
-
         if not content:
             raise ValueError("Uploaded image is empty.")
 
-        image = Image.open(io.BytesIO(content))
-
-        if grayscale:
-            image = image.convert("L")
-        else:
-            image = image.convert("RGB")
-
-        image = image.resize((image_size, image_size))
-
-        image_array = np.array(image).astype("float32") / 255.0
-
-        # Pour MNIST : si fond blanc + chiffre noir, on inverse automatiquement.
-        if auto_invert and grayscale and image_array.mean() > 0.5:
-            image_array = 1.0 - image_array
-
+        image = Image.open(io.BytesIO(content)).convert("RGB")
         loaded, model_uri, version_info = load_model_from_registry(
             model_name=model_name,
             model_alias=model_alias,
         )
 
-        if grayscale and image_size == 28:
-            pixels = image_array.reshape(-1).astype(float).tolist()
-            model_input = pd.DataFrame([{"pixels": pixels}])
-            prediction_mode = "image_file_to_pixels"
-            input_columns = ["pixels"]
-        else:
-            image_payload = image_array.tolist()
-            model_input = pd.DataFrame([{"image": image_payload}])
-            prediction_mode = "image_file"
-            input_columns = ["image"]
-
+        prediction_mode, model_input, input_columns = prepare_adaptive_image_input(
+            loaded,
+            image,
+        )
         predictions = make_predictions(loaded, model_input)
 
         return {
@@ -1084,29 +1295,23 @@ async def predict_image(
             "version_info": version_info,
             "prediction_mode": prediction_mode,
             "image_filename": image_file.filename,
-            "image_size": [image_size, image_size],
-            "grayscale": grayscale,
-            "auto_invert": auto_invert,
+            "original_image_size": list(image.size),
             "input_columns": input_columns,
             "predictions": predictions,
         }
 
     except HTTPException:
         raise
-
     except Exception as exc:
         raise HTTPException(
             status_code=400,
             detail={
                 "message": "Image prediction failed.",
                 "error": str(exc),
-                "hint": (
-                    "For MNIST-like models, use grayscale=true and image_size=28. "
-                    "For your TorchScript model, the API will load model.pt with torch.jit.load."
-                ),
+                "model_name": model_name,
+                "model_alias": model_alias,
             },
         )
-
 
 @app.post("/predict-text")
 def predict_text(request: TextPredictionRequest):
