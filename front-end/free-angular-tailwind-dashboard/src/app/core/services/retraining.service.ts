@@ -22,6 +22,7 @@ export interface RetrainingConfigRequest {
   monitoringLookbackHours?: number;
   minPredictionsForMonitoring?: number;
   maxPredictionErrorRatePercent?: number;
+  performanceDropThresholdPercent?: number;
   dataDriftThresholdPercent?: number;
 }
 
@@ -45,6 +46,7 @@ export interface RetrainingConfigResponse {
   monitoringLookbackHours?: number | null;
   minPredictionsForMonitoring?: number | null;
   maxPredictionErrorRatePercent?: number | null;
+  performanceDropThresholdPercent?: number | null;
   dataDriftThresholdPercent?: number | null;
   lastTriggerReason?: string | null;
   lastDecisionReason?: string | null;

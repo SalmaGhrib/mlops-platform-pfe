@@ -36,6 +36,7 @@ type ProjectFormModel = MlProjectRequest & {
   monitoringLookbackHours: number;
   minPredictionsForMonitoring: number;
   maxPredictionErrorRatePercent: number;
+  performanceDropThresholdPercent: number;
   dataDriftThresholdPercent: number;
 };
 
@@ -109,6 +110,7 @@ export class MyProjectsComponent implements OnInit {
       monitoringLookbackHours: 24,
       minPredictionsForMonitoring: 5,
       maxPredictionErrorRatePercent: 20,
+      performanceDropThresholdPercent: 10,
       dataDriftThresholdPercent: 25
     };
   }
@@ -209,6 +211,7 @@ export class MyProjectsComponent implements OnInit {
       monitoringLookbackHours: 24,
       minPredictionsForMonitoring: 5,
       maxPredictionErrorRatePercent: 20,
+      performanceDropThresholdPercent: 10,
       dataDriftThresholdPercent: 25
     };
 
@@ -240,8 +243,9 @@ export class MyProjectsComponent implements OnInit {
         this.projectForm.dataDriftMonitoringEnabled = config.dataDriftMonitoringEnabled ?? true;
         this.projectForm.monitoringLookbackHours = config.monitoringLookbackHours || 24;
         this.projectForm.minPredictionsForMonitoring = config.minPredictionsForMonitoring || 5;
-        this.projectForm.maxPredictionErrorRatePercent = config.maxPredictionErrorRatePercent || 20;
-        this.projectForm.dataDriftThresholdPercent = config.dataDriftThresholdPercent || 25;
+        this.projectForm.maxPredictionErrorRatePercent = config.maxPredictionErrorRatePercent ?? 20;
+        this.projectForm.performanceDropThresholdPercent = config.performanceDropThresholdPercent ?? 10;
+        this.projectForm.dataDriftThresholdPercent = config.dataDriftThresholdPercent ?? 25;
       },
       error: () => {
         this.retrainingConfigs[projectId] = null;
@@ -256,6 +260,7 @@ export class MyProjectsComponent implements OnInit {
         this.projectForm.monitoringLookbackHours = 24;
         this.projectForm.minPredictionsForMonitoring = 5;
         this.projectForm.maxPredictionErrorRatePercent = 20;
+        this.projectForm.performanceDropThresholdPercent = 10;
         this.projectForm.dataDriftThresholdPercent = 25;
       }
     });
@@ -315,8 +320,9 @@ export class MyProjectsComponent implements OnInit {
 
       this.projectForm.monitoringLookbackHours = this.projectForm.monitoringLookbackHours || 24;
       this.projectForm.minPredictionsForMonitoring = this.projectForm.minPredictionsForMonitoring || 5;
-      this.projectForm.maxPredictionErrorRatePercent = this.projectForm.maxPredictionErrorRatePercent || 20;
-      this.projectForm.dataDriftThresholdPercent = this.projectForm.dataDriftThresholdPercent || 25;
+      this.projectForm.maxPredictionErrorRatePercent = this.projectForm.maxPredictionErrorRatePercent ?? 20;
+      this.projectForm.performanceDropThresholdPercent = this.projectForm.performanceDropThresholdPercent ?? 10;
+      this.projectForm.dataDriftThresholdPercent = this.projectForm.dataDriftThresholdPercent ?? 25;
     }
   }
 
@@ -502,6 +508,14 @@ export class MyProjectsComponent implements OnInit {
       return false;
     }
 
+    if (
+      this.projectForm.performanceDropThresholdPercent < 0 ||
+      this.projectForm.performanceDropThresholdPercent > 100
+    ) {
+      this.errorMessage = 'Le seuil de baisse de performance doit être entre 0 et 100 %.';
+      return false;
+    }
+
     if (this.projectForm.dataDriftThresholdPercent < 0 || this.projectForm.dataDriftThresholdPercent > 100) {
       this.errorMessage = 'Le seuil de data drift doit être entre 0 et 100 %.';
       return false;
@@ -564,7 +578,6 @@ export class MyProjectsComponent implements OnInit {
         name: this.projectForm.name.trim(),
         description: this.projectForm.description?.trim() || '',
         targetColumn: this.projectForm.targetColumn?.trim() || null,
-        projectType: this.projectForm.projectType,
         autoPromoteBestModel: this.projectForm.autoPromoteBestModel ?? true,
         runtimeMode: this.projectForm.runtimeMode || 'STANDARD_RUNTIME',
         dataType: finalDataType,
