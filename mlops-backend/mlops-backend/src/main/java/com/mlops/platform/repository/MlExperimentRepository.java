@@ -5,6 +5,7 @@ import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.entity.User;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -66,6 +67,7 @@ public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long
     /*
      * Récupérer les expériences par runtime mode.
      */
+    @EntityGraph(attributePaths = {"project", "modelFile", "datasetFile"})
     List<MlExperiment> findByRuntimeModeOrderByCreatedAtAsc(String runtimeMode);
 
     /*
