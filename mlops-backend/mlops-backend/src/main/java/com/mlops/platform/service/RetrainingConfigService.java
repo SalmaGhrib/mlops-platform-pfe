@@ -67,7 +67,9 @@ public class RetrainingConfigService {
         }
 
         if (request == null) {
-            throw new IllegalArgumentException("Retraining configuration request is required");
+            throw new IllegalArgumentException(
+                    "Retraining configuration request is required"
+            );
         }
 
         MlProject project = mlProjectRepository.findById(projectId)
@@ -76,19 +78,6 @@ public class RetrainingConfigService {
                 ));
 
         boolean enabled = request.isEnabled();
-
-        if (requireSourceExperiment && sourceExperimentId == null && enabled) {
-            /*
-             * Pour un projet déjà en Production, la source sera retrouvée plus bas
-             * avec RetrainingSourceResolverService. On ne bloque donc pas la création
-             * de la configuration si l'identifiant n'est pas transmis par le frontend.
-             */
-            System.out.println(
-                    "[RETRAINING_CONFIG] sourceExperimentId not provided; "
-                            + "Production source will be resolved automatically. projectId="
-                            + projectId
-            );
-        }
 
         if (sourceExperimentId != null) {
             validateSourceExperiment(projectId, sourceExperimentId);
@@ -100,22 +89,15 @@ public class RetrainingConfigService {
 
         boolean newConfig = config.getId() == null;
 
-        RetrainingFrequencyType frequencyType = resolveFrequencyType(request);
-        Integer frequencyValue = resolveFrequencyValue(request);
-
         config.setProjectId(projectId);
+        config.setEnabled(enabled);
+        config.setFrequencyType(resolveFrequencyType(request));
+        config.setFrequencyValue(resolveFrequencyValue(request));
 
         if (sourceExperimentId != null) {
             config.setSourceExperimentId(sourceExperimentId);
         }
 
-        config.setEnabled(enabled);
-        config.setFrequencyType(frequencyType);
-        config.setFrequencyValue(frequencyValue);
-
-        /*
-         * En l'absence de stratégie explicite, on applique le mode planifié simple.
-         */
         if (request.getStrategy() == null) {
             config.setStrategy(RetrainingStrategy.SCHEDULED_ONLY);
         }
@@ -123,8 +105,8 @@ public class RetrainingConfigService {
         applyMonitoringSettings(config, request);
 
         /*
-         * Une simple modification ne doit jamais forcer running=false
-         * lorsqu'un réentraînement est réellement en cours.
+         * Une simple modification ne doit jamais changer artificiellement
+         * l'état running d'un réentraînement déjà en cours.
          */
         if (newConfig) {
             config.setRunning(false);
@@ -133,7 +115,9 @@ public class RetrainingConfigService {
             config.setManualTriggerRequested(false);
         }
 
-        config.setLastTriggerReason(enabled ? "CONFIG_UPDATED" : "DISABLED");
+        config.setLastTriggerReason(
+                enabled ? "CONFIG_UPDATED" : "DISABLED"
+        );
         config.setLastDecisionReason(null);
 
         if (enabled) {
@@ -142,32 +126,57 @@ public class RetrainingConfigService {
             config.setNextRetrainingAt(null);
         }
 
-        RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
-
         /*
-         * Lorsque le réentraînement est activé, on rattache la configuration
-         * à l'expérience correspondant à la version Production courante.
+         * On résout la source AVANT l'unique sauvegarde.
+         * Cela évite deux saveAndFlush successifs sur la même ligne,
+         * qui provoquaient des verrous MySQL et l'erreur :
+         * Lock wait timeout exceeded.
          */
-        if (enabled) {
+        if (enabled && sourceExperimentId == null) {
             try {
-                Long resolvedSourceId = sourceResolver.resolveSourceExperimentId(projectId);
-                saved.setSourceExperimentId(resolvedSourceId);
-                saved = retrainingConfigRepository.saveAndFlush(saved);
+                Long resolvedSourceId =
+                        sourceResolver.resolveSourceExperimentId(projectId);
+
+                if (resolvedSourceId != null) {
+                    config.setSourceExperimentId(resolvedSourceId);
+                }
             } catch (IllegalStateException noProductionYet) {
                 /*
-                 * Un projet peut être configuré avant sa première version Production.
-                 * Le scheduler pourra résoudre la source après promotion.
+                 * Le projet peut être configuré avant sa première version
+                 * Production. Le scheduler résoudra la source plus tard.
                  */
                 System.out.println(
-                        "[RETRAINING_CONFIG] Enabled without Production source yet. projectId="
+                        "[RETRAINING_CONFIG] Production source unavailable. projectId="
                                 + projectId
                                 + ", reason="
                                 + noProductionYet.getMessage()
                 );
+            } catch (Exception exception) {
+                /*
+                 * Une erreur de résolution ne doit pas empêcher
+                 * l'enregistrement de la configuration.
+                 */
+                System.out.println(
+                        "[RETRAINING_CONFIG] Cannot resolve Production source now. projectId="
+                                + projectId
+                                + ", reason="
+                                + exception.getMessage()
+                );
             }
         }
 
-        notifyConfigChanged(project, saved, enabled ? "activé" : "désactivé");
+        /*
+         * Une seule écriture en base dans cette méthode.
+         * Pas de saveAndFlush intermédiaire.
+         */
+        RetrainingConfig saved =
+                retrainingConfigRepository.save(config);
+
+        notifyConfigChanged(
+                project,
+                saved,
+                enabled ? "activé" : "désactivé"
+        );
 
         return saved;
     }
@@ -198,7 +207,11 @@ public class RetrainingConfigService {
         request.setFrequencyValue(1);
         request.setStrategy(RetrainingStrategy.SCHEDULED_ONLY);
 
-        return saveOrUpdateConfig(projectId, sourceExperimentId, request);
+        return saveOrUpdateConfig(
+                projectId,
+                sourceExperimentId,
+                request
+        );
     }
 
     @Transactional
@@ -207,7 +220,8 @@ public class RetrainingConfigService {
             throw new IllegalArgumentException("projectId is required");
         }
 
-        MlProject project = mlProjectRepository.findById(projectId).orElse(null);
+        MlProject project =
+                mlProjectRepository.findById(projectId).orElse(null);
 
         RetrainingConfig config = retrainingConfigRepository
                 .findByProjectId(projectId)
@@ -218,26 +232,24 @@ public class RetrainingConfigService {
         config.setProjectId(projectId);
         config.setEnabled(false);
 
-        /*
-         * Pour une nouvelle configuration uniquement, on initialise running.
-         * Pour une configuration existante, on conserve l'état réel du job.
-         */
         if (newConfig) {
             config.setRunning(false);
         }
 
-        /*
-         * Une configuration désactivée ne doit garder aucune demande manuelle.
-         */
         config.setManualTriggerRequested(false);
         config.setLastTriggerReason("DISABLED");
         config.setLastDecisionReason(null);
         config.setNextRetrainingAt(null);
 
-        RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
+        RetrainingConfig saved =
+                retrainingConfigRepository.save(config);
 
         if (project != null) {
-            notifyConfigChanged(project, saved, "désactivé");
+            notifyConfigChanged(
+                    project,
+                    saved,
+                    "désactivé"
+            );
         }
 
         return saved;
@@ -267,22 +279,28 @@ public class RetrainingConfigService {
             );
         }
 
-        /*
-         * Le scheduler verra manualTriggerRequested=true et une date déjà échue.
-         */
         config.setRunning(false);
         config.setManualTriggerRequested(true);
         config.setLastTriggerReason("MANUAL");
         config.setLastDecisionReason(
                 "Réentraînement manuel demandé par l'utilisateur."
         );
-        config.setNextRetrainingAt(LocalDateTime.now().minusSeconds(5));
+        config.setNextRetrainingAt(
+                LocalDateTime.now().minusSeconds(5)
+        );
 
-        RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
+        RetrainingConfig saved =
+                retrainingConfigRepository.save(config);
 
-        MlProject project = mlProjectRepository.findById(projectId).orElse(null);
+        MlProject project =
+                mlProjectRepository.findById(projectId).orElse(null);
+
         if (project != null) {
-            notifyConfigChanged(project, saved, "demandé maintenant");
+            notifyConfigChanged(
+                    project,
+                    saved,
+                    "demandé maintenant"
+            );
         }
 
         return saved;
@@ -365,7 +383,8 @@ public class RetrainingConfigService {
                 || experiment.getProject().getId() == null
                 || !experiment.getProject().getId().equals(projectId)) {
             throw new IllegalArgumentException(
-                    "Source experiment does not belong to projectId=" + projectId
+                    "Source experiment does not belong to projectId="
+                            + projectId
             );
         }
     }
@@ -373,7 +392,7 @@ public class RetrainingConfigService {
     private RetrainingFrequencyType resolveFrequencyType(
             RetrainingConfigRequest request
     ) {
-        if (request == null || request.getFrequencyType() == null) {
+        if (request.getFrequencyType() == null) {
             return RetrainingFrequencyType.WEEK;
         }
 
@@ -383,13 +402,15 @@ public class RetrainingConfigService {
     private Integer resolveFrequencyValue(
             RetrainingConfigRequest request
     ) {
-        if (request == null
-                || request.getFrequencyValue() == null
+        if (request.getFrequencyValue() == null
                 || request.getFrequencyValue() <= 0) {
             return 1;
         }
 
-        return Math.min(request.getFrequencyValue(), 365);
+        return Math.min(
+                request.getFrequencyValue(),
+                365
+        );
     }
 
     private void notifyConfigChanged(
@@ -403,7 +424,8 @@ public class RetrainingConfigService {
 
         try {
             String projectName =
-                    project.getName() != null && !project.getName().isBlank()
+                    project.getName() != null
+                            && !project.getName().isBlank()
                             ? project.getName()
                             : "project " + project.getId();
 
@@ -414,7 +436,8 @@ public class RetrainingConfigService {
                             + action
                             + ".";
 
-            if (config.isEnabled() && config.getNextRetrainingAt() != null) {
+            if (config.isEnabled()
+                    && config.getNextRetrainingAt() != null) {
                 message +=
                         " Prochaine exécution : "
                                 + config.getNextRetrainingAt()
@@ -429,13 +452,13 @@ public class RetrainingConfigService {
                     NotificationTargetType.PROJECT,
                     project.getId()
             );
-        } catch (Exception e) {
+        } catch (Exception exception) {
             System.out.println(
                     "[AUTO_RETRAINING][NOTIFICATION] "
                             + "Cannot notify config change. projectId="
                             + project.getId()
                             + ", reason="
-                            + e.getMessage()
+                            + exception.getMessage()
             );
         }
     }
