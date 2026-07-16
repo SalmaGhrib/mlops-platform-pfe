@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import importlib.util
 import math
@@ -12,6 +14,7 @@ import subprocess
 import sys
 import time
 import traceback
+import uuid
 import tarfile
 import zipfile
 from dataclasses import dataclass
@@ -45,13 +48,18 @@ SUPPORTED_MODEL_EXTENSIONS = {
 }
 
 METRIC_REGEX = re.compile(
+    r"^\s*"
+    r"(?:METRIC\s+|\[PLATFORM_METRIC_AUTO\]\s+)?"
     r"(?P<key>"
-    r"loss|val_loss|accuracy|val_accuracy|acc|f1|f1_score|precision|recall|"
+    r"loss|val_loss|accuracy|val_accuracy|acc|"
+    r"f1|f1_score|f1_weighted|"
+    r"precision|precision_weighted|"
+    r"recall|recall_weighted|"
     r"rmse|mse|mae|r2|r2_score|auc|roc_auc"
     r")"
-    r"(?:\\s+[^:=]*?)?"
-    r"\\s*[:=]\\s*"
-    r"(?P<value>[-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?)",
+    r"\s*[:=]\s*"
+    r"(?P<value>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+    r"\s*$",
     re.IGNORECASE,
 )
 
@@ -86,6 +94,29 @@ class RunResult:
     logged_model_uri: Optional[str]
     error: Optional[Dict[str, Any]]
     analysis: Optional[Dict[str, Any]]
+
+
+@dataclass
+class ContractExecutionResult:
+    model: Any
+    metrics: Dict[str, float]
+    input_example: Any
+    metadata: Dict[str, Any]
+    stdout: str
+    stderr: str
+    execution_mode: str = "PYTHON_CONTRACT"
+
+
+class InMemoryPyFuncWrapper(mlflow.pyfunc.PythonModel):
+    def __init__(self, model: Any):
+        self.model = model
+
+    def predict(self, context, model_input):
+        if hasattr(self.model, "predict"):
+            return self.model.predict(model_input)
+        if callable(self.model):
+            return self.model(model_input)
+        raise RuntimeError("The returned model exposes neither predict() nor __call__().")
 
 
 @dataclass
@@ -202,6 +233,9 @@ def normalize_metric_name(name: str) -> str:
     aliases = {
         "acc": "accuracy",
         "f1": "f1_score",
+        "f1_weighted": "f1_score",
+        "precision_weighted": "precision",
+        "recall_weighted": "recall",
         "r2_score": "r2",
         "roc_auc": "auc",
     }
@@ -243,7 +277,9 @@ def parse_metrics(stdout: str) -> Dict[str, float]:
             normalized_alias = alias.lower().replace("é", "e").replace("è", "e").replace("ê", "e")
             if normalized_alias in lower_line:
                 number_match = re.search(
-                    r"([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)",
+                    r"[:=]\\s*"
+                    r"([-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?)"
+                    r"\\s*$",
                     line,
                 )
                 if number_match:
@@ -1365,6 +1401,348 @@ def is_argument_error(stderr: str) -> bool:
     )
 
 
+
+
+def _module_value(module: Any, names: List[str], default: Any = None) -> Any:
+    for name in names:
+        if hasattr(module, name):
+            value = getattr(module, name)
+            if value is not None:
+                return value
+    return default
+
+
+def _normalize_contract_metrics(raw_metrics: Any) -> Dict[str, float]:
+    if not isinstance(raw_metrics, dict):
+        return {}
+
+    normalized: Dict[str, float] = {}
+    for key, value in raw_metrics.items():
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(numeric):
+            continue
+        normalized[normalize_metric_name(str(key))] = numeric
+    return normalized
+
+
+@contextlib.contextmanager
+def _temporary_process_context(
+    workspace: Path,
+    env_updates: Dict[str, str],
+):
+    old_cwd = Path.cwd()
+    previous_env: Dict[str, Optional[str]] = {
+        key: os.environ.get(key) for key in env_updates
+    }
+
+    os.chdir(workspace)
+    os.environ.update(env_updates)
+
+    try:
+        yield
+    finally:
+        os.chdir(old_cwd)
+        for key, previous_value in previous_env.items():
+            if previous_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous_value
+
+
+def load_user_training_module(script_path: Path):
+    module_name = f"platform_user_training_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(module_name, str(script_path))
+
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"Unable to load the user training script: {script_path}"
+        )
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+
+    try:
+        spec.loader.exec_module(module)
+        return module
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+
+
+def execute_training_contract(
+    workspace: Path,
+    script_path: Path,
+    dataset_path: Optional[Path],
+    platform_run_id: Optional[str] = None,
+    platform_experiment_id: Optional[str] = None,
+) -> ContractExecutionResult:
+    """
+    Preferred execution mode.
+
+    The platform imports the user script in the current Python process and retrieves
+    an in-memory trained model. Supported contracts:
+
+    1. def train() -> {"model": ..., "metrics": ..., "input_example": ..., "metadata": ...}
+    2. Global variables: model/trained_model/MODEL and optional metrics/METRICS.
+
+    No local model file and no MLflow call are required from the user.
+    """
+    workspace = workspace.resolve()
+    script_path = script_path.resolve()
+    output_dir = prepare_outputs_dir(workspace)
+
+    resolved_dataset = create_dataset_aliases(
+        workspace=workspace,
+        dataset_path=dataset_path.resolve() if dataset_path else None,
+        script_path=script_path,
+    )
+
+    env_updates = {
+        "OUTPUT_DIR": str(output_dir),
+        "MLOPS_OUTPUT_DIR": str(output_dir),
+        "WORKSPACE_DIR": str(workspace),
+        "PLATFORM_OUTPUT_DIR": str(output_dir),
+        "PLATFORM_MANAGED_MLFLOW": "true",
+        "PLATFORM_ENTRYPOINT": script_path.name,
+    }
+
+    if platform_run_id:
+        env_updates["PLATFORM_MLFLOW_RUN_ID"] = str(platform_run_id)
+        env_updates["MLFLOW_RUN_ID"] = str(platform_run_id)
+
+    if platform_experiment_id:
+        env_updates["PLATFORM_MLFLOW_EXPERIMENT_ID"] = str(platform_experiment_id)
+        env_updates["MLFLOW_EXPERIMENT_ID"] = str(platform_experiment_id)
+
+    if resolved_dataset is not None:
+        for env_name in (
+            "DATA_PATH",
+            "DATASET_PATH",
+            "MLOPS_DATA_PATH",
+            "MLOPS_DATASET_PATH",
+        ):
+            env_updates[env_name] = str(resolved_dataset)
+
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+
+    module = None
+    result: Any = None
+
+    with _temporary_process_context(workspace, env_updates):
+        with contextlib.redirect_stdout(stdout_buffer):
+            with contextlib.redirect_stderr(stderr_buffer):
+                module = load_user_training_module(script_path)
+
+                # Avoid executing training twice when the script already trained during import.
+                imported_model = _module_value(
+                    module,
+                    ["model", "trained_model", "MODEL"],
+                )
+
+                if imported_model is None:
+                    train_function = getattr(module, "train", None)
+                    if not callable(train_function):
+                        raise RuntimeError(
+                            "No in-memory training contract was found. "
+                            "Expose a callable train() function returning a dictionary "
+                            "with a 'model' key, or expose model/trained_model/MODEL."
+                        )
+                    result = train_function()
+
+    if isinstance(result, dict):
+        model = result.get("model")
+        raw_metrics = result.get("metrics", {})
+        input_example = result.get("input_example")
+        metadata = result.get("metadata", {})
+    else:
+        model = _module_value(module, ["model", "trained_model", "MODEL"])
+        raw_metrics = _module_value(module, ["metrics", "METRICS"], {})
+        input_example = _module_value(
+            module,
+            ["input_example", "INPUT_EXAMPLE"],
+        )
+        metadata = _module_value(
+            module,
+            ["model_metadata", "MODEL_METADATA", "metadata", "METADATA"],
+            {},
+        )
+
+    if model is None:
+        raise RuntimeError(
+            "The user script completed but returned no trained model. "
+            "The train() function must return {'model': trained_model, ...}."
+        )
+
+    if not isinstance(metadata, dict):
+        metadata = {"value": str(metadata)}
+
+    return ContractExecutionResult(
+        model=model,
+        metrics=_normalize_contract_metrics(raw_metrics),
+        input_example=input_example,
+        metadata=metadata,
+        stdout=stdout_buffer.getvalue(),
+        stderr=stderr_buffer.getvalue(),
+    )
+
+
+def log_in_memory_model(
+    model: Any,
+    input_example: Any = None,
+) -> Optional[str]:
+    """
+    Log an in-memory model under the current platform MLflow run.
+
+    Tries native framework flavors first, then a generic pyfunc wrapper.
+    """
+    if model is None:
+        return None
+
+    # Scikit-learn and compatible estimators/pipelines.
+    try:
+        module_name = type(model).__module__.lower()
+        if (
+            module_name.startswith("sklearn")
+            or "sklearn" in module_name
+            or hasattr(model, "get_params")
+        ) and hasattr(model, "predict"):
+            mlflow.sklearn.log_model(
+                sk_model=model,
+                artifact_path="model",
+                input_example=input_example,
+            )
+            return mlflow.get_artifact_uri("model")
+    except Exception as exc:
+        print(f"[PLATFORM_MODEL] Native sklearn in-memory logging failed: {exc}")
+
+    # PyTorch model object.
+    try:
+        import torch
+
+        if isinstance(model, torch.nn.Module):
+            import mlflow.pytorch
+
+            mlflow.pytorch.log_model(
+                pytorch_model=model,
+                artifact_path="model",
+                input_example=input_example,
+            )
+            return mlflow.get_artifact_uri("model")
+    except ImportError:
+        pass
+    except Exception as exc:
+        print(f"[PLATFORM_MODEL] Native PyTorch in-memory logging failed: {exc}")
+
+    # TensorFlow / Keras model object.
+    try:
+        module_name = type(model).__module__.lower()
+        if "keras" in module_name or "tensorflow" in module_name:
+            import mlflow.keras
+
+            mlflow.keras.log_model(
+                model,
+                artifact_path="model",
+                input_example=input_example,
+            )
+            return mlflow.get_artifact_uri("model")
+    except ImportError:
+        pass
+    except Exception as exc:
+        print(f"[PLATFORM_MODEL] Native Keras in-memory logging failed: {exc}")
+
+    # Generic fallback serialized by cloudpickle through MLflow pyfunc.
+    try:
+        mlflow.pyfunc.log_model(
+            artifact_path="model",
+            python_model=InMemoryPyFuncWrapper(model),
+            input_example=input_example,
+        )
+        return mlflow.get_artifact_uri("model")
+    except Exception as exc:
+        print(f"[PLATFORM_MODEL] Generic in-memory pyfunc logging failed: {exc}")
+        return None
+
+
+def build_model_manifest(
+    primary_model_path: Optional[Path],
+    companion_artifacts: Dict[str, str],
+    metrics: Dict[str, float],
+    workspace: Path,
+    source_type: str = "LOCAL_MODEL_FILE",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        "source_type": source_type,
+        "primary_model_path": str(primary_model_path) if primary_model_path else None,
+        "model_extension": (
+            primary_model_path.suffix.lower() if primary_model_path else None
+        ),
+        "companion_artifacts": companion_artifacts or {},
+        "metrics": metrics or {},
+        "metadata": metadata or {},
+        "workspace": str(workspace),
+        "created_at_epoch_ms": int(time.time() * 1000),
+    }
+
+
+def register_logged_platform_model(
+    logged_model_uri: str,
+    registered_model_name: str,
+    platform_run_id: str,
+    platform_experiment_id: str,
+    source_type: str,
+) -> tuple[bool, Optional[str]]:
+    try:
+        registered_version = mlflow.register_model(
+            model_uri=logged_model_uri,
+            name=registered_model_name,
+        )
+        version = str(registered_version.version)
+
+        mlflow.log_param("platform_model_source_type", source_type)
+        mlflow.log_param("platform_model_version", version)
+        mlflow.set_tag("model_version", version)
+        mlflow.set_tag("registered_model_version", version)
+        mlflow.set_tag("platform_model_registered", "true")
+        mlflow.set_tag("validation_status", "PENDING")
+        mlflow.set_tag(
+            "platform_model_uri",
+            f"models:/{registered_model_name}/{version}",
+        )
+
+        client = MlflowClient()
+        for key, value in {
+            "platform_run_id": platform_run_id,
+            "platform_experiment_id": str(platform_experiment_id),
+            "validation_status": "PENDING",
+            "source_type": source_type,
+        }.items():
+            client.set_model_version_tag(
+                name=registered_model_name,
+                version=version,
+                key=key,
+                value=str(value),
+            )
+
+        print(
+            "[PLATFORM_MODEL] Version registered as PENDING: "
+            f"{registered_model_name} v{version}"
+        )
+        return True, version
+
+    except Exception as exc:
+        print(
+            "[PLATFORM_MODEL] Failed to register model as platform model: "
+            f"{exc}"
+        )
+        return False, None
+
+
+
 def run_user_script(
     workspace: Path,
     entrypoint: str,
@@ -1580,6 +1958,7 @@ def log_model_artifact(
 
 
 
+
 def run_standard_runtime(
     script_path: Path,
     dataset_path: Optional[Path],
@@ -1589,9 +1968,16 @@ def run_standard_runtime(
     workspace: Optional[Path] = None,
     registered_model_name: Optional[str] = None,
 ) -> RunResult:
-    workspace = workspace or script_path.parent
-    workspace = workspace.resolve()
+    """
+    Execute a user training script with three compatibility strategies, in order:
 
+    1. Preferred: in-memory Python contract (train() returns a model).
+    2. Compatibility: subprocess producing a supported local model file.
+    3. Advanced fallback: user-created MLflow model re-registered by the platform.
+
+    In all cases, the platform owns MLflow logging, model registration and version tags.
+    """
+    workspace = (workspace or script_path.parent).resolve()
     script_path = script_path.resolve()
 
     script_code = script_path.read_text(encoding="utf-8")
@@ -1608,7 +1994,8 @@ def run_standard_runtime(
             logged_model_uri=None,
             error={
                 "message": (
-                    "Votre script utilise des dépendances non disponibles dans le Runtime standard."
+                    "Votre script utilise des dépendances non disponibles "
+                    "dans le Runtime standard."
                 ),
                 "unsupported_imports": analysis["unsupportedImports"],
                 "suggestion": "Veuillez utiliser le mode Dockerfile personnalisé.",
@@ -1617,7 +2004,6 @@ def run_standard_runtime(
         )
 
     mlflow.set_tracking_uri(tracking_uri)
-
     if experiment_name:
         mlflow.set_experiment(experiment_name)
 
@@ -1631,8 +2017,7 @@ def run_standard_runtime(
     os.environ["PLATFORM_REGISTERED_MODEL_NAME"] = platform_registered_model_name
     os.environ["PLATFORM_OUTPUT_DIR"] = str(workspace / "outputs")
 
-    # Create the single official platform run first. The user script receives this run id
-    # and can use MLflow without creating a second random run.
+    # Create one official run before executing user code.
     initial_run = mlflow.start_run(run_name=run_name)
     platform_run_id = initial_run.info.run_id
     platform_experiment_id = initial_run.info.experiment_id
@@ -1643,38 +2028,101 @@ def run_standard_runtime(
 
     script_start_time_ms = int(time.time() * 1000)
 
-    result = run_user_script(
-        workspace=workspace,
-        entrypoint=str(script_path.name),
-        dataset_path=dataset_path,
-        platform_run_id=platform_run_id,
-        platform_experiment_id=platform_experiment_id,
-    )
+    contract_result: Optional[ContractExecutionResult] = None
+    contract_error: Optional[Dict[str, Any]] = None
+    execution_mode = "SUBPROCESS"
+
+    # Preferred strategy: retrieve the trained model directly from memory.
+    try:
+        contract_result = execute_training_contract(
+            workspace=workspace,
+            script_path=script_path,
+            dataset_path=dataset_path,
+            platform_run_id=platform_run_id,
+            platform_experiment_id=platform_experiment_id,
+        )
+        execution_mode = contract_result.execution_mode
+        print("[PLATFORM_CONTRACT] In-memory training contract succeeded.")
+
+        result = subprocess.CompletedProcess(
+            args=[sys.executable, str(script_path)],
+            returncode=0,
+            stdout=contract_result.stdout,
+            stderr=contract_result.stderr,
+        )
+
+    except BaseException as exc:
+        contract_error = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc().splitlines()[-20:],
+        }
+        print(
+            "[PLATFORM_CONTRACT] In-memory contract unavailable; "
+            "falling back to subprocess."
+        )
+        print(
+            json.dumps(
+                contract_error,
+                indent=2,
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+
+        result = run_user_script(
+            workspace=workspace,
+            entrypoint=str(script_path.name),
+            dataset_path=dataset_path,
+            platform_run_id=platform_run_id,
+            platform_experiment_id=platform_experiment_id,
+        )
 
     script_end_time_ms = int(time.time() * 1000)
 
-    metrics = merge_metrics(parse_metrics(result.stdout), load_metrics_json(workspace))
+    metrics: Dict[str, float] = {}
+    if contract_result is not None:
+        metrics = merge_metrics(
+            metrics,
+            contract_result.metrics,
+            overwrite=True,
+        )
+
+    metrics = merge_metrics(
+        metrics,
+        parse_metrics(result.stdout),
+        overwrite=False,
+    )
+    metrics = merge_metrics(
+        metrics,
+        load_metrics_json(workspace),
+        overwrite=False,
+    )
+
     model_artifacts = find_model_artifacts(workspace)
 
-    # Métriques automatiques calculées par la plateforme.
-    # Elles complètent les métriques imprimées par le script, sans les écraser.
-    pre_primary_model_path = select_primary_model_artifact(model_artifacts)
-    pre_companion_artifacts = (
-        find_companion_artifacts(pre_primary_model_path, model_artifacts)
-        if pre_primary_model_path
-        else {}
-    )
-    auto_metrics = auto_evaluate_metrics_from_platform(
-        workspace=workspace,
-        dataset_path=dataset_path,
-        primary_model_path=pre_primary_model_path,
-        companion_artifacts=pre_companion_artifacts,
-    )
-    metrics = merge_metrics(metrics, auto_metrics, overwrite=False)
+    # Automatic evaluation is a fallback only. It must not overwrite validation
+    # metrics returned by the user's train() contract.
+    if not metrics and model_artifacts:
+        primary_for_metrics = select_primary_model_artifact(model_artifacts)
+        companion_for_metrics = (
+            find_companion_artifacts(primary_for_metrics, model_artifacts)
+            if primary_for_metrics
+            else {}
+        )
+        auto_metrics = auto_evaluate_metrics_from_platform(
+            workspace=workspace,
+            dataset_path=dataset_path,
+            primary_model_path=primary_for_metrics,
+            companion_artifacts=companion_for_metrics,
+        )
+        metrics = merge_metrics(metrics, auto_metrics, overwrite=False)
 
     logged_model_uri: Optional[str] = None
     platform_model_registered = False
     platform_model_version: Optional[str] = None
+    model_source_type: Optional[str] = None
+    artifact_results: List[Dict[str, Any]] = []
 
     recoverable_user_mlflow_failure = (
         result.returncode != 0
@@ -1682,7 +2130,11 @@ def run_standard_runtime(
         and is_recoverable_user_mlflow_error(result.stderr, result.stdout)
     )
 
-    error_info = format_error_info(result.stderr) if result.returncode != 0 else None
+    error_info = (
+        format_error_info(result.stderr)
+        if result.returncode != 0
+        else None
+    )
     recovery_warning = (
         build_recovered_mlflow_warning(result, model_artifacts)
         if recoverable_user_mlflow_failure
@@ -1692,12 +2144,25 @@ def run_standard_runtime(
     with mlflow.start_run(run_id=platform_run_id):
         mlflow.set_tag("platform_runner", "true")
         mlflow.set_tag("mlops.managed", "true")
-        mlflow.set_tag("runtime_mode", os.environ.get("RUNTIME_MODE", "CUSTOM_DOCKERFILE"))
-        mlflow.set_tag("registered_model_name", platform_registered_model_name)
-        mlflow.set_tag("platform_registered_model_name", platform_registered_model_name)
+        mlflow.set_tag(
+            "runtime_mode",
+            os.environ.get("RUNTIME_MODE", "CUSTOM_DOCKERFILE"),
+        )
+        mlflow.set_tag("execution_mode", execution_mode)
+        mlflow.set_tag(
+            "registered_model_name",
+            platform_registered_model_name,
+        )
+        mlflow.set_tag(
+            "platform_registered_model_name",
+            platform_registered_model_name,
+        )
         mlflow.set_tag("run_name", run_name)
 
-        spring_experiment_id = os.environ.get("SPRING_EXPERIMENT_ID") or os.environ.get("MLFLOW_TAG_SPRING_EXPERIMENT_ID")
+        spring_experiment_id = (
+            os.environ.get("SPRING_EXPERIMENT_ID")
+            or os.environ.get("MLFLOW_TAG_SPRING_EXPERIMENT_ID")
+        )
         if spring_experiment_id:
             mlflow.set_tag("spring_experiment_id", spring_experiment_id)
 
@@ -1705,14 +2170,22 @@ def run_standard_runtime(
         if project_id:
             mlflow.set_tag("project_id", project_id)
 
-        training_job_name = os.environ.get("TRAINING_JOB_NAME") or os.environ.get("KUBERNETES_JOB_NAME") or os.environ.get("HOSTNAME")
+        training_job_name = (
+            os.environ.get("TRAINING_JOB_NAME")
+            or os.environ.get("KUBERNETES_JOB_NAME")
+            or os.environ.get("HOSTNAME")
+        )
         if training_job_name:
             mlflow.set_tag("training_job_name", training_job_name)
             mlflow.set_tag("kubeflow_run_name", training_job_name)
 
         mlflow.log_param("entrypoint", script_path.name)
         mlflow.log_param("workspace", str(workspace))
-        mlflow.log_param("platform_registered_model_name", platform_registered_model_name)
+        mlflow.log_param(
+            "platform_registered_model_name",
+            platform_registered_model_name,
+        )
+        mlflow.log_param("execution_mode", execution_mode)
 
         if dataset_path is not None:
             mlflow.log_param("dataset_path", str(dataset_path))
@@ -1724,18 +2197,38 @@ def run_standard_runtime(
             str(bool(recoverable_user_mlflow_failure)).lower(),
         )
 
-        mlflow.log_text(result.stdout or "", artifact_file="logs/stdout.log")
-        mlflow.log_text(result.stderr or "", artifact_file="logs/stderr.log")
+        mlflow.log_text(
+            result.stdout or "",
+            artifact_file="logs/stdout.log",
+        )
+        mlflow.log_text(
+            result.stderr or "",
+            artifact_file="logs/stderr.log",
+        )
+
+        if contract_error:
+            mlflow.log_text(
+                json.dumps(
+                    contract_error,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                ),
+                artifact_file="logs/contract_fallback.json",
+            )
 
         if error_info:
             mlflow.log_text(
-                json.dumps(error_info, indent=2, ensure_ascii=False, default=str),
+                json.dumps(
+                    error_info,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                ),
                 artifact_file="logs/error_summary.json",
             )
 
         if recovery_warning:
-            print("[PLATFORM_RECOVERY] User script failed during its own MLflow logic.")
-            print("[PLATFORM_RECOVERY] Local model artifact found. Platform will try to register it.")
             mlflow.log_text(
                 json.dumps(
                     recovery_warning,
@@ -1753,130 +2246,180 @@ def run_standard_runtime(
                 artifact_file="logs/parsed_metrics.json",
             )
 
-        if model_artifacts:
-            print("[PLATFORM_MODEL] Local model artifact detected.")
-            print(
-                "[PLATFORM_MODEL] detected_model_files="
-                f"{[str(path) for path in model_artifacts]}"
+        # ------------------------------------------------------------------
+        # Strategy 1: model returned directly by train().
+        # ------------------------------------------------------------------
+        if contract_result is not None and contract_result.model is not None:
+            print("[PLATFORM_MODEL] In-memory model returned by train().")
+            model_source_type = "IN_MEMORY_TRAINING_CONTRACT"
+
+            logged_model_uri = log_in_memory_model(
+                model=contract_result.model,
+                input_example=contract_result.input_example,
             )
+
+            if contract_result.metadata:
+                mlflow.log_text(
+                    json.dumps(
+                        contract_result.metadata,
+                        indent=2,
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                    artifact_file="platform_model/model-metadata.json",
+                )
+
+            manifest = build_model_manifest(
+                primary_model_path=None,
+                companion_artifacts={},
+                metrics=metrics,
+                workspace=workspace,
+                source_type=model_source_type,
+                metadata=contract_result.metadata,
+            )
+            mlflow.log_text(
+                json.dumps(
+                    manifest,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                ),
+                artifact_file="platform_model/model-manifest.json",
+            )
+
+            if logged_model_uri:
+                (
+                    platform_model_registered,
+                    platform_model_version,
+                ) = register_logged_platform_model(
+                    logged_model_uri=logged_model_uri,
+                    registered_model_name=platform_registered_model_name,
+                    platform_run_id=platform_run_id,
+                    platform_experiment_id=str(platform_experiment_id),
+                    source_type=model_source_type,
+                )
+
+            artifact_results.append(
+                {
+                    "strategy": model_source_type,
+                    "logged_model_uri": logged_model_uri,
+                    "registered": platform_model_registered,
+                    "model_version": platform_model_version,
+                }
+            )
+
+        # ------------------------------------------------------------------
+        # Strategy 2: supported local model file.
+        # ------------------------------------------------------------------
+        if not platform_model_registered and model_artifacts:
+            print("[PLATFORM_MODEL] Falling back to local model artifact.")
+            model_source_type = "LOCAL_MODEL_FILE"
 
             primary_model_path = select_primary_model_artifact(model_artifacts)
             companion_artifacts = (
-                find_companion_artifacts(primary_model_path, model_artifacts)
+                find_companion_artifacts(
+                    primary_model_path,
+                    model_artifacts,
+                )
                 if primary_model_path
                 else {}
             )
 
-            artifact_results: List[Dict[str, Any]] = []
-
             if primary_model_path:
-                print(f"[PLATFORM_MODEL] selected_primary_model={primary_model_path}")
-                print(f"[PLATFORM_MODEL] companion_artifacts={companion_artifacts}")
+                print(
+                    f"[PLATFORM_MODEL] selected_primary_model="
+                    f"{primary_model_path}"
+                )
+                print(
+                    f"[PLATFORM_MODEL] companion_artifacts="
+                    f"{companion_artifacts}"
+                )
 
                 artifact_result = log_model_artifact(
                     primary_model_path,
                     companion_artifacts=companion_artifacts,
                 )
                 artifact_results.append(artifact_result)
+                logged_model_uri = artifact_result.get("logged_model_uri")
+
                 try:
-                    mlflow.log_artifact(str(primary_model_path), artifact_path="raw_model")
+                    mlflow.log_artifact(
+                        str(primary_model_path),
+                        artifact_path="raw_model",
+                    )
+                    mlflow.log_artifact(
+                        str(script_path),
+                        artifact_path="source",
+                    )
+
+                    for source_file in (
+                        workspace / "requirements.txt",
+                        workspace / "Dockerfile",
+                    ):
+                        if source_file.exists():
+                            mlflow.log_artifact(
+                                str(source_file),
+                                artifact_path="source",
+                            )
+
                     manifest = build_model_manifest(
-                        primary_model_path, companion_artifacts, metrics, workspace
+                        primary_model_path=primary_model_path,
+                        companion_artifacts=companion_artifacts,
+                        metrics=metrics,
+                        workspace=workspace,
+                        source_type=model_source_type,
                     )
                     mlflow.log_text(
-                        json.dumps(manifest, indent=2, ensure_ascii=False, default=str),
+                        json.dumps(
+                            manifest,
+                            indent=2,
+                            ensure_ascii=False,
+                            default=str,
+                        ),
                         artifact_file="platform_model/model-manifest.json",
                     )
-                    mlflow.log_artifact(str(script_path), artifact_path="source")
-                    requirements_file = workspace / "requirements.txt"
-                    dockerfile = workspace / "Dockerfile"
-                    if requirements_file.exists():
-                        mlflow.log_artifact(str(requirements_file), artifact_path="source")
-                    if dockerfile.exists():
-                        mlflow.log_artifact(str(dockerfile), artifact_path="source")
                 except Exception as exc:
-                    print(f"[PLATFORM_MODEL] Could not log manifest/source artifacts: {exc}")
+                    print(
+                        "[PLATFORM_MODEL] Could not log source/manifest: "
+                        f"{exc}"
+                    )
 
-                if artifact_result.get("logged_model_uri"):
-                    logged_model_uri = artifact_result["logged_model_uri"]
-
-                # Log des fichiers auxiliaires pour audit, sans les prendre pour des modèles.
                 for artifact_path in model_artifacts:
                     if artifact_path == primary_model_path:
                         continue
                     try:
-                        mlflow.log_artifact(str(artifact_path), artifact_path="raw_user_artifacts")
-                    except Exception as exc:
-                        print(f"[PLATFORM_MODEL] Could not log auxiliary artifact {artifact_path}: {exc}")
-
-            if logged_model_uri:
-                try:
-                    registered_version = mlflow.register_model(
-                        model_uri=logged_model_uri,
-                        name=platform_registered_model_name,
-                    )
-
-                    mlflow.log_param(
-                        "platform_model_source_type",
-                        "LOCAL_MODEL_FILE",
-                    )
-                    platform_model_registered = True
-                    platform_model_version = str(registered_version.version)
-
-                    mlflow.log_param(
-                        "platform_model_version",
-                        platform_model_version,
-                    )
-
-                    # Tags exploités par le backend pour relier précisément
-                    # ce run à SA version MLflow Registry.
-                    mlflow.set_tag("model_version", platform_model_version)
-                    mlflow.set_tag("registered_model_version", platform_model_version)
-                    mlflow.set_tag("platform_model_registered", "true")
-                    mlflow.set_tag("validation_status", "PENDING")
-                    mlflow.set_tag(
-                        "platform_model_uri",
-                        f"models:/{platform_registered_model_name}/{platform_model_version}",
-                    )
-                    client = MlflowClient()
-                    for key, value in {
-                        "platform_run_id": platform_run_id,
-                        "platform_experiment_id": str(platform_experiment_id),
-                        "validation_status": "PENDING",
-                    }.items():
-                        client.set_model_version_tag(
-                            name=platform_registered_model_name,
-                            version=platform_model_version,
-                            key=key,
-                            value=value,
+                        mlflow.log_artifact(
+                            str(artifact_path),
+                            artifact_path="raw_user_artifacts",
                         )
-                    print(
-                        "[PLATFORM_MODEL] Version registered as PENDING. "
-                        "Promotion is delegated to the backend validation/promotion service."
+                    except Exception as exc:
+                        print(
+                            "[PLATFORM_MODEL] Could not log auxiliary artifact "
+                            f"{artifact_path}: {exc}"
+                        )
+
+                if logged_model_uri:
+                    (
+                        platform_model_registered,
+                        platform_model_version,
+                    ) = register_logged_platform_model(
+                        logged_model_uri=logged_model_uri,
+                        registered_model_name=platform_registered_model_name,
+                        platform_run_id=platform_run_id,
+                        platform_experiment_id=str(platform_experiment_id),
+                        source_type=model_source_type,
                     )
 
-                    print(
-                        "[PLATFORM_MODEL] Local model registered as platform model: "
-                        f"{platform_registered_model_name} v{registered_version.version}"
-                    )
-
-                except Exception as exc:
-                    print(
-                        "[PLATFORM_MODEL] Failed to register local model as platform model: "
-                        f"{exc}"
-                    )
-
-            mlflow.log_text(
-                json.dumps(artifact_results, indent=2, default=str, ensure_ascii=False),
-                artifact_file="logs/model_artifacts.json",
+        # ------------------------------------------------------------------
+        # Strategy 3: model created by advanced user code in MLflow.
+        # ------------------------------------------------------------------
+        if not platform_model_registered:
+            print(
+                "[PLATFORM_MODEL] No registered model yet. "
+                "Searching user-created MLflow models..."
             )
 
-        else:
-            print("[PLATFORM_MODEL] No local model artifact detected.")
-            print("[PLATFORM_MODEL] Searching user-created MLflow models...")
-
             client = MlflowClient()
-
             user_model_candidate = find_user_created_mlflow_model(
                 client=client,
                 start_time_ms=script_start_time_ms,
@@ -1885,6 +2428,7 @@ def run_standard_runtime(
             )
 
             if user_model_candidate:
+                model_source_type = "USER_MLFLOW_MODEL"
                 logged_model_uri = register_user_mlflow_model_as_platform_model(
                     candidate=user_model_candidate,
                     platform_registered_model_name=platform_registered_model_name,
@@ -1892,31 +2436,59 @@ def run_standard_runtime(
 
                 if logged_model_uri:
                     platform_model_registered = True
+                    try:
+                        model_version = MlflowClient().get_model_version_by_alias(
+                            platform_registered_model_name,
+                            "production",
+                        )
+                        platform_model_version = str(model_version.version)
+                    except Exception:
+                        platform_model_version = None
 
-                mlflow.log_text(
-                    json.dumps(
-                        {
-                            "strategy": "USER_MLFLOW_MODEL_RE_REGISTERED",
-                            "user_model_name": user_model_candidate.name,
-                            "user_model_version": user_model_candidate.version,
-                            "user_model_source": user_model_candidate.source,
-                            "user_model_run_id": user_model_candidate.run_id,
-                            "platform_registered_model_name": platform_registered_model_name,
-                            "platform_model_uri": logged_model_uri,
-                        },
-                        indent=2,
-                        ensure_ascii=False,
+                artifact_results.append(
+                    {
+                        "strategy": model_source_type,
+                        "user_model_name": user_model_candidate.name,
+                        "user_model_version": user_model_candidate.version,
+                        "platform_model_uri": logged_model_uri,
+                    }
+                )
+
+        if not artifact_results:
+            artifact_results.append(
+                {
+                    "strategy": "NONE",
+                    "message": (
+                        "No in-memory model, supported local artifact, "
+                        "or user-created MLflow model was detected."
                     ),
-                    artifact_file="logs/model_artifacts.json",
-                )
+                }
+            )
 
-            else:
-                print("[PLATFORM_MODEL] No model candidate detected.")
+        mlflow.log_text(
+            json.dumps(
+                artifact_results,
+                indent=2,
+                default=str,
+                ensure_ascii=False,
+            ),
+            artifact_file="logs/model_artifacts.json",
+        )
 
-                mlflow.log_text(
-                    "No model artifact detected and no user-created MLflow model found.",
-                    artifact_file="logs/model_artifacts.json",
-                )
+        # Source files are useful for reproducibility in every strategy.
+        try:
+            mlflow.log_artifact(str(script_path), artifact_path="source")
+            for source_file in (
+                workspace / "requirements.txt",
+                workspace / "Dockerfile",
+            ):
+                if source_file.exists():
+                    mlflow.log_artifact(
+                        str(source_file),
+                        artifact_path="source",
+                    )
+        except Exception as exc:
+            print(f"[PLATFORM_MODEL] Could not log source files: {exc}")
 
     recovered_success = (
         result.returncode != 0
@@ -1924,63 +2496,57 @@ def run_standard_runtime(
         and platform_model_registered
     )
 
-    require_registered_model = (
-        os.environ.get("PLATFORM_REQUIRE_MODEL_ARTIFACT", "true").strip().lower()
-        not in {"false", "0", "no", "off"}
+    require_registered_model = _truthy_env(
+        "PLATFORM_REQUIRE_MODEL_ARTIFACT",
+        True,
     )
 
     no_registered_model_error: Optional[Dict[str, Any]] = None
-
-    if result.returncode == 0 and require_registered_model and not platform_model_registered:
+    if (
+        result.returncode == 0
+        and require_registered_model
+        and not platform_model_registered
+    ):
         no_registered_model_error = {
             "phase": "PLATFORM_MODEL_REGISTRATION",
             "cause": "no_registered_model_created",
             "message": (
-                "Le script s'est exécuté sans erreur, mais la plateforme n'a pas pu "
-                "enregistrer de version de modèle dans MLflow Registry."
+                "Le script s'est exécuté, mais aucun modèle exploitable "
+                "n'a été enregistré dans MLflow Registry."
             ),
             "suggestion": (
-                "Le script doit produire au moins un artefact prédictif supporté "
-                "(.pkl, .joblib, .pt, .pth, .keras, .h5, .onnx, .cbm, .bst, .ubj). "
-                "La plateforme se charge de sa détection et de son enregistrement MLflow."
+                "Méthode recommandée : exposez une fonction train() qui "
+                "retourne {'model': trained_model, 'metrics': {...}}. "
+                "Compatibilité : produire un fichier modèle supporté dans outputs/."
             ),
-            "detected_model_files": [str(path) for path in model_artifacts],
+            "contract_error": contract_error,
+            "detected_model_files": [
+                str(path) for path in model_artifacts
+            ],
             "logged_model_uri": logged_model_uri,
             "platform_model_registered": platform_model_registered,
         }
-
-        print("[PLATFORM_MODEL] No platform model version was registered.")
-        print(json.dumps(no_registered_model_error, indent=2, ensure_ascii=False, default=str))
-
-    final_success = (
-        recovered_success
-        or (
-            result.returncode == 0
-            and (
-                not require_registered_model
-                or platform_model_registered
+        print(
+            json.dumps(
+                no_registered_model_error,
+                indent=2,
+                ensure_ascii=False,
+                default=str,
             )
+        )
+
+    final_success = recovered_success or (
+        result.returncode == 0
+        and (
+            not require_registered_model
+            or platform_model_registered
         )
     )
 
     final_status = "SUCCESS" if final_success else "FAILED"
-    effective_return_code = 0 if final_success else (result.returncode or 1)
-
-    if recovered_success:
-        print(
-            "[PLATFORM_RECOVERY] Recovery completed successfully. "
-            "The user script failed only in its own MLflow logic, "
-            "but the platform registered the detected model."
-        )
-        if platform_model_version:
-            print(f"registered_model_name={platform_registered_model_name}")
-            print(f"model_version={platform_model_version}")
-            print(f"production_version={platform_model_version}")
-            print(
-                "model_uri="
-                f"models:/{platform_registered_model_name}/{platform_model_version}"
-            )
-            print(f"model_alias_uri=models:/{platform_registered_model_name}@production")
+    effective_return_code = (
+        0 if final_success else (result.returncode or 1)
+    )
 
     return RunResult(
         status=final_status,
@@ -1990,7 +2556,11 @@ def run_standard_runtime(
         metrics=metrics,
         model_paths=[str(path) for path in model_artifacts],
         logged_model_uri=logged_model_uri,
-        error=None if final_success else (no_registered_model_error or error_info),
+        error=(
+            None
+            if final_success
+            else (no_registered_model_error or error_info or contract_error)
+        ),
         analysis=analysis,
     )
 
