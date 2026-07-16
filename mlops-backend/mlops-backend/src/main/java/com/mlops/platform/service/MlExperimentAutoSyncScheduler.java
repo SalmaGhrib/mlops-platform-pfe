@@ -40,7 +40,7 @@ public class MlExperimentAutoSyncScheduler {
             initialDelayString = "${app.mlops.auto-sync.initial-delay-ms:30000}"
     )
     @SchedulerLock(
-            name = "mlExperimentAutoSync",
+            name = "mlopsLifecycleCoordinator",
             lockAtMostFor = "30m",
             lockAtLeastFor = "1m"
     )

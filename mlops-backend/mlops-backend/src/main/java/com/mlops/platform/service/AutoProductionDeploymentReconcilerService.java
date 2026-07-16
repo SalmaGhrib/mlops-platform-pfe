@@ -52,7 +52,7 @@ public class AutoProductionDeploymentReconcilerService {
             fixedDelayString = "${app.mlops.production-reconciler.delay-ms:30000}",
             initialDelayString = "${app.mlops.production-reconciler.initial-delay-ms:20000}"
     )
-    @SchedulerLock(name = "productionDeploymentReconciler", lockAtMostFor = "30m", lockAtLeastFor = "30s")
+    @SchedulerLock(name = "mlopsLifecycleCoordinator", lockAtMostFor = "30m", lockAtLeastFor = "30s")
     public void reconcileProductionDeployments() {
         if (!autoDeployEnabled || !reconcilerEnabled) {
             return;

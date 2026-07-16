@@ -532,8 +532,8 @@ experiment.setMessage(
     MlProject project = mlProjectRepository.findByIdAndOwner(projectId, owner)
             .orElseThrow(() -> new RuntimeException("Project not found"));
 
-    syncPendingExperimentsLightIfNeeded(project);
-
+    // Read endpoints must not start database-writing synchronizations.
+    // The distributed scheduled lifecycle performs synchronization safely.
     List<MlExperiment> experiments =
             mlExperimentRepository.findByProjectOrderByCreatedAtDesc(project);
 
@@ -547,30 +547,13 @@ experiment.setMessage(
 }
 
     public void triggerImmediateProjectSync(Long projectId) {
-        if (projectId == null) {
-            return;
+        // Intentionally do not create unmanaged threads here. With multiple backend
+        // replicas, those threads can race with AUTO_SYNC/CUSTOM_DOCKER/PRODUCTION
+        // and lock the same ml_experiments row. The distributed lifecycle scheduler
+        // runs every 30 seconds and is protected by ShedLock.
+        if (projectId != null) {
+            System.out.println("[AUTO_SYNC] Project queued for scheduled sync. projectId=" + projectId);
         }
-
-        Thread syncThread = new Thread(() -> {
-            try {
-                Thread.sleep(3000L);
-
-                Optional<MlProject> projectOptional = mlProjectRepository.findById(projectId);
-
-                if (projectOptional.isEmpty()) {
-                    return;
-                }
-
-                System.out.println("[AUTO_SYNC] Immediate project sync triggered for projectId=" + projectId);
-                syncPendingExperimentsLightIfNeeded(projectOptional.get());
-            } catch (Exception e) {
-                System.out.println("[AUTO_SYNC] Immediate project sync failed for projectId=" + projectId);
-                System.out.println("[AUTO_SYNC] Reason: " + e.getMessage());
-            }
-        }, "immediate-project-sync-" + projectId);
-
-        syncThread.setDaemon(true);
-        syncThread.start();
     }
 
     private void syncPendingExperimentsLightIfNeeded(MlProject project) {
@@ -3540,11 +3523,10 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
         return priorities;
     }
 
-    List<String> configured = List.of(
-            project.getPrimaryMetric1(),
-            project.getPrimaryMetric2(),
-            project.getPrimaryMetric3()
-    );
+    List<String> configured = new ArrayList<>();
+    configured.add(project.getPrimaryMetric1());
+    configured.add(project.getPrimaryMetric2());
+    configured.add(project.getPrimaryMetric3());
 
     for (String metric : configured) {
         String normalized = normalizeMetricKey(metric);

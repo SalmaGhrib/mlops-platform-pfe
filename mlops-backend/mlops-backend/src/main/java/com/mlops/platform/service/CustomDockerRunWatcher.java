@@ -53,7 +53,7 @@ public class CustomDockerRunWatcher {
     }
 
     @Scheduled(fixedDelayString = "${app.custom-docker.watcher.delay-ms:30000}")
-    @SchedulerLock(name = "customDockerRunWatcher", lockAtMostFor = "30m", lockAtLeastFor = "20s")
+    @SchedulerLock(name = "mlopsLifecycleCoordinator", lockAtMostFor = "30m", lockAtLeastFor = "20s")
     public void watchCustomDockerRuns() {
         if (!watcherEnabled) {
             return;

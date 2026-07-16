@@ -49,9 +49,9 @@ METRIC_REGEX = re.compile(
     r"loss|val_loss|accuracy|val_accuracy|acc|f1|f1_score|precision|recall|"
     r"rmse|mse|mae|r2|r2_score|auc|roc_auc"
     r")"
-    r"(?:\\s+[^:=]*?)?"
-    r"\\s*[:=]\\s*"
-    r"(?P<value>[-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?)",
+    r"(?:\s+[^:=]*?)?"
+    r"\s*[:=]\s*"
+    r"(?P<value>[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)",
     re.IGNORECASE,
 )
 
