@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
 
 @Service
@@ -47,7 +48,7 @@ public class AutoRetrainingService {
             return;
         }
 
-        LocalDateTime claimTime = LocalDateTime.now();
+        LocalDateTime claimTime = LocalDateTime.now(Clock.systemUTC());
         int claimed = retrainingConfigRepository.claimDueConfig(configId, claimTime);
 
         if (claimed == 0) {
@@ -87,7 +88,7 @@ public class AutoRetrainingService {
             }
 
             if (decision == null || !decision.isShouldRetrain()) {
-                LocalDateTime now = LocalDateTime.now();
+                LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
                 LocalDateTime next = config.calculateNextRetrainingDate(now);
                 String reason = decision != null ? decision.getReason() : "Aucune décision de monitoring disponible.";
 
@@ -138,7 +139,7 @@ public class AutoRetrainingService {
                     productionSourceExperimentId
             );
 
-            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
             LocalDateTime next = config.calculateNextRetrainingDate(now);
 
             releaseAfterSuccess(configId, now, next);
@@ -161,7 +162,7 @@ public class AutoRetrainingService {
             RetrainingConfig latest = retrainingConfigRepository.findById(configId).orElse(config);
 
             LocalDateTime next = latest != null && latest.isEnabled()
-                    ? latest.calculateNextRetrainingDate(LocalDateTime.now())
+                    ? latest.calculateNextRetrainingDate(LocalDateTime.now(Clock.systemUTC()))
                     : null;
 
             releaseAfterFailure(configId, next);
@@ -204,7 +205,7 @@ public class AutoRetrainingService {
                 configId,
                 lastRetrainingAt,
                 nextRetrainingAt,
-                LocalDateTime.now()
+                LocalDateTime.now(Clock.systemUTC())
         );
     }
 
@@ -216,7 +217,7 @@ public class AutoRetrainingService {
         retrainingConfigRepository.releaseAfterFailure(
                 configId,
                 nextRetrainingAt,
-                LocalDateTime.now()
+                LocalDateTime.now(Clock.systemUTC())
         );
     }
 
@@ -230,7 +231,7 @@ public class AutoRetrainingService {
                 configId,
                 nextRetrainingAt,
                 safeMessage(decisionReason),
-                LocalDateTime.now()
+                LocalDateTime.now(Clock.systemUTC())
         );
     }
 

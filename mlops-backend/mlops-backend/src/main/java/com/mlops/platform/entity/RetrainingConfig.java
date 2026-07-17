@@ -1,6 +1,7 @@
 package com.mlops.platform.entity;
 
 import jakarta.persistence.*;
+import java.time.Clock;
 import java.time.LocalDateTime;
 
 @Entity
@@ -79,7 +80,7 @@ public class RetrainingConfig {
 
     @PrePersist
     public void onCreate() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
         this.createdAt = now;
         this.updatedAt = now;
 
@@ -99,7 +100,7 @@ public class RetrainingConfig {
 
     @PreUpdate
     public void onUpdate() {
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(Clock.systemUTC());
         normalizeFrequency();
         normalizeMonitoringSettings();
 
@@ -151,7 +152,7 @@ public class RetrainingConfig {
     }
 
     public LocalDateTime calculateNextRetrainingDate(LocalDateTime fromDate) {
-        LocalDateTime base = fromDate != null ? fromDate : LocalDateTime.now();
+        LocalDateTime base = fromDate != null ? fromDate : LocalDateTime.now(Clock.systemUTC());
         normalizeFrequency();
 
         return switch (frequencyType) {

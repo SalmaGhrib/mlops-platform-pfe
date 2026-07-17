@@ -76,10 +76,12 @@ public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long
      * Important : ne pas recharger les runs COMPLETED/FAILED/CANCELLED. Le watcher
      * ne doit gérer que la construction Kaniko et le job d'entraînement en cours.
      */
-    @EntityGraph(attributePaths = {"project", "modelFile", "datasetFile"})
     @Query("""
-            SELECT e
+            SELECT DISTINCT e
             FROM MlExperiment e
+            JOIN FETCH e.project p
+            LEFT JOIN FETCH e.modelFile mf
+            LEFT JOIN FETCH e.datasetFile df
             WHERE e.runtimeMode = :runtimeMode
               AND e.status IN :statuses
             ORDER BY e.createdAt ASC
@@ -96,10 +98,12 @@ public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long
      * accède au projet, au script Python ou au dataset après la fermeture de la
      * session Hibernate.
      */
-    @EntityGraph(attributePaths = {"project", "modelFile", "datasetFile"})
     @Query("""
-            SELECT e
+            SELECT DISTINCT e
             FROM MlExperiment e
+            JOIN FETCH e.project p
+            LEFT JOIN FETCH e.modelFile mf
+            LEFT JOIN FETCH e.datasetFile df
             WHERE e.id = :id
             """)
     Optional<MlExperiment> findByIdWithFiles(@Param("id") Long id);

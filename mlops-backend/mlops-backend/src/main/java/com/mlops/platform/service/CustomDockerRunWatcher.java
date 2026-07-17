@@ -57,9 +57,9 @@ public class CustomDockerRunWatcher {
             initialDelayString = "${app.custom-docker.watcher.initial-delay-ms:10000}"
     )
     @SchedulerLock(
-            name = "customDockerRunWatcher",
+            name = "mlopsLifecycleCoordinator",
             lockAtMostFor = "PT5M",
-            lockAtLeastFor = "PT2S"
+            lockAtLeastFor = "PT1S"
     )
     public void watchCustomDockerRuns() {
         if (!watcherEnabled) {

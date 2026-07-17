@@ -2439,7 +2439,7 @@ private void deleteDuplicateExperimentRow(MlExperiment duplicate, MlExperiment k
     }
 
     private boolean isCustomDockerExperimentWaitingForBuild(MlExperiment experiment) {
-        if (experiment == null) {
+        if (experiment == null || isTerminalExperimentStatus(experiment.getStatus())) {
             return false;
         }
 
@@ -2652,11 +2652,18 @@ private void updateMessageFromFinalStatus(
     ExperimentStatus previousStatus = experiment.getStatus();
 
     if (isCustomDockerExperimentWaitingForBuild(experiment)) {
-        experiment.setStatus(ExperimentStatus.CREATED);
-        experiment.setMessage(
-                "CUSTOM_DOCKERFILE experiment is waiting for image build / dynamic Kubeflow launch. "
-                        + "MLflow synchronization is skipped for now."
-        );
+        if (experiment.getStatus() != ExperimentStatus.CREATED) {
+            experiment.setStatus(ExperimentStatus.CREATED);
+        }
+
+        if (experiment.getMessage() == null
+                || !experiment.getMessage().contains("waiting for image build")) {
+            experiment.setMessage(
+                    "CUSTOM_DOCKERFILE experiment is waiting for image build / dynamic Kubeflow launch. "
+                            + "MLflow synchronization is skipped for now."
+            );
+        }
+
         experiment.setErrorMessage(null);
         mlExperimentRepository.saveAndFlush(experiment);
         return;

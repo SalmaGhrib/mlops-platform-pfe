@@ -9,6 +9,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Component;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -44,7 +45,7 @@ public class AutoRetrainingScheduler {
             fixedDelayString = "${app.retraining.scheduler.delay-ms:60000}",
             initialDelayString = "${app.retraining.scheduler.initial-delay-ms:30000}"
     )
-    @SchedulerLock(name = "autoRetrainingScheduler", lockAtMostFor = "5m", lockAtLeastFor = "10s")
+    @SchedulerLock(name = "autoRetrainingScheduler", lockAtMostFor = "PT10M", lockAtLeastFor = "PT2S")
     public void checkScheduledRetraining() {
         if (!schedulerEnabled) {
             return;
@@ -56,7 +57,7 @@ public class AutoRetrainingScheduler {
         }
 
         try {
-            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
 
             LocalDateTime cutoff = now.minusMinutes(Math.max(5L, stuckTimeoutMinutes));
             int reset = retrainingConfigRepository.resetStuckRunningConfigs(cutoff, now);
@@ -118,7 +119,7 @@ public class AutoRetrainingScheduler {
                             + ", nextRetrainingAt="
                             + freshConfig.getNextRetrainingAt());
 
-                    autoRetrainingService.launchScheduledRetraining(freshConfig);
+                    autoRetrainingService.launchScheduledRetraining(freshConfig.getId());
 
                 } catch (Exception e) {
                     System.err.println("[AUTO_RETRAINING] Failed to launch retraining for projectId="

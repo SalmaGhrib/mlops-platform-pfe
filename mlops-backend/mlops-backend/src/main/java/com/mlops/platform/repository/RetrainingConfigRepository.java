@@ -53,8 +53,10 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             FROM RetrainingConfig c
             WHERE c.enabled = true
               AND c.running = false
-              AND c.nextRetrainingAt IS NOT NULL
-              AND c.nextRetrainingAt <= :now
+              AND (
+                    c.manualTriggerRequested = true
+                    OR (c.nextRetrainingAt IS NOT NULL AND c.nextRetrainingAt <= :now)
+              )
             ORDER BY c.nextRetrainingAt ASC, c.id ASC
             """)
     List<RetrainingConfig> findDueConfigs(@Param("now") LocalDateTime now);
@@ -80,8 +82,10 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             WHERE c.id = :id
               AND c.enabled = true
               AND c.running = false
-              AND c.nextRetrainingAt IS NOT NULL
-              AND c.nextRetrainingAt <= :now
+              AND (
+                    c.manualTriggerRequested = true
+                    OR (c.nextRetrainingAt IS NOT NULL AND c.nextRetrainingAt <= :now)
+              )
             """)
     int claimDueConfig(@Param("id") Long id, @Param("now") LocalDateTime now);
 
