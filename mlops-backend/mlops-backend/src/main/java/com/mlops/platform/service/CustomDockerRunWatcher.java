@@ -88,7 +88,7 @@ public class CustomDockerRunWatcher {
                 // Relecture courte : évite de traiter un objet devenu terminal entre la requête
                 // initiale et son traitement dans la boucle.
                 MlExperiment freshExperiment = mlExperimentRepository
-                        .findById(experiment.getId())
+                        .findByIdWithFiles(experiment.getId())
                         .orElse(null);
 
                 if (freshExperiment == null || isTerminalStatus(freshExperiment.getStatus())) {
@@ -181,7 +181,7 @@ public class CustomDockerRunWatcher {
         }
 
         MlExperiment freshExperiment = mlExperimentRepository
-                .findById(experiment.getId())
+                .findByIdWithFiles(experiment.getId())
                 .orElse(null);
 
         if (freshExperiment == null || isTerminalStatus(freshExperiment.getStatus())) {
@@ -250,6 +250,17 @@ public class CustomDockerRunWatcher {
 
         } catch (Exception e) {
             String logs = safe(e.getMessage());
+
+            if (isTransientPersistenceFailure(e)) {
+                System.out.println("[CUSTOM-DOCKER] Temporary persistence error before Kaniko creation. "
+                        + "The experiment remains actionable and will be retried. experimentId="
+                        + experiment.getId()
+                        + ", reason="
+                        + logs);
+                e.printStackTrace();
+                return;
+            }
+
             experiment.setBuildLogs(logs);
             markFailedWithAnalyzer(experiment, logs);
             System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
@@ -522,7 +533,7 @@ public class CustomDockerRunWatcher {
                 tryStandardizeModelArtifactIfPossible(experiment, "training-completed");
 
         if (!artifactReady) {
-            MlExperiment managedExperiment = mlExperimentRepository.findById(experiment.getId())
+            MlExperiment managedExperiment = mlExperimentRepository.findByIdWithFiles(experiment.getId())
                     .orElse(experiment);
 
             managedExperiment.setProduction(false);
@@ -544,7 +555,7 @@ public class CustomDockerRunWatcher {
             return;
         }
 
-        MlExperiment refreshedExperiment = mlExperimentRepository.findById(experiment.getId())
+        MlExperiment refreshedExperiment = mlExperimentRepository.findByIdWithFiles(experiment.getId())
                 .orElse(experiment);
 
         refreshedExperiment.setMessage(
@@ -619,7 +630,7 @@ public class CustomDockerRunWatcher {
             }
 
             if (result.isSuccess() && !result.isSkipped()) {
-                MlExperiment refreshed = mlExperimentRepository.findById(experiment.getId())
+                MlExperiment refreshed = mlExperimentRepository.findByIdWithFiles(experiment.getId())
                         .orElse(experiment);
 
                 refreshed.setMessage(
@@ -715,7 +726,7 @@ public class CustomDockerRunWatcher {
             return false;
         }
 
-        MlExperiment managedExperiment = mlExperimentRepository.findById(experiment.getId())
+        MlExperiment managedExperiment = mlExperimentRepository.findByIdWithFiles(experiment.getId())
                 .orElse(experiment);
 
         managedExperiment.setRegisteredModelName(registeredModelName);
@@ -1231,6 +1242,36 @@ public class CustomDockerRunWatcher {
                         || buildStatus.equals("TRAINING_STARTING")
                         || buildStatus.equals("TRAINING_RUNNING")
         );
+    }
+
+    /**
+     * Les erreurs Hibernate de session fermée, de verrou ou de concurrence sont
+     * temporaires. Elles ne doivent pas transformer un run CREATED en FAILED :
+     * le prochain passage du watcher doit pouvoir réessayer.
+     */
+    private boolean isTransientPersistenceFailure(Throwable error) {
+        Throwable current = error;
+
+        while (current != null) {
+            String className = current.getClass().getName();
+            String message = safe(current.getMessage()).toLowerCase();
+
+            if (className.contains("LazyInitializationException")
+                    || className.contains("PessimisticLock")
+                    || className.contains("OptimisticLock")
+                    || className.contains("StaleObjectState")
+                    || className.contains("CannotAcquireLock")
+                    || message.contains("could not initialize proxy")
+                    || message.contains("no session")
+                    || message.contains("lock wait timeout")
+                    || message.contains("row was updated or deleted by another transaction")) {
+                return true;
+            }
+
+            current = current.getCause();
+        }
+
+        return false;
     }
 
     private String normalizeMetricName(String metricName) {

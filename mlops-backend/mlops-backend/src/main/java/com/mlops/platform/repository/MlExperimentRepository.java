@@ -89,6 +89,21 @@ public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long
             @Param("statuses") List<ExperimentStatus> statuses
     );
 
+    /**
+     * Recharge une expérience avec toutes les relations nécessaires au watcher.
+     *
+     * Cette méthode évite les LazyInitializationException lorsque le scheduler
+     * accède au projet, au script Python ou au dataset après la fermeture de la
+     * session Hibernate.
+     */
+    @EntityGraph(attributePaths = {"project", "modelFile", "datasetFile"})
+    @Query("""
+            SELECT e
+            FROM MlExperiment e
+            WHERE e.id = :id
+            """)
+    Optional<MlExperiment> findByIdWithFiles(@Param("id") Long id);
+
     /*
      * Recherche par MLflow Run ID.
      */
