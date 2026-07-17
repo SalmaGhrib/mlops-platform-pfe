@@ -6,7 +6,6 @@ import com.mlops.platform.entity.MlExperimentMetric;
 import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.repository.MlExperimentMetricRepository;
 import com.mlops.platform.repository.MlExperimentRepository;
-import com.mlops.platform.repository.RetrainingConfigRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,64 +23,79 @@ public class ModelPromotionService {
     private final MlExperimentRepository mlExperimentRepository;
     private final MlExperimentMetricRepository mlExperimentMetricRepository;
     private final MlflowTrackingClientService mlflowTrackingClientService;
-    private final RetrainingConfigRepository retrainingConfigRepository;
+    private final RetrainingSourcePersistenceService
+            retrainingSourcePersistenceService;
 
     public ModelPromotionService(
             MlExperimentRepository mlExperimentRepository,
             MlExperimentMetricRepository mlExperimentMetricRepository,
             MlflowTrackingClientService mlflowTrackingClientService,
-            RetrainingConfigRepository retrainingConfigRepository
+            RetrainingSourcePersistenceService
+                    retrainingSourcePersistenceService
     ) {
         this.mlExperimentRepository = mlExperimentRepository;
-        this.mlExperimentMetricRepository = mlExperimentMetricRepository;
-        this.mlflowTrackingClientService = mlflowTrackingClientService;
-        this.retrainingConfigRepository = retrainingConfigRepository;
+        this.mlExperimentMetricRepository =
+                mlExperimentMetricRepository;
+        this.mlflowTrackingClientService =
+                mlflowTrackingClientService;
+        this.retrainingSourcePersistenceService =
+                retrainingSourcePersistenceService;
     }
 
     /**
-     * Recalcule la meilleure expérience d'un projet selon l'ordre de priorité des métriques,
-     * puis met une seule expérience en production.
+     * Recalcule la meilleure expérience d'un projet selon l'ordre de priorité
+     * des métriques, puis met une seule expérience en production.
      *
-     * Nouvelle règle :
-     * - primaryMetric1 = priorité 1
-     * - primaryMetric2 = priorité 2
-     * - primaryMetric3 = priorité 3
-     *
-     * Important :
-     * - modelVersion = version réelle MLflow du run. On ne l'écrase jamais ici.
-     * - productionVersion = version actuellement promue en production.
-     * - production = true uniquement pour le meilleur experiment ID.
+     * Règles :
+     * - primaryMetric1 = priorité 1 ;
+     * - primaryMetric2 = priorité 2 ;
+     * - primaryMetric3 = priorité 3 ;
+     * - modelVersion reste la version MLflow réelle du run ;
+     * - productionVersion désigne la version actuellement promue ;
+     * - une seule expérience exacte peut avoir production=true.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(
+            propagation = Propagation.REQUIRES_NEW,
+            timeout = 60
+    )
     public MlExperiment recalculateProductionForProject(
             MlProject project,
             String registeredModelName
     ) {
         if (project == null) {
-            throw new RuntimeException("Project is required");
+            throw new IllegalArgumentException("Project is required");
         }
 
-        if (registeredModelName == null || registeredModelName.isBlank()) {
-            throw new RuntimeException("registeredModelName is required");
+        if (registeredModelName == null
+                || registeredModelName.isBlank()) {
+            throw new IllegalArgumentException(
+                    "registeredModelName is required"
+            );
         }
 
-        String cleanRegisteredModelName = registeredModelName.trim();
+        String cleanRegisteredModelName =
+                registeredModelName.trim();
 
-        List<String> selectedMetrics = getSelectedProjectMetrics(project);
+        List<String> selectedMetrics =
+                getSelectedProjectMetrics(project);
 
         if (selectedMetrics.isEmpty()) {
-            throw new RuntimeException("Project must have at least one priority metric");
+            throw new IllegalStateException(
+                    "Project must have at least one priority metric"
+            );
         }
 
         List<MlExperiment> experiments =
-                mlExperimentRepository.findByProjectAndRegisteredModelNameOrderByCreatedAtDesc(
-                        project,
-                        cleanRegisteredModelName
-                );
+                mlExperimentRepository
+                        .findByProjectAndRegisteredModelNameOrderByCreatedAtDesc(
+                                project,
+                                cleanRegisteredModelName
+                        );
 
         if (experiments == null || experiments.isEmpty()) {
-            throw new RuntimeException(
-                    "No experiments found for registeredModelName=" + cleanRegisteredModelName
+            throw new IllegalStateException(
+                    "No experiments found for registeredModelName="
+                            + cleanRegisteredModelName
             );
         }
 
@@ -89,15 +103,15 @@ public class ModelPromotionService {
 
         /*
          * Étape 1 :
-         * On recalcule primaryMetric, primaryMetricValue et globalScore
-         * pour toutes les expériences COMPLETED qui ont une vraie version MLflow.
+         * recalcul des scores pour chaque expérience éligible.
          */
         for (MlExperiment experiment : experiments) {
             if (!isEligibleExperiment(experiment)) {
                 continue;
             }
 
-            Map<String, Double> metricValues = loadMetricValues(experiment);
+            Map<String, Double> metricValues =
+                    loadMetricValues(experiment);
 
             if (metricValues.isEmpty()) {
                 continue;
@@ -110,7 +124,8 @@ public class ModelPromotionService {
                     metricValues
             );
 
-            MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(experiment);
+            MlExperiment savedExperiment =
+                    mlExperimentRepository.saveAndFlush(experiment);
 
             updateMetricsGlobalScore(
                     savedExperiment,
@@ -128,20 +143,27 @@ public class ModelPromotionService {
         }
 
         if (bestExperiment == null) {
-            throw new RuntimeException(
-                    "No eligible completed experiment found for production promotion"
+            throw new IllegalStateException(
+                    "No eligible completed experiment found "
+                            + "for production promotion"
             );
         }
 
         String bestVersion = bestExperiment.getModelVersion();
 
         if (bestVersion == null || bestVersion.isBlank()) {
-            throw new RuntimeException("Best experiment has no model version");
+            throw new IllegalStateException(
+                    "Best experiment has no model version"
+            );
         }
 
         /*
-         * Étape 2 :
          * MLflow reçoit l'alias production sur la version gagnante.
+         *
+         * Remarque :
+         * cette méthode effectue un appel externe. Pour une architecture encore
+         * plus stricte, elle pourra ensuite être séparée dans un orchestrateur
+         * non transactionnel. Le timeout limite néanmoins la transaction.
          */
         mlflowTrackingClientService.setProductionAlias(
                 cleanRegisteredModelName,
@@ -149,15 +171,8 @@ public class ModelPromotionService {
         );
 
         /*
-         * Étape 3 :
-         * Côté MySQL, UNE SEULE ligne doit être production.
-         *
-         * Très important :
-         * On ne teste pas seulement modelVersion == bestVersion,
-         * parce que si deux runs ont accidentellement modelVersion = 1,
-         * les deux deviendraient production.
-         *
-         * On teste l'ID exact du meilleur run.
+         * Étape 2 :
+         * une seule ligne MySQL reçoit production=true.
          */
         Long bestExperimentId = bestExperiment.getId();
 
@@ -165,17 +180,16 @@ public class ModelPromotionService {
             boolean isProduction =
                     experiment.getId() != null
                             && bestExperimentId != null
-                            && experiment.getId().equals(bestExperimentId);
+                            && experiment.getId()
+                            .equals(bestExperimentId);
 
             experiment.setProduction(isProduction);
+            experiment.setProductionVersion(
+                    isProduction ? bestVersion : null
+            );
 
-            if (isProduction) {
-                experiment.setProductionVersion(bestVersion);
-            } else {
-                experiment.setProductionVersion(null);
-            }
-
-            MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(experiment);
+            MlExperiment savedExperiment =
+                    mlExperimentRepository.save(experiment);
 
             updateMetricsProductionState(
                     savedExperiment,
@@ -184,32 +198,63 @@ public class ModelPromotionService {
             );
         }
 
+        mlExperimentRepository.flush();
+
         bestExperiment.setProduction(true);
         bestExperiment.setProductionVersion(bestVersion);
 
-        MlExperiment finalProduction = mlExperimentRepository.saveAndFlush(bestExperiment);
+        MlExperiment finalProduction =
+                mlExperimentRepository.saveAndFlush(bestExperiment);
 
-        if (project.getId() != null && finalProduction.getId() != null) {
-            retrainingConfigRepository.synchronizeSourceExperiment(
-                    project.getId(),
-                    finalProduction.getId()
-            );
+        /*
+         * Important :
+         * aucun appel direct au RetrainingConfigRepository.
+         * Le service de persistance ouvre une transaction indépendante,
+         * courte et dotée d'un mécanisme de retry.
+         */
+        if (project.getId() != null
+                && finalProduction.getId() != null) {
 
-            System.out.println("[RETRAINING_SOURCE] Updated after Production promotion. projectId="
-                    + project.getId()
-                    + ", sourceExperimentId=" + finalProduction.getId()
-                    + ", modelVersion=" + finalProduction.getModelVersion());
+            boolean sourceSynchronized =
+                    retrainingSourcePersistenceService
+                            .synchronizeSourceExperiment(
+                                    project.getId(),
+                                    finalProduction.getId()
+                            );
+
+            if (sourceSynchronized) {
+                System.out.println(
+                        "[RETRAINING_SOURCE] Updated after Production "
+                                + "promotion. projectId="
+                                + project.getId()
+                                + ", sourceExperimentId="
+                                + finalProduction.getId()
+                                + ", modelVersion="
+                                + finalProduction.getModelVersion()
+                );
+            } else {
+                System.err.println(
+                        "[RETRAINING_SOURCE] Synchronization postponed "
+                                + "after Production promotion. projectId="
+                                + project.getId()
+                                + ", sourceExperimentId="
+                                + finalProduction.getId()
+                );
+            }
         }
 
         return finalProduction;
     }
 
-    private boolean isEligibleExperiment(MlExperiment experiment) {
+    private boolean isEligibleExperiment(
+            MlExperiment experiment
+    ) {
         if (experiment == null) {
             return false;
         }
 
-        if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
+        if (experiment.getStatus()
+                != ExperimentStatus.COMPLETED) {
             return false;
         }
 
@@ -221,9 +266,12 @@ public class ModelPromotionService {
                 && experiment.getGlobalScore() != null;
     }
 
-    private Map<String, Double> loadMetricValues(MlExperiment experiment) {
+    private Map<String, Double> loadMetricValues(
+            MlExperiment experiment
+    ) {
         List<MlExperimentMetric> metrics =
-                mlExperimentMetricRepository.findByExperiment(experiment);
+                mlExperimentMetricRepository
+                        .findByExperiment(experiment);
 
         Map<String, Double> values = new HashMap<>();
 
@@ -238,40 +286,52 @@ public class ModelPromotionService {
                 continue;
             }
 
-            String metricName = cleanMetric(metric.getMetricName());
+            String metricName =
+                    cleanMetric(metric.getMetricName());
 
-            if (metricName == null) {
-                continue;
+            if (metricName != null) {
+                values.put(
+                        metricName,
+                        metric.getMetricValue()
+                );
             }
-
-            values.put(metricName, metric.getMetricValue());
         }
 
         return values;
     }
 
-    private List<String> getSelectedProjectMetrics(MlProject project) {
+    private List<String> getSelectedProjectMetrics(
+            MlProject project
+    ) {
         List<String> metrics = new ArrayList<>();
 
         if (project == null) {
             return metrics;
         }
 
-        addMetricIfPresent(metrics, project.getPrimaryMetric1());
-        addMetricIfPresent(metrics, project.getPrimaryMetric2());
-        addMetricIfPresent(metrics, project.getPrimaryMetric3());
+        addMetricIfPresent(
+                metrics,
+                project.getPrimaryMetric1()
+        );
+        addMetricIfPresent(
+                metrics,
+                project.getPrimaryMetric2()
+        );
+        addMetricIfPresent(
+                metrics,
+                project.getPrimaryMetric3()
+        );
 
         return metrics;
     }
 
-    private void addMetricIfPresent(List<String> metrics, String metricName) {
+    private void addMetricIfPresent(
+            List<String> metrics,
+            String metricName
+    ) {
         String cleaned = cleanMetric(metricName);
 
-        if (cleaned == null) {
-            return;
-        }
-
-        if (!metrics.contains(cleaned)) {
+        if (cleaned != null && !metrics.contains(cleaned)) {
             metrics.add(cleaned);
         }
     }
@@ -282,7 +342,9 @@ public class ModelPromotionService {
             List<String> selectedMetrics,
             Map<String, Double> metricValues
     ) {
-        if (experiment == null || selectedMetrics == null || selectedMetrics.isEmpty()) {
+        if (experiment == null
+                || selectedMetrics == null
+                || selectedMetrics.isEmpty()) {
             return;
         }
 
@@ -291,7 +353,11 @@ public class ModelPromotionService {
                 continue;
             }
 
-            Double value = getMetricValueCompatible(metricValues, metricName);
+            Double value =
+                    getMetricValueCompatible(
+                            metricValues,
+                            metricName
+                    );
 
             if (value == null) {
                 continue;
@@ -299,25 +365,33 @@ public class ModelPromotionService {
 
             experiment.setPrimaryMetric(metricName);
             experiment.setPrimaryMetricValue(value);
-            experiment.setDirection(inferDirection(metricName));
-            experiment.setGlobalScore(normalizeMetricScore(metricName, value));
+            experiment.setDirection(
+                    inferDirection(metricName)
+            );
+            experiment.setGlobalScore(
+                    normalizeMetricScore(
+                            metricName,
+                            value
+                    )
+            );
             return;
         }
 
-        String fallbackMetric = project != null ? cleanMetric(project.getPrimaryMetric1()) : null;
+        String fallbackMetric =
+                project != null
+                        ? cleanMetric(project.getPrimaryMetric1())
+                        : null;
 
         experiment.setPrimaryMetric(fallbackMetric);
         experiment.setPrimaryMetricValue(null);
-        experiment.setDirection(fallbackMetric != null ? inferDirection(fallbackMetric) : "max");
+        experiment.setDirection(
+                fallbackMetric != null
+                        ? inferDirection(fallbackMetric)
+                        : "max"
+        );
         experiment.setGlobalScore(null);
     }
 
-    /**
-     * Retour :
-     *  1  => candidate est meilleur que currentBest
-     * -1  => currentBest est meilleur
-     *  0  => égalité
-     */
     private int compareExperimentsByPriority(
             MlProject project,
             MlExperiment candidate,
@@ -332,27 +406,41 @@ public class ModelPromotionService {
             return 1;
         }
 
-        Map<String, Double> candidateMetrics = loadMetricValues(candidate);
-        Map<String, Double> bestMetrics = loadMetricValues(currentBest);
+        Map<String, Double> candidateMetrics =
+                loadMetricValues(candidate);
+        Map<String, Double> bestMetrics =
+                loadMetricValues(currentBest);
 
         List<String> priorities =
-                selectedMetrics != null && !selectedMetrics.isEmpty()
+                selectedMetrics != null
+                        && !selectedMetrics.isEmpty()
                         ? selectedMetrics
                         : getSelectedProjectMetrics(project);
 
         for (String metricName : priorities) {
-            if (metricName == null || metricName.isBlank()) {
+            if (metricName == null
+                    || metricName.isBlank()) {
                 continue;
             }
 
-            Double candidateValue = getMetricValueCompatible(candidateMetrics, metricName);
-            Double bestValue = getMetricValueCompatible(bestMetrics, metricName);
+            Double candidateValue =
+                    getMetricValueCompatible(
+                            candidateMetrics,
+                            metricName
+                    );
+            Double bestValue =
+                    getMetricValueCompatible(
+                            bestMetrics,
+                            metricName
+                    );
 
-            if (candidateValue == null && bestValue == null) {
+            if (candidateValue == null
+                    && bestValue == null) {
                 continue;
             }
 
-            if (candidateValue != null && bestValue == null) {
+            if (candidateValue != null
+                    && bestValue == null) {
                 return 1;
             }
 
@@ -360,22 +448,21 @@ public class ModelPromotionService {
                 return -1;
             }
 
-            String direction = inferDirection(metricName);
-
             int comparison;
 
-            if ("min".equalsIgnoreCase(direction)) {
-                /*
-                 * Pour rmse, mse, mae, loss :
-                 * plus petit = meilleur.
-                 */
-                comparison = Double.compare(bestValue, candidateValue);
+            if ("min".equalsIgnoreCase(
+                    inferDirection(metricName))) {
+                comparison =
+                        Double.compare(
+                                bestValue,
+                                candidateValue
+                        );
             } else {
-                /*
-                 * Pour accuracy, precision, recall, f1_score, r2 :
-                 * plus grand = meilleur.
-                 */
-                comparison = Double.compare(candidateValue, bestValue);
+                comparison =
+                        Double.compare(
+                                candidateValue,
+                                bestValue
+                        );
             }
 
             if (comparison != 0) {
@@ -383,43 +470,43 @@ public class ModelPromotionService {
             }
         }
 
-        /*
-         * Fallback 1 : globalScore.
-         */
-        int scoreComparison = compareNullableScores(
-                candidate.getGlobalScore(),
-                currentBest.getGlobalScore()
-        );
+        int scoreComparison =
+                compareNullableScores(
+                        candidate.getGlobalScore(),
+                        currentBest.getGlobalScore()
+                );
 
         if (scoreComparison != 0) {
             return scoreComparison;
         }
 
-        /*
-         * Fallback 2 : version MLflow la plus élevée.
-         * Ça évite de garder arbitrairement une ancienne version en cas d'égalité parfaite.
-         */
-        int versionComparison = compareModelVersions(
-                candidate.getModelVersion(),
-                currentBest.getModelVersion()
-        );
+        int versionComparison =
+                compareModelVersions(
+                        candidate.getModelVersion(),
+                        currentBest.getModelVersion()
+                );
 
         if (versionComparison != 0) {
             return versionComparison;
         }
 
-        /*
-         * Fallback 3 : run le plus récent.
-         */
-        return compareByCreatedAt(candidate, currentBest);
+        return compareByCreatedAt(
+                candidate,
+                currentBest
+        );
     }
 
-    private int compareNullableScores(Double candidateScore, Double bestScore) {
-        if (candidateScore == null && bestScore == null) {
+    private int compareNullableScores(
+            Double candidateScore,
+            Double bestScore
+    ) {
+        if (candidateScore == null
+                && bestScore == null) {
             return 0;
         }
 
-        if (candidateScore != null && bestScore == null) {
+        if (candidateScore != null
+                && bestScore == null) {
             return 1;
         }
 
@@ -427,12 +514,20 @@ public class ModelPromotionService {
             return -1;
         }
 
-        return Double.compare(candidateScore, bestScore);
+        return Double.compare(
+                candidateScore,
+                bestScore
+        );
     }
 
-    private int compareModelVersions(String candidateVersion, String bestVersion) {
-        Integer candidate = parseVersion(candidateVersion);
-        Integer best = parseVersion(bestVersion);
+    private int compareModelVersions(
+            String candidateVersion,
+            String bestVersion
+    ) {
+        Integer candidate =
+                parseVersion(candidateVersion);
+        Integer best =
+                parseVersion(bestVersion);
 
         if (candidate == null && best == null) {
             return 0;
@@ -456,20 +551,27 @@ public class ModelPromotionService {
 
         try {
             return Integer.parseInt(version.trim());
-        } catch (Exception e) {
+        } catch (NumberFormatException ignored) {
             return null;
         }
     }
 
-    private int compareByCreatedAt(MlExperiment candidate, MlExperiment currentBest) {
-        LocalDateTime candidateCreatedAt = candidate.getCreatedAt();
-        LocalDateTime bestCreatedAt = currentBest.getCreatedAt();
+    private int compareByCreatedAt(
+            MlExperiment candidate,
+            MlExperiment currentBest
+    ) {
+        LocalDateTime candidateCreatedAt =
+                candidate.getCreatedAt();
+        LocalDateTime bestCreatedAt =
+                currentBest.getCreatedAt();
 
-        if (candidateCreatedAt == null && bestCreatedAt == null) {
+        if (candidateCreatedAt == null
+                && bestCreatedAt == null) {
             return 0;
         }
 
-        if (candidateCreatedAt != null && bestCreatedAt == null) {
+        if (candidateCreatedAt != null
+                && bestCreatedAt == null) {
             return 1;
         }
 
@@ -477,11 +579,18 @@ public class ModelPromotionService {
             return -1;
         }
 
-        return candidateCreatedAt.compareTo(bestCreatedAt);
+        return candidateCreatedAt
+                .compareTo(bestCreatedAt);
     }
 
-    private Double getMetricValueCompatible(Map<String, Double> metrics, String metricName) {
-        if (metrics == null || metrics.isEmpty() || metricName == null || metricName.isBlank()) {
+    private Double getMetricValueCompatible(
+            Map<String, Double> metrics,
+            String metricName
+    ) {
+        if (metrics == null
+                || metrics.isEmpty()
+                || metricName == null
+                || metricName.isBlank()) {
             return null;
         }
 
@@ -497,68 +606,48 @@ public class ModelPromotionService {
             return direct;
         }
 
-        if (normalized.equals("f1_score")) {
-            Double value = metrics.get("f1_score");
-            if (value != null) return value;
-
-            value = metrics.get("f1");
-            if (value != null) return value;
-
-            return metrics.get("f1_weighted");
-        }
-
-        if (normalized.equals("precision")) {
-            Double value = metrics.get("precision");
-            if (value != null) return value;
-
-            return metrics.get("precision_weighted");
-        }
-
-        if (normalized.equals("recall")) {
-            Double value = metrics.get("recall");
-            if (value != null) return value;
-
-            return metrics.get("recall_weighted");
-        }
-
-        if (normalized.equals("accuracy")) {
-            Double value = metrics.get("accuracy");
-            if (value != null) return value;
-
-            return metrics.get("val_accuracy");
-        }
-
-        if (normalized.equals("r2")) {
-            Double value = metrics.get("r2");
-            if (value != null) return value;
-
-            return metrics.get("r2_score");
-        }
-
-        if (normalized.equals("loss")) {
-            Double value = metrics.get("loss");
-            if (value != null) return value;
-
-            return metrics.get("val_loss");
-        }
-
-        return null;
+        return switch (normalized) {
+            case "f1_score" ->
+                    firstNonNull(
+                            metrics.get("f1"),
+                            metrics.get("f1_weighted")
+                    );
+            case "precision" ->
+                    metrics.get("precision_weighted");
+            case "recall" ->
+                    metrics.get("recall_weighted");
+            case "accuracy" ->
+                    metrics.get("val_accuracy");
+            case "r2" ->
+                    metrics.get("r2_score");
+            case "loss" ->
+                    metrics.get("val_loss");
+            default -> null;
+        };
     }
 
-    /**
-     * globalScore est seulement un score d'affichage.
-     * La vraie décision de production se fait par comparaison hiérarchique des métriques.
-     */
-    private Double normalizeMetricScore(String metricName, Double value) {
+    private Double firstNonNull(
+            Double first,
+            Double second
+    ) {
+        return first != null ? first : second;
+    }
+
+    private Double normalizeMetricScore(
+            String metricName,
+            Double value
+    ) {
         if (metricName == null || value == null) {
             return null;
         }
 
-        String direction = inferDirection(metricName);
-
-        if ("min".equalsIgnoreCase(direction)) {
+        if ("min".equalsIgnoreCase(
+                inferDirection(metricName))) {
             double safeValue = Math.max(value, 0.0);
-            return roundDouble(1.0 / (1.0 + safeValue), 6);
+            return roundDouble(
+                    1.0 / (1.0 + safeValue),
+                    6
+            );
         }
 
         if (value >= 0.0 && value <= 1.0) {
@@ -581,7 +670,8 @@ public class ModelPromotionService {
             Double globalScore
     ) {
         List<MlExperimentMetric> metrics =
-                mlExperimentMetricRepository.findByExperiment(experiment);
+                mlExperimentMetricRepository
+                        .findByExperiment(experiment);
 
         if (metrics == null || metrics.isEmpty()) {
             return;
@@ -589,8 +679,10 @@ public class ModelPromotionService {
 
         for (MlExperimentMetric metric : metrics) {
             metric.setGlobalScore(globalScore);
-            mlExperimentMetricRepository.save(metric);
         }
+
+        mlExperimentMetricRepository.saveAll(metrics);
+        mlExperimentMetricRepository.flush();
     }
 
     private void updateMetricsProductionState(
@@ -599,7 +691,8 @@ public class ModelPromotionService {
             String productionVersion
     ) {
         List<MlExperimentMetric> metrics =
-                mlExperimentMetricRepository.findByExperiment(experiment);
+                mlExperimentMetricRepository
+                        .findByExperiment(experiment);
 
         if (metrics == null || metrics.isEmpty()) {
             return;
@@ -607,17 +700,23 @@ public class ModelPromotionService {
 
         for (MlExperimentMetric metric : metrics) {
             metric.setProduction(isProduction);
-            metric.setProductionVersion(productionVersion);
-            mlExperimentMetricRepository.save(metric);
+            metric.setProductionVersion(
+                    productionVersion
+            );
         }
+
+        mlExperimentMetricRepository.saveAll(metrics);
+        mlExperimentMetricRepository.flush();
     }
 
     private String inferDirection(String metricName) {
-        if (metricName == null || metricName.isBlank()) {
+        if (metricName == null
+                || metricName.isBlank()) {
             return "max";
         }
 
-        String normalized = metricName.trim().toLowerCase();
+        String normalized =
+                metricName.trim().toLowerCase();
 
         if (normalized.contains("rmse")
                 || normalized.contains("mse")
@@ -633,32 +732,27 @@ public class ModelPromotionService {
     }
 
     private String cleanMetric(String metricName) {
-        if (metricName == null || metricName.isBlank()) {
+        if (metricName == null
+                || metricName.isBlank()) {
             return null;
         }
 
-        String cleaned = metricName.trim().toLowerCase();
+        String cleaned =
+                metricName.trim().toLowerCase();
 
-        if ("precision_weighted".equals(cleaned)) {
-            return "precision";
-        }
-
-        if ("recall_weighted".equals(cleaned)) {
-            return "recall";
-        }
-
-        if ("f1_weighted".equals(cleaned) || "f1".equals(cleaned)) {
-            return "f1_score";
-        }
-
-        if ("r2_score".equals(cleaned) || "r²".equals(cleaned)) {
-            return "r2";
-        }
-
-        return cleaned;
+        return switch (cleaned) {
+            case "precision_weighted" -> "precision";
+            case "recall_weighted" -> "recall";
+            case "f1_weighted", "f1" -> "f1_score";
+            case "r2_score", "r²" -> "r2";
+            default -> cleaned;
+        };
     }
 
-    private Double roundDouble(Double value, int decimals) {
+    private Double roundDouble(
+            Double value,
+            int decimals
+    ) {
         if (value == null) {
             return null;
         }

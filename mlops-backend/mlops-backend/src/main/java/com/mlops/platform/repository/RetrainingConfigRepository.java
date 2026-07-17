@@ -1,7 +1,6 @@
 package com.mlops.platform.repository;
 
 import com.mlops.platform.entity.RetrainingConfig;
-import jakarta.transaction.Transactional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -25,25 +24,23 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             """)
     List<RetrainingConfig> findEnabledConfigs();
 
-    @Modifying
-    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.sourceExperimentId = :sourceExperimentId,
-                c.updatedAt = CURRENT_TIMESTAMP
+                c.updatedAt = :updatedAt
             WHERE c.projectId = :projectId
-              AND (c.sourceExperimentId IS NULL OR c.sourceExperimentId <> :sourceExperimentId)
+              AND (
+                    c.sourceExperimentId IS NULL
+                    OR c.sourceExperimentId <> :sourceExperimentId
+              )
             """)
     int synchronizeSourceExperiment(
             @Param("projectId") Long projectId,
-            @Param("sourceExperimentId") Long sourceExperimentId
+            @Param("sourceExperimentId") Long sourceExperimentId,
+            @Param("updatedAt") LocalDateTime updatedAt
     );
 
-    /*
-     * Scheduler query.
-     * We keep the derived query for compatibility, but the scheduler now uses
-     * findDueConfigs(...) + claimDueConfig(...) to avoid double launches on AKS.
-     */
     List<RetrainingConfig> findByEnabledTrueAndRunningFalseAndNextRetrainingAtIsNotNullAndNextRetrainingAtLessThanEqual(
             LocalDateTime now
     );
@@ -55,9 +52,15 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
               AND c.running = false
               AND (
                     c.manualTriggerRequested = true
-                    OR (c.nextRetrainingAt IS NOT NULL AND c.nextRetrainingAt <= :now)
+                    OR (
+                        c.nextRetrainingAt IS NOT NULL
+                        AND c.nextRetrainingAt <= :now
+                    )
               )
-            ORDER BY c.nextRetrainingAt ASC, c.id ASC
+            ORDER BY
+                CASE WHEN c.manualTriggerRequested = true THEN 0 ELSE 1 END,
+                c.nextRetrainingAt ASC,
+                c.id ASC
             """)
     List<RetrainingConfig> findDueConfigs(@Param("now") LocalDateTime now);
 
@@ -70,11 +73,7 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             """)
     List<RetrainingConfig> findEnabledNotRunningConfigs();
 
-    /*
-     * Atomic claim: only one backend pod/scheduler cycle can claim the same config.
-     */
-    @Modifying
-    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.running = true,
@@ -84,13 +83,15 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
               AND c.running = false
               AND (
                     c.manualTriggerRequested = true
-                    OR (c.nextRetrainingAt IS NOT NULL AND c.nextRetrainingAt <= :now)
+                    OR (
+                        c.nextRetrainingAt IS NOT NULL
+                        AND c.nextRetrainingAt <= :now
+                    )
               )
             """)
     int claimDueConfig(@Param("id") Long id, @Param("now") LocalDateTime now);
 
-    @Modifying
-    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.running = false,
@@ -100,6 +101,7 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
                 c.lastMonitoringCheckAt = :updatedAt,
                 c.updatedAt = :updatedAt
             WHERE c.id = :id
+              AND c.running = true
             """)
     int releaseAfterSuccess(
             @Param("id") Long id,
@@ -108,8 +110,7 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             @Param("updatedAt") LocalDateTime updatedAt
     );
 
-    @Modifying
-    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.running = false,
@@ -118,6 +119,7 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
                 c.lastMonitoringCheckAt = :updatedAt,
                 c.updatedAt = :updatedAt
             WHERE c.id = :id
+              AND c.running = true
             """)
     int releaseAfterFailure(
             @Param("id") Long id,
@@ -125,9 +127,7 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             @Param("updatedAt") LocalDateTime updatedAt
     );
 
-
-    @Modifying
-    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.running = false,
@@ -137,6 +137,7 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
                 c.lastMonitoringCheckAt = :updatedAt,
                 c.updatedAt = :updatedAt
             WHERE c.id = :id
+              AND c.running = true
             """)
     int releaseAfterSkipped(
             @Param("id") Long id,
@@ -145,8 +146,7 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             @Param("updatedAt") LocalDateTime updatedAt
     );
 
-    @Modifying
-    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.nextRetrainingAt = :nextRetrainingAt,
@@ -164,12 +164,8 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             @Param("decisionReason") String decisionReason,
             @Param("updatedAt") LocalDateTime updatedAt
     );
-    /*
-     * If the backend pod is killed while a retraining launch is running, running=true
-     * can stay blocked forever. This reset makes the scheduler self-healing in AKS.
-     */
-    @Modifying
-    @Transactional
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.running = false,
