@@ -70,6 +70,25 @@ public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long
     @EntityGraph(attributePaths = {"project", "modelFile", "datasetFile"})
     List<MlExperiment> findByRuntimeModeOrderByCreatedAtAsc(String runtimeMode);
 
+    /**
+     * Runs Docker personnalisés qui nécessitent encore une action du watcher.
+     *
+     * Important : ne pas recharger les runs COMPLETED/FAILED/CANCELLED. Le watcher
+     * ne doit gérer que la construction Kaniko et le job d'entraînement en cours.
+     */
+    @EntityGraph(attributePaths = {"project", "modelFile", "datasetFile"})
+    @Query("""
+            SELECT e
+            FROM MlExperiment e
+            WHERE e.runtimeMode = :runtimeMode
+              AND e.status IN :statuses
+            ORDER BY e.createdAt ASC
+            """)
+    List<MlExperiment> findActionableCustomDockerExperiments(
+            @Param("runtimeMode") String runtimeMode,
+            @Param("statuses") List<ExperimentStatus> statuses
+    );
+
     /*
      * Recherche par MLflow Run ID.
      */

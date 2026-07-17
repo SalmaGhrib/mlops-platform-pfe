@@ -52,25 +52,50 @@ public class CustomDockerRunWatcher {
         this.trainingOutputAnalyzerService = trainingOutputAnalyzerService;
     }
 
-    @Scheduled(fixedDelayString = "${app.custom-docker.watcher.delay-ms:30000}")
-    @SchedulerLock(name = "mlopsLifecycleCoordinator", lockAtMostFor = "30m", lockAtLeastFor = "20s")
+    @Scheduled(
+            fixedDelayString = "${app.custom-docker.watcher.delay-ms:10000}",
+            initialDelayString = "${app.custom-docker.watcher.initial-delay-ms:10000}"
+    )
+    @SchedulerLock(
+            name = "customDockerRunWatcher",
+            lockAtMostFor = "PT5M",
+            lockAtLeastFor = "PT2S"
+    )
     public void watchCustomDockerRuns() {
         if (!watcherEnabled) {
             return;
         }
 
         List<MlExperiment> experiments =
-                mlExperimentRepository.findByRuntimeModeOrderByCreatedAtAsc("CUSTOM_DOCKERFILE");
+                mlExperimentRepository.findActionableCustomDockerExperiments(
+                        "CUSTOM_DOCKERFILE",
+                        List.of(ExperimentStatus.CREATED, ExperimentStatus.RUNNING)
+                );
 
         if (experiments == null || experiments.isEmpty()) {
             return;
         }
 
-        System.out.println("[CUSTOM-DOCKER] Found " + experiments.size() + " CUSTOM_DOCKERFILE experiments to inspect.");
+        System.out.println("[CUSTOM-DOCKER] Found " + experiments.size()
+                + " actionable CUSTOM_DOCKERFILE experiments.");
 
         for (MlExperiment experiment : experiments) {
+            if (experiment == null || experiment.getId() == null) {
+                continue;
+            }
+
             try {
-                processExperiment(experiment);
+                // Relecture courte : évite de traiter un objet devenu terminal entre la requête
+                // initiale et son traitement dans la boucle.
+                MlExperiment freshExperiment = mlExperimentRepository
+                        .findById(experiment.getId())
+                        .orElse(null);
+
+                if (freshExperiment == null || isTerminalStatus(freshExperiment.getStatus())) {
+                    continue;
+                }
+
+                processExperiment(freshExperiment);
             } catch (Exception e) {
                 System.out.println("[CUSTOM-DOCKER] Error while processing experiment id="
                         + safeExperimentId(experiment)
@@ -91,9 +116,6 @@ public class CustomDockerRunWatcher {
         }
 
         if (isTerminalStatus(experiment.getStatus())) {
-            if (ExperimentStatus.COMPLETED.equals(experiment.getStatus())) {
-                tryStandardizeModelArtifactIfPossible(experiment, "terminal-completed");
-            }
             return;
         }
 
@@ -154,19 +176,34 @@ public class CustomDockerRunWatcher {
     }
 
     private void launchBuildJob(MlExperiment experiment) {
+        if (experiment == null || experiment.getId() == null) {
+            return;
+        }
+
+        MlExperiment freshExperiment = mlExperimentRepository
+                .findById(experiment.getId())
+                .orElse(null);
+
+        if (freshExperiment == null || isTerminalStatus(freshExperiment.getStatus())) {
+            return;
+        }
+
+        // Idempotence : si un autre passage a déjà enregistré le Job Kaniko,
+        // on ne crée jamais un second Job pour la même expérience.
+        if (hasText(freshExperiment.getBuildJobName())) {
+            freshExperiment.setBuildStatus("IMAGE_BUILD_RUNNING");
+            freshExperiment.setStatus(ExperimentStatus.RUNNING);
+            freshExperiment.setMessage("Image build job already exists. Watching existing build job: "
+                    + freshExperiment.getBuildJobName());
+            mlExperimentRepository.saveAndFlush(freshExperiment);
+            return;
+        }
+
+        experiment = freshExperiment;
         MlProject project = experiment.getProject();
 
         if (project == null || project.getId() == null) {
             markFailed(experiment, "BUILD", "Project is null. Cannot launch custom Docker build.");
-            return;
-        }
-
-        if (hasText(experiment.getBuildJobName())) {
-            experiment.setBuildStatus("IMAGE_BUILD_RUNNING");
-            experiment.setStatus(ExperimentStatus.RUNNING);
-            experiment.setMessage("Image build job already exists. Watching existing build job: "
-                    + experiment.getBuildJobName());
-            mlExperimentRepository.saveAndFlush(experiment);
             return;
         }
 
