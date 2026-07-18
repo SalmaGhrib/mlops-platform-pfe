@@ -7,8 +7,11 @@ import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.RetrainingConfigRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -18,6 +21,7 @@ public class MonitoringRetrainingTriggerService {
     private final RetrainingConfigRepository retrainingConfigRepository;
     private final MlExperimentRepository mlExperimentRepository;
     private final RetrainingDecisionService retrainingDecisionService;
+    private final PlatformTransactionManager transactionManager;
 
     @Value("${monitoring.retraining.cooldown-minutes:120}")
     private long cooldownMinutes;
@@ -25,27 +29,37 @@ public class MonitoringRetrainingTriggerService {
     public MonitoringRetrainingTriggerService(
             RetrainingConfigRepository retrainingConfigRepository,
             MlExperimentRepository mlExperimentRepository,
-            RetrainingDecisionService retrainingDecisionService
+            RetrainingDecisionService retrainingDecisionService,
+            PlatformTransactionManager transactionManager
     ) {
         this.retrainingConfigRepository = retrainingConfigRepository;
         this.mlExperimentRepository = mlExperimentRepository;
         this.retrainingDecisionService = retrainingDecisionService;
+        this.transactionManager = transactionManager;
     }
 
-    @Transactional
-    public boolean triggerRetrainingFromMonitoringAlert(Long projectId, String reason) {
+    public boolean triggerRetrainingFromMonitoringAlert(
+            Long projectId,
+            String reason
+    ) {
         if (projectId == null) {
-            System.out.println("[MONITORING_RETRAINING] Ignored: projectId is null");
+            System.out.println(
+                    "[MONITORING_RETRAINING] Ignored: projectId is null"
+            );
             return false;
         }
 
-        RetrainingConfig config = retrainingConfigRepository
-                .findByProjectId(projectId)
-                .orElse(null);
+        RetrainingConfig config =
+                retrainingConfigRepository
+                        .findByProjectId(projectId)
+                        .orElse(null);
 
         if (config == null) {
-            System.out.println("[MONITORING_RETRAINING] Ignored: no retraining config for projectId="
-                    + projectId);
+            System.out.println(
+                    "[MONITORING_RETRAINING] Ignored: no retraining config "
+                            + "for projectId="
+                            + projectId
+            );
             return false;
         }
 
@@ -53,121 +67,304 @@ public class MonitoringRetrainingTriggerService {
             return false;
         }
 
-        requestNow(config, "MONITORING_ALERT", reason);
+        boolean requested = requestNow(
+                config.getId(),
+                "MONITORING_ALERT",
+                reason
+        );
 
-        System.out.println("[MONITORING_RETRAINING] Retraining requested from monitoring alert. projectId="
-                + projectId
-                + ", reason="
-                + reason);
-
-        return true;
-    }
-
-    @Transactional
-    public int evaluateSmartTriggersForAllConfigs() {
-        List<RetrainingConfig> configs = retrainingConfigRepository.findEnabledNotRunningConfigs();
-
-        if (configs == null || configs.isEmpty()) {
-            return 0;
-        }
-
-        int requested = 0;
-
-        for (RetrainingConfig config : configs) {
-            if (config == null || config.getId() == null || config.getProjectId() == null) {
-                continue;
-            }
-
-            RetrainingStrategy strategy = config.getStrategy();
-            if (strategy == RetrainingStrategy.SCHEDULED_ONLY) {
-                continue;
-            }
-
-            if (!canRequestMonitoringRetraining(config, config.getProjectId())) {
-                continue;
-            }
-
-            RetrainingDecisionResult decision = retrainingDecisionService.evaluateMonitoringSignals(config);
-
-            if (decision != null && decision.isShouldRetrain()) {
-                requestNow(
-                        config,
-                        decision.getTriggerType() != null ? decision.getTriggerType().name() : "SMART_MONITORING",
-                        decision.getReason()
-                );
-                requested++;
-            }
-        }
-
-        if (requested > 0) {
-            System.out.println("[MONITORING_RETRAINING] Smart monitoring requested retraining count=" + requested);
-        }
+        System.out.println(
+                "[MONITORING_RETRAINING] Retraining requested from "
+                        + "monitoring alert. projectId="
+                        + projectId
+                        + ", requested="
+                        + requested
+                        + ", reason="
+                        + safeMessage(reason)
+        );
 
         return requested;
     }
 
-    private boolean canRequestMonitoringRetraining(RetrainingConfig config, Long projectId) {
-        if (config == null) {
+    /**
+     * Analyse toutes les configurations intelligentes actives.
+     *
+     * Une configuration détectée en drift est marquée par une mise à jour
+     * atomique :
+     * - manualTriggerRequested=true ;
+     * - nextRetrainingAt dans le passé ;
+     * - raison et décision conservées.
+     */
+    public int evaluateSmartTriggersForAllConfigs() {
+        List<RetrainingConfig> configs =
+                retrainingConfigRepository
+                        .findEnabledNotRunningConfigs();
+
+        if (configs == null || configs.isEmpty()) {
+            System.out.println(
+                    "[MONITORING_RETRAINING] No enabled smart config found."
+            );
+            return 0;
+        }
+
+        int requestedCount = 0;
+
+        for (RetrainingConfig config : configs) {
+            if (config == null
+                    || config.getId() == null
+                    || config.getProjectId() == null) {
+                continue;
+            }
+
+            RetrainingStrategy strategy = config.getStrategy();
+
+            if (strategy == RetrainingStrategy.SCHEDULED_ONLY) {
+                continue;
+            }
+
+            Long projectId = config.getProjectId();
+
+            try {
+                if (!canRequestMonitoringRetraining(config, projectId)) {
+                    continue;
+                }
+
+                RetrainingDecisionResult decision =
+                        retrainingDecisionService
+                                .evaluateMonitoringSignals(config);
+
+                if (decision == null) {
+                    System.out.println(
+                            "[MONITORING_RETRAINING] No decision returned. "
+                                    + "projectId="
+                                    + projectId
+                    );
+                    continue;
+                }
+
+                System.out.println(
+                        "[MONITORING_RETRAINING] Decision evaluated. "
+                                + "projectId="
+                                + projectId
+                                + ", shouldRetrain="
+                                + decision.isShouldRetrain()
+                                + ", recentPredictions="
+                                + decision.getRecentPredictionCount()
+                                + ", errorRate="
+                                + decision.getPredictionErrorRatePercent()
+                                + ", drift="
+                                + decision.getDataDriftScorePercent()
+                                + ", reason="
+                                + safeMessage(decision.getReason())
+                );
+
+                if (!decision.isShouldRetrain()) {
+                    continue;
+                }
+
+                String triggerReason =
+                        decision.getTriggerType() != null
+                                ? decision.getTriggerType().name()
+                                : "SMART_MONITORING";
+
+                boolean requested = requestNow(
+                        config.getId(),
+                        triggerReason,
+                        decision.getReason()
+                );
+
+                if (requested) {
+                    requestedCount++;
+                }
+
+            } catch (Exception exception) {
+                System.err.println(
+                        "[MONITORING_RETRAINING] Evaluation failed. "
+                                + "projectId="
+                                + projectId
+                                + ", reason="
+                                + safeMessage(exception.getMessage())
+                );
+                exception.printStackTrace();
+            }
+        }
+
+        System.out.println(
+                "[MONITORING_RETRAINING] Smart monitoring evaluation "
+                        + "finished. requested="
+                        + requestedCount
+        );
+
+        return requestedCount;
+    }
+
+    private boolean canRequestMonitoringRetraining(
+            RetrainingConfig config,
+            Long projectId
+    ) {
+        if (config == null || config.getId() == null) {
             return false;
         }
 
         if (!config.isEnabled()) {
-            System.out.println("[MONITORING_RETRAINING] Ignored: retraining disabled for projectId="
-                    + projectId);
+            System.out.println(
+                    "[MONITORING_RETRAINING] Ignored: retraining disabled "
+                            + "for projectId="
+                            + projectId
+            );
             return false;
         }
 
         if (config.isRunning()) {
-            System.out.println("[MONITORING_RETRAINING] Ignored: retraining config already running for projectId="
-                    + projectId);
+            System.out.println(
+                    "[MONITORING_RETRAINING] Ignored: config already running "
+                            + "for projectId="
+                            + projectId
+            );
             return false;
         }
 
-        Long activeScheduledRetrainingCount =
-                mlExperimentRepository.countActiveScheduledRetrainingForProject(projectId);
-
-        boolean activeScheduledRetraining = activeScheduledRetrainingCount != null
-                && activeScheduledRetrainingCount > 0;
-
-        if (activeScheduledRetraining) {
-            System.out.println("[MONITORING_RETRAINING] Ignored: active scheduled retraining already exists for projectId="
-                    + projectId);
+        /*
+         * Une demande déjà persistée ne doit pas être recréée.
+         */
+        if (config.isManualTriggerRequested()) {
+            System.out.println(
+                    "[MONITORING_RETRAINING] Ignored: smart/manual request "
+                            + "already pending for projectId="
+                            + projectId
+            );
             return false;
         }
 
-        LocalDateTime now = LocalDateTime.now();
+        Long activeCount =
+                mlExperimentRepository
+                        .countActiveScheduledRetrainingForProject(projectId);
 
+        if (activeCount != null && activeCount > 0) {
+            System.out.println(
+                    "[MONITORING_RETRAINING] Ignored: active scheduled "
+                            + "retraining already exists for projectId="
+                            + projectId
+            );
+            return false;
+        }
+
+        LocalDateTime now = utcNow();
+
+        /*
+         * Si la configuration est déjà échue, AutoRetrainingScheduler doit la
+         * traiter directement. Le monitoring n'a pas besoin de la redemander.
+         */
         if (config.getNextRetrainingAt() != null
                 && !config.getNextRetrainingAt().isAfter(now)) {
-            System.out.println("[MONITORING_RETRAINING] Ignored: retraining already requested for projectId="
-                    + projectId
-                    + ", nextRetrainingAt="
-                    + config.getNextRetrainingAt());
+            System.out.println(
+                    "[MONITORING_RETRAINING] Ignored: config already due "
+                            + "for scheduler. projectId="
+                            + projectId
+                            + ", nextRetrainingAt="
+                            + config.getNextRetrainingAt()
+            );
             return false;
         }
 
         if (config.getLastRetrainingAt() != null
                 && cooldownMinutes > 0
-                && config.getLastRetrainingAt().isAfter(now.minusMinutes(cooldownMinutes))) {
-            System.out.println("[MONITORING_RETRAINING] Ignored: cooldown active for projectId="
-                    + projectId
-                    + ", lastRetrainingAt="
-                    + config.getLastRetrainingAt()
-                    + ", cooldownMinutes="
-                    + cooldownMinutes);
+                && config.getLastRetrainingAt()
+                .isAfter(now.minusMinutes(cooldownMinutes))) {
+
+            System.out.println(
+                    "[MONITORING_RETRAINING] Ignored: cooldown active "
+                            + "for projectId="
+                            + projectId
+                            + ", lastRetrainingAt="
+                            + config.getLastRetrainingAt()
+                            + ", cooldownMinutes="
+                            + cooldownMinutes
+            );
             return false;
         }
 
         return true;
     }
 
-    private void requestNow(RetrainingConfig config, String triggerReason, String decisionReason) {
-        config.setRunning(false);
-        config.setManualTriggerRequested(false);
-        config.setLastTriggerReason(triggerReason);
-        config.setLastDecisionReason(decisionReason);
-        config.setNextRetrainingAt(LocalDateTime.now().minusSeconds(5));
+    private boolean requestNow(
+            Long configId,
+            String triggerReason,
+            String decisionReason
+    ) {
+        if (configId == null) {
+            return false;
+        }
 
-        retrainingConfigRepository.saveAndFlush(config);
+        LocalDateTime now = utcNow();
+        LocalDateTime dueAt = now.minusSeconds(5);
+
+        int updatedRows = executeInNewTransaction(() ->
+                retrainingConfigRepository.requestSmartRetraining(
+                        configId,
+                        dueAt,
+                        safeMessage(triggerReason),
+                        safeMessage(decisionReason),
+                        now
+                )
+        );
+
+        System.out.println(
+                "[MONITORING_RETRAINING] Atomic request. configId="
+                        + configId
+                        + ", updatedRows="
+                        + updatedRows
+                        + ", dueAt="
+                        + dueAt
+                        + ", trigger="
+                        + safeMessage(triggerReason)
+        );
+
+        return updatedRows == 1;
+    }
+
+    private int executeInNewTransaction(
+            IntTransactionCallback callback
+    ) {
+        TransactionTemplate template =
+                new TransactionTemplate(transactionManager);
+
+        template.setPropagationBehavior(
+                TransactionDefinition.PROPAGATION_REQUIRES_NEW
+        );
+        template.setIsolationLevel(
+                TransactionDefinition.ISOLATION_READ_COMMITTED
+        );
+        template.setTimeout(10);
+
+        Integer result =
+                template.execute(status -> callback.execute());
+
+        return result == null ? 0 : result;
+    }
+
+    private LocalDateTime utcNow() {
+        return LocalDateTime.now(Clock.systemUTC());
+    }
+
+    private String safeMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return "Aucune raison fournie";
+        }
+
+        String clean = message
+                .replace("\n", " ")
+                .replace("\r", " ")
+                .replace("\u0000", "")
+                .trim();
+
+        return clean.length() > 500
+                ? clean.substring(0, 497) + "..."
+                : clean;
+    }
+
+    @FunctionalInterface
+    private interface IntTransactionCallback {
+        int execute();
     }
 }

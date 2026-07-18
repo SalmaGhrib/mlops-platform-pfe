@@ -156,11 +156,20 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             @Param("updatedAt") LocalDateTime updatedAt
     );
 
+    /*
+     * Demande intelligente atomique.
+     *
+     * manualTriggerRequested=true est le signal durable principal.
+     * nextRetrainingAt placé dans le passé reste un signal complémentaire.
+     * Ainsi, une légère différence d'horloge ou un cycle concurrent ne peut
+     * pas faire disparaître silencieusement la demande.
+     */
     @Modifying(clearAutomatically = true)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("""
             UPDATE RetrainingConfig c
-            SET c.nextRetrainingAt = :nextRetrainingAt,
+            SET c.manualTriggerRequested = true,
+                c.nextRetrainingAt = :nextRetrainingAt,
                 c.lastTriggerReason = :triggerReason,
                 c.lastDecisionReason = :decisionReason,
                 c.updatedAt = :updatedAt
