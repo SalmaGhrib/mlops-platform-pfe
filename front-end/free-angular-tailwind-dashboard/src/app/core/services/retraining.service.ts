@@ -48,8 +48,10 @@ export interface RetrainingConfigResponse {
   maxPredictionErrorRatePercent?: number | null;
   performanceDropThresholdPercent?: number | null;
   dataDriftThresholdPercent?: number | null;
+  manualTriggerRequested?: boolean | null;
   lastTriggerReason?: string | null;
   lastDecisionReason?: string | null;
+  lastMonitoringCheckAt?: string | null;
 }
 
 @Injectable({

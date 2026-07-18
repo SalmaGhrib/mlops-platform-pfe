@@ -702,6 +702,37 @@ export class MyProjectsComponent implements OnInit {
     });
   }
 
+  forceRetrainingNow(project: MlProjectResponse): void {
+    const config = this.retrainingConfigs[project.id];
+
+    if (!config?.enabled) {
+      this.errorMessage =
+        'Activez d’abord le réentraînement automatique pour ce projet.';
+      return;
+    }
+
+    if (config.running) {
+      this.errorMessage =
+        'Un réentraînement est déjà en cours pour ce projet.';
+      return;
+    }
+
+    this.retrainingService.forceNow(project.id).subscribe({
+      next: (updatedConfig) => {
+        this.retrainingConfigs[project.id] = updatedConfig;
+        this.successMessage =
+          'La demande de réentraînement a été enregistrée. '
+          + 'Le scheduler va la traiter.';
+      },
+      error: (error) => {
+        this.errorMessage = this.getBackendErrorMessage(
+          error,
+          'Impossible de demander le réentraînement maintenant.'
+        );
+      }
+    });
+  }
+
   deleteProject(project: MlProjectResponse): void {
     const confirmed = window.confirm(
       `Voulez-vous vraiment supprimer le projet "${project.name}" ?`

@@ -118,7 +118,8 @@ public class MonitoringRetrainingTriggerService {
 
             RetrainingStrategy strategy = config.getStrategy();
 
-            if (strategy == RetrainingStrategy.SCHEDULED_ONLY) {
+            if (strategy != RetrainingStrategy.SMART_MONITORING_ONLY
+                    && strategy != RetrainingStrategy.FULL_SMART) {
                 continue;
             }
 

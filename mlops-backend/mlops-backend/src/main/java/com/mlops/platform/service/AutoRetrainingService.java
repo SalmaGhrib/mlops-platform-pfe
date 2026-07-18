@@ -335,30 +335,86 @@ public class AutoRetrainingService {
     private RetrainingDecisionResult buildRetrainingDecision(
             RetrainingConfig config
     ) {
-        if (config.getStrategy() == null
-                || config.getStrategy()
-                == RetrainingStrategy.SCHEDULED_ONLY) {
+        RetrainingStrategy strategy = config.getStrategy() != null
+                ? config.getStrategy()
+                : RetrainingStrategy.SCHEDULED_ONLY;
 
-            RetrainingDecisionResult decision =
-                    new RetrainingDecisionResult();
-
-            decision.setShouldRetrain(true);
-            decision.setTriggerType(
-                    RetrainingTriggerType.SCHEDULED
+        if (config.isManualTriggerRequested()) {
+            return RetrainingDecisionResult.run(
+                    RetrainingTriggerType.MANUAL,
+                    "Réentraînement demandé manuellement."
             );
-            decision.setReason(
+        }
+
+        return switch (strategy) {
+            case SCHEDULED_ONLY -> RetrainingDecisionResult.run(
+                    RetrainingTriggerType.SCHEDULED,
                     "Échéance planifiée atteinte."
             );
 
-            return decision;
-        }
+            case SCHEDULED_WITH_MONITORING -> {
+                RetrainingDecisionResult monitoring =
+                        retrainingDecisionService.evaluateMonitoringSignals(config);
 
-        /*
-         * SMART_MONITORING_ONLY et FULL_SMART passent ici.
-         * Le service de décision doit analyser échecs, performance et drift.
-         */
-        return retrainingDecisionService
-                .evaluateBeforeRetraining(config);
+                if (monitoring != null && monitoring.isShouldRetrain()) {
+                    yield monitoring;
+                }
+
+                RetrainingDecisionResult scheduled =
+                        RetrainingDecisionResult.run(
+                                RetrainingTriggerType.SCHEDULED,
+                                "Échéance planifiée atteinte. "
+                                        + (monitoring != null
+                                        ? safeMessage(monitoring.getReason())
+                                        : "Aucun signal de monitoring disponible.")
+                        );
+
+                if (monitoring != null) {
+                    scheduled.setRecentPredictionCount(
+                            monitoring.getRecentPredictionCount()
+                    );
+                    scheduled.setPredictionErrorRatePercent(
+                            monitoring.getPredictionErrorRatePercent()
+                    );
+                    scheduled.setDataDriftScorePercent(
+                            monitoring.getDataDriftScorePercent()
+                    );
+                    scheduled.setRecentFailedRuns(
+                            monitoring.getRecentFailedRuns()
+                    );
+                }
+
+                yield scheduled;
+            }
+
+            case SMART_MONITORING_ONLY -> {
+                RetrainingDecisionResult monitoring =
+                        retrainingDecisionService.evaluateMonitoringSignals(config);
+
+                yield monitoring != null
+                        ? monitoring
+                        : RetrainingDecisionResult.skip(
+                                "Aucune décision de monitoring disponible."
+                        );
+            }
+
+            case FULL_SMART -> {
+                RetrainingDecisionResult monitoring =
+                        retrainingDecisionService.evaluateMonitoringSignals(config);
+
+                if (monitoring != null && monitoring.isShouldRetrain()) {
+                    yield monitoring;
+                }
+
+                yield RetrainingDecisionResult.run(
+                        RetrainingTriggerType.SCHEDULED,
+                        "Mode FULL_SMART : échéance planifiée atteinte. "
+                                + (monitoring != null
+                                ? safeMessage(monitoring.getReason())
+                                : "Aucun signal de monitoring disponible.")
+                );
+            }
+        };
     }
 
     private void releaseAfterSuccess(

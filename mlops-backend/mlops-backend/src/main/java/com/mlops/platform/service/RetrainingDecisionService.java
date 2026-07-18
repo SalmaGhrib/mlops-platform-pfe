@@ -11,6 +11,7 @@ import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.PredictionLogRepository;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -85,7 +86,7 @@ public class RetrainingDecisionService {
 
         Long projectId = config.getProjectId();
         int lookbackHours = safeInt(config.getMonitoringLookbackHours(), 24);
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
         LocalDateTime recentStart = now.minusHours(lookbackHours);
         LocalDateTime baselineStart = now.minusHours(lookbackHours * 2L);
 

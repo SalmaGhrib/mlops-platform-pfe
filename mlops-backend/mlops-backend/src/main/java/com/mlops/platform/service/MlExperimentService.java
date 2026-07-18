@@ -3863,11 +3863,28 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
 
 
 
+    private MlExperiment reloadExperimentForResponse(Long experimentId) {
+        if (experimentId == null) {
+            throw new RuntimeException(
+                    "experimentId is required to reload experiment response."
+            );
+        }
+
+        return mlExperimentRepository
+                .findByIdWithFiles(experimentId)
+                .orElseThrow(() -> new RuntimeException(
+                        "Experiment with project/files not found: "
+                                + experimentId
+                ));
+    }
+
     private void notifyExperimentStatusChangedIfNeeded(
             ExperimentStatus previousStatus,
             MlExperiment experiment
     ) {
-        if (experiment == null || experiment.getId() == null || experiment.getStatus() == null) {
+        if (experiment == null
+                || experiment.getId() == null
+                || experiment.getStatus() == null) {
             return;
         }
 
@@ -3878,8 +3895,6 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
             return;
         }
 
-        // Notification uniquement lors d'une vraie transition vers un état terminal.
-        // Une lecture/synchronisation d'un ancien run déjà terminal ne doit rien créer.
         if (previousStatus == null
                 || previousStatus == ExperimentStatus.COMPLETED
                 || previousStatus == ExperimentStatus.FAILED
@@ -3888,23 +3903,24 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
         }
 
         try {
-            if (currentStatus == ExperimentStatus.COMPLETED) {
-                notificationService.notifyRunCompleted(experiment);
-                return;
-            }
+            MlExperiment loaded =
+                    mlExperimentRepository
+                            .findByIdWithFiles(experiment.getId())
+                            .orElse(experiment);
 
-            if (currentStatus == ExperimentStatus.FAILED) {
-                notificationService.notifyRunFailed(experiment);
+            if (currentStatus == ExperimentStatus.COMPLETED) {
+                notificationService.notifyRunCompleted(loaded);
+            } else {
+                notificationService.notifyRunFailed(loaded);
             }
 
         } catch (Exception e) {
-            System.out.println("[NOTIFICATION] Failed to notify experiment status change. experimentId="
-                    + experiment.getId()
-                    + ", previousStatus="
-                    + previousStatus
-                    + ", currentStatus="
-                    + currentStatus);
-            System.out.println("[NOTIFICATION] Reason: " + e.getMessage());
+            System.out.println(
+                    "[NOTIFICATION] Notification skipped. experimentId="
+                            + experiment.getId()
+                            + ", reason="
+                            + e.getMessage()
+            );
         }
     }
 
@@ -5163,78 +5179,115 @@ private MlExperimentResponse launchScheduledCustomDockerRetraining(
     }
 
     /*
-     * Cas 1 :
-     * Une image Docker existe déjà.
-     * On lance directement le job Kubernetes de training.
+     * Si l'image Production existe, on la réutilise.
+     * Il n'y a donc volontairement aucun Job Kaniko mlops-build-*.
+     * Seul le Job d'entraînement mlops-custom-* est créé.
      */
     if (cleanCustomImageUri != null) {
         newExperiment.setStatus(ExperimentStatus.RUNNING);
         markExperimentStarted(newExperiment);
-        newExperiment.setBuildStatus("CUSTOM_IMAGE_JOB_STARTING");
-        newExperiment.setBuildLogs("Scheduled retraining with existing custom image: " + cleanCustomImageUri);
-        newExperiment.setMessage("Scheduled retraining: launching custom Docker image training Job.");
+        newExperiment.setBuildStatus("IMAGE_REUSED");
+        newExperiment.setBuildLogs(
+                "Production image reused: " + cleanCustomImageUri
+        );
+        newExperiment.setMessage(
+                "Scheduled retraining uses the existing Production image."
+        );
 
-        MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(newExperiment);
+        MlExperiment savedExperiment =
+                mlExperimentRepository.saveAndFlush(newExperiment);
+
+        String jobName;
 
         try {
-            String jobName = kubernetesJobService.launchCustomImageTrainingJob(
+            jobName = kubernetesJobService.launchCustomImageTrainingJob(
                     project,
                     savedExperiment,
                     cleanCustomImageUri
             );
-
-            savedExperiment.setKubeflowRunName(jobName);
-            savedExperiment.setTrainingJobName(jobName);
-            savedExperiment.setKubeflowStatus("RUNNING");
-            savedExperiment.setBuildStatus("CUSTOM_IMAGE_JOB_RUNNING");
-            savedExperiment.setBuildLogs("Scheduled retraining Kubernetes Job launched successfully: " + jobName);
+        } catch (Exception launchError) {
+            savedExperiment.setStatus(ExperimentStatus.FAILED);
+            applyExecutionTimestampsForStatus(
+                    savedExperiment,
+                    ExperimentStatus.FAILED
+            );
+            savedExperiment.setBuildStatus("TRAINING_JOB_FAILED");
+            savedExperiment.setBuildLogs(launchError.getMessage());
+            savedExperiment.setErrorMessage(launchError.getMessage());
             savedExperiment.setMessage(
-                    "Scheduled retraining custom Docker Job launched successfully. Waiting for MLflow synchronization."
+                    "Kubernetes rejected the scheduled training Job."
             );
 
-            MlExperiment updatedExperiment = mlExperimentRepository.saveAndFlush(savedExperiment);
+            MlExperiment failed =
+                    mlExperimentRepository.saveAndFlush(savedExperiment);
 
-            triggerImmediateProjectSync(project.getId());
+            notifyExperimentStatusChangedIfNeeded(
+                    ExperimentStatus.RUNNING,
+                    failed
+            );
 
-            return mapToResponse(updatedExperiment);
-
-        } catch (Exception e) {
-            savedExperiment.setStatus(ExperimentStatus.FAILED);
-            applyExecutionTimestampsForStatus(savedExperiment, ExperimentStatus.FAILED);
-            savedExperiment.setBuildStatus("CUSTOM_IMAGE_JOB_FAILED");
-            savedExperiment.setBuildLogs(e.getMessage());
-            savedExperiment.setErrorMessage(e.getMessage());
-            savedExperiment.setMessage("Scheduled retraining failed to launch custom Docker image Job.");
-
-            MlExperiment failedExperiment = mlExperimentRepository.saveAndFlush(savedExperiment);
-            notifyExperimentStatusChangedIfNeeded(ExperimentStatus.RUNNING, failedExperiment);
-
-            return mapToResponse(failedExperiment);
+            return mapToResponse(
+                    reloadExperimentForResponse(failed.getId())
+            );
         }
+
+        savedExperiment.setKubeflowRunName(jobName);
+        savedExperiment.setTrainingJobName(jobName);
+        savedExperiment.setKubeflowStatus("RUNNING");
+        savedExperiment.setBuildStatus("TRAINING_JOB_RUNNING");
+        savedExperiment.setBuildLogs(
+                "Kubernetes training Job created: " + jobName
+        );
+        savedExperiment.setMessage(
+                "Scheduled retraining Job launched. "
+                        + "Waiting for MLflow synchronization."
+        );
+        savedExperiment.setErrorMessage(null);
+
+        MlExperiment updated =
+                mlExperimentRepository.saveAndFlush(savedExperiment);
+
+        triggerImmediateProjectSync(project.getId());
+
+        System.out.println(
+                "[AUTO_RETRAINING] Production image reused. experimentId="
+                        + updated.getId()
+                        + ", jobName="
+                        + jobName
+                        + ", image="
+                        + cleanCustomImageUri
+        );
+
+        return mapToResponse(
+                reloadExperimentForResponse(updated.getId())
+        );
     }
 
     /*
-     * Cas 2 :
-     * Pas d'image déjà disponible.
-     * On crée une expérience CREATED / WAITING_FOR_IMAGE_BUILD.
-     * CustomDockerRunWatcher va ensuite construire l'image avec Kaniko,
-     * puis lancer automatiquement le job de training.
+     * Sans image réutilisable, le watcher doit reconstruire l'image avec Kaniko.
      */
+    if (newExperiment.getDockerfilePath() == null
+            || newExperiment.getDockerfilePath().isBlank()) {
+        throw new RuntimeException(
+                "No reusable custom image and no Dockerfile are available."
+        );
+    }
+
     newExperiment.setStatus(ExperimentStatus.CREATED);
     newExperiment.setBuildStatus("WAITING_FOR_IMAGE_BUILD");
     newExperiment.setMessage(
-            "Scheduled retraining CUSTOM_DOCKERFILE experiment saved. "
-                    + "Waiting for CustomDockerRunWatcher to build image with Kaniko."
+            "Waiting for CustomDockerRunWatcher/Kaniko image build."
     );
+    newExperiment.setErrorMessage(null);
 
-    MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(newExperiment);
+    MlExperiment saved =
+            mlExperimentRepository.saveAndFlush(newExperiment);
 
-    System.out.println("[AUTO_RETRAINING] Custom Docker scheduled experiment created. "
-            + "CustomDockerRunWatcher will continue. experimentId="
-            + savedExperiment.getId());
-
-    return mapToResponse(savedExperiment);
+    return mapToResponse(
+            reloadExperimentForResponse(saved.getId())
+    );
 }
+
 private MlExperimentResponse launchScheduledStandardRuntimeRetraining(
         MlProject project,
         MlExperiment newExperiment,

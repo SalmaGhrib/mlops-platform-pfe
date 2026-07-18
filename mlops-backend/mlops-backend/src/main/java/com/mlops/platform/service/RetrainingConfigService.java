@@ -14,6 +14,7 @@ import com.mlops.platform.repository.RetrainingConfigRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
 
 @Service
@@ -276,7 +277,7 @@ public class RetrainingConfigService {
         config.setLastDecisionReason(
                 "Réentraînement manuel demandé par l'utilisateur."
         );
-        config.setNextRetrainingAt(LocalDateTime.now().minusSeconds(5));
+        config.setNextRetrainingAt(LocalDateTime.now(Clock.systemUTC()).minusSeconds(5));
 
         RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
 
