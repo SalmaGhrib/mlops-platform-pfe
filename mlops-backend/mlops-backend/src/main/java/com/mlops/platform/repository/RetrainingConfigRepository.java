@@ -6,6 +6,8 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -24,7 +26,8 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             """)
     List<RetrainingConfig> findEnabledConfigs();
 
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Modifying(clearAutomatically = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.sourceExperimentId = :sourceExperimentId,
@@ -73,7 +76,8 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             """)
     List<RetrainingConfig> findEnabledNotRunningConfigs();
 
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Modifying(clearAutomatically = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.running = true,
@@ -89,9 +93,13 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
                     )
               )
             """)
-    int claimDueConfig(@Param("id") Long id, @Param("now") LocalDateTime now);
+    int claimDueConfig(
+            @Param("id") Long id,
+            @Param("now") LocalDateTime now
+    );
 
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Modifying(clearAutomatically = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.running = false,
@@ -110,7 +118,8 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             @Param("updatedAt") LocalDateTime updatedAt
     );
 
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Modifying(clearAutomatically = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.running = false,
@@ -127,7 +136,8 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             @Param("updatedAt") LocalDateTime updatedAt
     );
 
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Modifying(clearAutomatically = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.running = false,
@@ -146,7 +156,8 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             @Param("updatedAt") LocalDateTime updatedAt
     );
 
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Modifying(clearAutomatically = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.nextRetrainingAt = :nextRetrainingAt,
@@ -165,7 +176,8 @@ public interface RetrainingConfigRepository extends JpaRepository<RetrainingConf
             @Param("updatedAt") LocalDateTime updatedAt
     );
 
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Modifying(clearAutomatically = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("""
             UPDATE RetrainingConfig c
             SET c.running = false,

@@ -884,112 +884,109 @@ def find_user_created_mlflow_model(
         return None
 
 
-def set_platform_production_alias(
+def tag_registered_version_as_candidate(
     registered_model_name: str,
     model_version: str,
+    platform_run_id: str,
+    platform_experiment_id: str,
+    source_type: str,
 ) -> None:
+    """Mark a newly registered version as a candidate only.
+
+    The runner never assigns the ``production`` alias. Promotion belongs to the
+    backend after metric validation and comparison with the current production
+    version. Keeping this responsibility in one place avoids divergent states
+    between MLflow and MySQL.
     """
-    Met à jour l'alias MLflow "production" pour le modèle officiel de la plateforme.
+    name = _clean_env_value(registered_model_name)
+    version = _clean_env_value(model_version)
+    if not name or not version:
+        raise ValueError("registered model name and model version are required")
 
-    Cette fonction ne doit jamais casser l'exécution du runner : si MLflow ne supporte pas
-    les alias ou si l'appel échoue, on garde le modèle enregistré et on affiche seulement
-    un warning exploitable dans les logs.
-    """
-    if not registered_model_name or not str(registered_model_name).strip():
-        return
-
-    if not model_version or not str(model_version).strip():
-        return
-
-    try:
-        client = MlflowClient()
-        client.set_registered_model_alias(
-            name=str(registered_model_name).strip(),
-            alias="production",
-            version=str(model_version).strip(),
+    client = MlflowClient()
+    tags = {
+        "platform_run_id": str(platform_run_id),
+        "platform_experiment_id": str(platform_experiment_id),
+        "validation_status": "PENDING",
+        "promotion_owner": "BACKEND",
+        "platform_model_source_type": source_type,
+    }
+    for key, value in tags.items():
+        client.set_model_version_tag(
+            name=name,
+            version=version,
+            key=key,
+            value=str(value),
         )
 
-        print(f"registered_model_name={registered_model_name}")
-        print(f"model_version={model_version}")
-        print(f"production_version={model_version}")
-        print(f"model_uri=models:/{registered_model_name}/{model_version}")
-        print(f"model_alias_uri=models:/{registered_model_name}@production")
-        print(
-            "[PLATFORM_MODEL] Production alias updated: "
-            f"{registered_model_name}@production -> v{model_version}"
-        )
+    model_uri = f"models:/{name}/{version}"
+    mlflow.set_tag("model_version", version)
+    mlflow.set_tag("registered_model_version", version)
+    mlflow.set_tag("platform_model_registered", "true")
+    mlflow.set_tag("validation_status", "PENDING")
+    mlflow.set_tag("promotion_owner", "BACKEND")
+    mlflow.set_tag("platform_model_uri", model_uri)
 
-    except Exception as exc:
-        print(
-            "[PLATFORM_MODEL] Could not set production alias for "
-            f"{registered_model_name} v{model_version}: {exc}"
-        )
+    # Stable machine-readable markers consumed by the Java backend and useful
+    # when diagnosing a Kubernetes Job from its logs.
+    print(f"registered_model_name={name}")
+    print(f"model_version={version}")
+    print(f"candidate_version={version}")
+    print("validation_status=PENDING")
+    print("promotion_owner=BACKEND")
+    print(f"model_uri={model_uri}")
+    print(
+        "[PLATFORM_MODEL] Version registered as PENDING candidate. "
+        "Production promotion is delegated to the backend."
+    )
 
 
 def register_user_mlflow_model_as_platform_model(
     candidate: UserMlflowModelCandidate,
     platform_registered_model_name: str,
-) -> Optional[str]:
-    """
-    Réenregistre un modèle MLflow créé par le script utilisateur
-    sous le nom officiel attendu par la plateforme.
+    platform_run_id: str,
+    platform_experiment_id: str,
+) -> Optional[Dict[str, str]]:
+    """Re-register a model created by user MLflow code under the platform name.
+
+    This path follows exactly the same candidate lifecycle as locally detected
+    model files: register, tag PENDING, and let the backend promote it.
     """
     try:
         source_uri = f"models:/{candidate.name}/{candidate.version}"
-
         print(
             "[PLATFORM_MODEL] User MLflow model detected: "
             f"{candidate.name} v{candidate.version}, source={candidate.source}"
         )
 
-        print(
-            "[PLATFORM_MODEL] Re-registering user model as platform model: "
-            f"{platform_registered_model_name}"
-        )
-
-        model_version = mlflow.register_model(
+        registered = mlflow.register_model(
             model_uri=source_uri,
             name=platform_registered_model_name,
         )
-
-        platform_model_uri = (
-            f"models:/{platform_registered_model_name}/{model_version.version}"
-        )
-
-        set_platform_production_alias(
-            registered_model_name=platform_registered_model_name,
-            model_version=str(model_version.version),
-        )
-
-        print(
-            "[PLATFORM_MODEL] Platform model registered successfully: "
-            f"{platform_registered_model_name} v{model_version.version}"
-        )
+        version = str(registered.version)
+        platform_uri = f"models:/{platform_registered_model_name}/{version}"
 
         mlflow.log_param("platform_model_source_type", "USER_MLFLOW_MODEL")
         mlflow.log_param("user_model_name", candidate.name)
         mlflow.log_param("user_model_version", candidate.version)
         mlflow.log_param("user_model_run_id", candidate.run_id or "")
-        platform_version = str(model_version.version)
-
         mlflow.log_param("platform_registered_model_name", platform_registered_model_name)
-        mlflow.log_param("platform_model_uri", platform_model_uri)
-        mlflow.log_param("platform_model_version", platform_version)
+        mlflow.log_param("platform_model_uri", platform_uri)
+        mlflow.log_param("platform_model_version", version)
 
-        # Tags exploités par le backend pour relier précisément ce run
-        # à SA version de modèle, même si le script utilisateur a créé
-        # son propre run MLflow.
-        mlflow.set_tag("model_version", platform_version)
-        mlflow.set_tag("registered_model_version", platform_version)
-        mlflow.set_tag("production_version", platform_version)
-        mlflow.set_tag("platform_model_registered", "true")
-        mlflow.set_tag("platform_model_uri", platform_model_uri)
-        mlflow.set_tag(
-            "platform_model_alias_uri",
-            f"models:/{platform_registered_model_name}@production",
+        tag_registered_version_as_candidate(
+            registered_model_name=platform_registered_model_name,
+            model_version=version,
+            platform_run_id=platform_run_id,
+            platform_experiment_id=platform_experiment_id,
+            source_type="USER_MLFLOW_MODEL",
         )
 
-        return platform_model_uri
+        print(
+            "[PLATFORM_MODEL] User model re-registered successfully as candidate: "
+            f"{platform_registered_model_name} v{version}"
+        )
+        return {"uri": platform_uri, "version": version}
 
     except Exception as exc:
         print(
@@ -1424,13 +1421,25 @@ def run_user_script(
     for index, command in enumerate(commands, start=1):
         print(f"[PLATFORM] Trying command {index}/{len(commands)}: {' '.join(command)}")
 
-        result = subprocess.run(
-            command,
-            cwd=str(workspace),
-            capture_output=True,
-            text=True,
-            env=env,
-        )
+        timeout_seconds = int(os.environ.get("PLATFORM_SCRIPT_TIMEOUT_SECONDS", "7200"))
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(workspace),
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = (exc.stderr or "") + f"\nTraining timed out after {timeout_seconds} seconds."
+            result = subprocess.CompletedProcess(
+                args=command,
+                returncode=124,
+                stdout=stdout,
+                stderr=stderr,
+            )
 
         last_result = result
 
@@ -1580,6 +1589,44 @@ def log_model_artifact(
 
 
 
+
+def build_model_manifest(
+    primary_model_path: Path,
+    companion_artifacts: Dict[str, str],
+    metrics: Dict[str, float],
+    workspace: Path,
+) -> Dict[str, Any]:
+    """Build a portable manifest used by serving and audit components."""
+    def relative_or_absolute(path_value: str) -> str:
+        path = Path(path_value).resolve()
+        try:
+            return str(path.relative_to(workspace.resolve()))
+        except Exception:
+            return str(path)
+
+    return {
+        "schema_version": 1,
+        "primary_model": relative_or_absolute(str(primary_model_path)),
+        "primary_model_extension": primary_model_path.suffix.lower(),
+        "companion_artifacts": {
+            key: relative_or_absolute(value)
+            for key, value in (companion_artifacts or {}).items()
+        },
+        "metrics": {
+            normalize_metric_name(str(key)): float(value)
+            for key, value in (metrics or {}).items()
+            if key is not None and value is not None
+        },
+        "runtime_mode": _clean_env_value(os.environ.get("RUNTIME_MODE")) or "CUSTOM_DOCKERFILE",
+        "project_type": get_project_type_from_platform(),
+        "target_column": get_target_column_from_platform(),
+        "registered_model_name": _clean_env_value(
+            os.environ.get("PLATFORM_REGISTERED_MODEL_NAME")
+        ),
+        "promotion_owner": "BACKEND",
+        "validation_status": "PENDING",
+    }
+
 def run_standard_runtime(
     script_path: Path,
     dataset_path: Optional[Path],
@@ -1616,6 +1663,10 @@ def run_standard_runtime(
             analysis=analysis,
         )
 
+    if not tracking_uri or not tracking_uri.strip():
+        raise ValueError("MLflow tracking URI is required")
+
+    os.environ.setdefault("GIT_PYTHON_REFRESH", "quiet")
     mlflow.set_tracking_uri(tracking_uri)
 
     if experiment_name:
@@ -1828,31 +1879,12 @@ def run_standard_runtime(
                         platform_model_version,
                     )
 
-                    # Tags exploités par le backend pour relier précisément
-                    # ce run à SA version MLflow Registry.
-                    mlflow.set_tag("model_version", platform_model_version)
-                    mlflow.set_tag("registered_model_version", platform_model_version)
-                    mlflow.set_tag("platform_model_registered", "true")
-                    mlflow.set_tag("validation_status", "PENDING")
-                    mlflow.set_tag(
-                        "platform_model_uri",
-                        f"models:/{platform_registered_model_name}/{platform_model_version}",
-                    )
-                    client = MlflowClient()
-                    for key, value in {
-                        "platform_run_id": platform_run_id,
-                        "platform_experiment_id": str(platform_experiment_id),
-                        "validation_status": "PENDING",
-                    }.items():
-                        client.set_model_version_tag(
-                            name=platform_registered_model_name,
-                            version=platform_model_version,
-                            key=key,
-                            value=value,
-                        )
-                    print(
-                        "[PLATFORM_MODEL] Version registered as PENDING. "
-                        "Promotion is delegated to the backend validation/promotion service."
+                    tag_registered_version_as_candidate(
+                        registered_model_name=platform_registered_model_name,
+                        model_version=platform_model_version,
+                        platform_run_id=platform_run_id,
+                        platform_experiment_id=str(platform_experiment_id),
+                        source_type="LOCAL_MODEL_FILE",
                     )
 
                     print(
@@ -1885,12 +1917,16 @@ def run_standard_runtime(
             )
 
             if user_model_candidate:
-                logged_model_uri = register_user_mlflow_model_as_platform_model(
+                user_registration = register_user_mlflow_model_as_platform_model(
                     candidate=user_model_candidate,
                     platform_registered_model_name=platform_registered_model_name,
+                    platform_run_id=platform_run_id,
+                    platform_experiment_id=str(platform_experiment_id),
                 )
 
-                if logged_model_uri:
+                if user_registration:
+                    logged_model_uri = user_registration["uri"]
+                    platform_model_version = user_registration["version"]
                     platform_model_registered = True
 
                 mlflow.log_text(
@@ -1975,12 +2011,13 @@ def run_standard_runtime(
         if platform_model_version:
             print(f"registered_model_name={platform_registered_model_name}")
             print(f"model_version={platform_model_version}")
-            print(f"production_version={platform_model_version}")
+            print(f"candidate_version={platform_model_version}")
+            print("validation_status=PENDING")
+            print("promotion_owner=BACKEND")
             print(
                 "model_uri="
                 f"models:/{platform_registered_model_name}/{platform_model_version}"
             )
-            print(f"model_alias_uri=models:/{platform_registered_model_name}@production")
 
     return RunResult(
         status=final_status,

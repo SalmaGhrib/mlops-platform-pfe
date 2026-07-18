@@ -26,7 +26,10 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
@@ -63,6 +66,7 @@ public class MlExperimentService {
     private final KubernetesJobService kubernetesJobService;
     private final RestTemplate restTemplate;
     private final NotificationService notificationService;
+    private final PlatformTransactionManager transactionManager;
 
     @Value("${app.upload.dir:uploads}")
     private String uploadDir;
@@ -85,7 +89,8 @@ public class MlExperimentService {
             MlflowTrackingClientService mlflowTrackingClientService,
             KubernetesJobService kubernetesJobService,
             RestTemplate restTemplate,
-            NotificationService notificationService
+            NotificationService notificationService,
+            PlatformTransactionManager transactionManager
     ) {
         this.mlExperimentRepository = mlExperimentRepository;
         this.mlProjectRepository = mlProjectRepository;
@@ -100,6 +105,7 @@ public class MlExperimentService {
         this.kubernetesJobService = kubernetesJobService;
         this.restTemplate = restTemplate;
         this.notificationService = notificationService;
+        this.transactionManager = transactionManager;
     }
 
     /*
@@ -794,6 +800,11 @@ experiment.setMessage(
                 System.out.println("[SYNC][" + phase + "] Cannot sync experiment id=" + experiment.getId());
                 System.out.println("[SYNC][" + phase + "] Reason: " + e.getMessage());
                 e.printStackTrace();
+
+                // Never continue with the same Hibernate session after a persistence error.
+                // The current project transaction must roll back cleanly; the next project
+                // will run in its own REQUIRES_NEW transaction.
+                throw e;
             }
         }
     }
@@ -3170,51 +3181,51 @@ private String limitForDatabase(String value, int maxLength) {
     }
 
     private void saveExperimentMetrics(MlExperiment experiment, Map<String, Double> metrics) {
-    if (experiment == null || experiment.getId() == null || metrics == null || metrics.isEmpty()) {
-        return;
-    }
-
-    Long experimentId = experiment.getId();
-
-    MlExperiment managedExperiment = mlExperimentRepository.findById(experimentId)
-            .orElseThrow(() -> new RuntimeException("Experiment not found while saving metrics: " + experimentId));
-
-    /*
-     * Très important :
-     * suppression bulk JPQL pour éviter les StaleObjectStateException.
-     */
-    metricRepository.deleteAllByExperimentIdBulk(experimentId);
-
-    List<MlExperimentMetric> metricsToSave = new ArrayList<>();
-
-    for (Map.Entry<String, Double> entry : metrics.entrySet()) {
-        if (entry == null || entry.getKey() == null || entry.getKey().isBlank() || entry.getValue() == null) {
-            continue;
+        if (experiment == null || experiment.getId() == null || metrics == null || metrics.isEmpty()) {
+            return;
         }
 
-        String normalizedMetricName = normalizeMetricKey(entry.getKey());
+        Long experimentId = experiment.getId();
 
-        if (!isDisplayablePerformanceMetric(normalizedMetricName)) {
-            continue;
+        MlExperiment managedExperiment = mlExperimentRepository.findById(experimentId)
+                .orElseThrow(() -> new RuntimeException(
+                        "Experiment not found while saving metrics: " + experimentId
+                ));
+
+        Map<String, Double> normalizedMetrics = normalizeMetricsMap(metrics);
+
+        // Bulk delete is executed in its own repository transaction. It avoids leaving
+        // stale managed metric entities in the persistence context.
+        metricRepository.deleteAllByExperimentIdBulk(experimentId);
+
+        if (normalizedMetrics.isEmpty()) {
+            return;
         }
 
-        MlExperimentMetric metric = new MlExperimentMetric();
-        metric.setExperiment(managedExperiment);
-        metric.setMetricName(normalizedMetricName);
-        metric.setMetricValue(entry.getValue());
-        metric.setDirection(getDirectionFromMetric(normalizedMetricName));
-        metric.setProductionVersion(managedExperiment.getProductionVersion());
-        metric.setProduction(Boolean.TRUE.equals(managedExperiment.getProduction()));
-        metric.setGlobalScore(managedExperiment.getGlobalScore());
+        List<MlExperimentMetric> metricsToSave = new ArrayList<>();
 
-        metricsToSave.add(metric);
+        for (Map.Entry<String, Double> entry : normalizedMetrics.entrySet()) {
+            if (entry.getKey() == null || entry.getKey().isBlank() || entry.getValue() == null) {
+                continue;
+            }
+
+            MlExperimentMetric metric = new MlExperimentMetric();
+            metric.setExperiment(managedExperiment);
+            metric.setMetricName(entry.getKey());
+            metric.setMetricValue(entry.getValue());
+            metric.setDirection(getDirectionFromMetric(entry.getKey()));
+            metric.setProductionVersion(managedExperiment.getProductionVersion());
+            metric.setProduction(Boolean.TRUE.equals(managedExperiment.getProduction()));
+            metric.setGlobalScore(managedExperiment.getGlobalScore());
+
+            metricsToSave.add(metric);
+        }
+
+        if (!metricsToSave.isEmpty()) {
+            metricRepository.saveAllAndFlush(metricsToSave);
+        }
     }
 
-    if (!metricsToSave.isEmpty()) {
-        metricRepository.saveAll(metricsToSave);
-        metricRepository.flush();
-    }
-}
     private boolean isDisplayablePerformanceMetric(String metricName) {
     String normalized = normalizeMetricKey(metricName);
 
@@ -4567,23 +4578,36 @@ private String defaultPrimaryMetricForProject(MlProject project) {
         return field.asText("");
     }
 
-@jakarta.transaction.Transactional
 public void syncAllProjectsAutomatically() {
-    List<MlProject> projects = mlProjectRepository.findAll();
+    List<Long> projectIds = mlProjectRepository.findAll()
+            .stream()
+            .filter(project -> project != null && project.getId() != null)
+            .map(MlProject::getId)
+            .toList();
 
-    if (projects == null || projects.isEmpty()) {
+    if (projectIds.isEmpty()) {
         System.out.println("[AUTO_SYNC] No projects found.");
         return;
     }
 
-    for (MlProject project : projects) {
+    for (Long projectId : projectIds) {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        template.setTimeout(120);
+
         try {
-            syncSingleProjectAutomatically(project);
+            template.executeWithoutResult(status -> {
+                MlProject project = mlProjectRepository.findById(projectId)
+                        .orElseThrow(() -> new IllegalStateException(
+                                "Project not found during AUTO_SYNC. projectId=" + projectId
+                        ));
+
+                syncSingleProjectAutomatically(project);
+            });
+
         } catch (Exception e) {
-            System.out.println("[AUTO_SYNC] Failed for project id="
-                    + (project != null ? project.getId() : null)
-                    + ", name="
-                    + (project != null ? project.getName() : null));
+            System.out.println("[AUTO_SYNC] Failed for project id=" + projectId);
             System.out.println("[AUTO_SYNC] Reason: " + e.getMessage());
             e.printStackTrace();
         }
