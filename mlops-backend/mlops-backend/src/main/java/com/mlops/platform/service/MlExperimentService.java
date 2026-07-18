@@ -4978,9 +4978,17 @@ public MlExperimentResponse retrainFromExistingExperiment(
         throw new RuntimeException("sourceExperimentId is required for scheduled retraining.");
     }
 
-    MlExperiment sourceExperiment = mlExperimentRepository.findById(sourceExperimentId)
+    /*
+     * IMPORTANT:
+     * The retraining workflow runs outside a long Hibernate session.
+     * Load project + modelFile + datasetFile eagerly in one query so that
+     * UploadedProjectFile proxies remain usable after the repository call.
+     */
+    MlExperiment sourceExperiment = mlExperimentRepository
+            .findByIdWithFiles(sourceExperimentId)
             .orElseThrow(() -> new RuntimeException(
-                    "Source experiment not found: " + sourceExperimentId
+                    "Source experiment with project/files not found: "
+                            + sourceExperimentId
             ));
 
     MlProject project = sourceExperiment.getProject();
@@ -5362,8 +5370,34 @@ public MlExperimentResponse retrainFromCurrentProductionExperiment(
     }
 
     if (fallbackSourceExperimentId != null) {
-        System.out.println("[AUTO_RETRAINING] No production experiment found. Using fallback sourceExperimentId="
-                + fallbackSourceExperimentId);
+        MlExperiment fallback = mlExperimentRepository
+                .findByIdWithFiles(fallbackSourceExperimentId)
+                .orElseThrow(() -> new RuntimeException(
+                        "Fallback source experiment with project/files not found: "
+                                + fallbackSourceExperimentId
+                ));
+
+        String expectedRegisteredModelName =
+                buildRegisteredModelName(project);
+
+        if (!isValidProductionRetrainingSource(
+                fallback,
+                expectedRegisteredModelName
+        )) {
+            throw new RuntimeException(
+                    "Fallback source experiment is not a valid Production "
+                            + "retraining source. projectId="
+                            + projectId
+                            + ", sourceExperimentId="
+                            + fallbackSourceExperimentId
+            );
+        }
+
+        System.out.println(
+                "[AUTO_RETRAINING] No direct production row found. "
+                        + "Using validated fallback sourceExperimentId="
+                        + fallbackSourceExperimentId
+        );
 
         return retrainFromExistingExperiment(
                 projectId,
@@ -5382,47 +5416,30 @@ private MlExperiment findCurrentProductionExperimentForRetraining(MlProject proj
         return null;
     }
 
-    List<MlExperiment> experiments =
-            mlExperimentRepository.findByProjectOrderByCreatedAtDesc(project);
+    String expectedRegisteredModelName =
+            buildRegisteredModelName(project);
 
-    if (experiments == null || experiments.isEmpty()) {
+    /*
+     * Load the production candidate and its files eagerly.
+     * This avoids LazyInitializationException on modelFile/datasetFile.
+     */
+    List<MlExperiment> candidates =
+            mlExperimentRepository
+                    .findProductionRetrainingSourcesWithFiles(
+                            project.getId(),
+                            expectedRegisteredModelName
+                    );
+
+    if (candidates == null || candidates.isEmpty()) {
         return null;
     }
 
-    String expectedRegisteredModelName = buildRegisteredModelName(project);
-
-    /*
-     * Priorité 1 :
-     * Chercher l'expérience explicitement marquée production=true.
-     */
-    for (MlExperiment experiment : experiments) {
-        if (!isValidProductionRetrainingSource(experiment, expectedRegisteredModelName)) {
-            continue;
-        }
-
-        if (Boolean.TRUE.equals(experiment.getProduction())) {
-            return experiment;
-        }
-    }
-
-    /*
-     * Priorité 2 :
-     * Chercher une expérience dont modelVersion == productionVersion.
-     */
-    for (MlExperiment experiment : experiments) {
-        if (!isValidProductionRetrainingSource(experiment, expectedRegisteredModelName)) {
-            continue;
-        }
-
-        String modelVersion = experiment.getModelVersion();
-        String productionVersion = experiment.getProductionVersion();
-
-        if (modelVersion != null
-                && productionVersion != null
-                && !modelVersion.isBlank()
-                && !productionVersion.isBlank()
-                && modelVersion.trim().equals(productionVersion.trim())) {
-            return experiment;
+    for (MlExperiment candidate : candidates) {
+        if (isValidProductionRetrainingSource(
+                candidate,
+                expectedRegisteredModelName
+        )) {
+            return candidate;
         }
     }
 

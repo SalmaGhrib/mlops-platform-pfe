@@ -108,6 +108,39 @@ public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long
             """)
     Optional<MlExperiment> findByIdWithFiles(@Param("id") Long id);
 
+    /**
+     * Production retraining sources loaded with all file relations.
+     *
+     * The first valid row is the most recent Production row. Returning a list
+     * avoids non-portable JPQL LIMIT syntax while keeping JOIN FETCH support.
+     */
+    @Query("""
+            SELECT DISTINCT e
+            FROM MlExperiment e
+            JOIN FETCH e.project p
+            LEFT JOIN FETCH e.modelFile mf
+            LEFT JOIN FETCH e.datasetFile df
+            WHERE p.id = :projectId
+              AND e.registeredModelName = :registeredModelName
+              AND e.production = true
+              AND e.status = com.mlops.platform.entity.ExperimentStatus.COMPLETED
+              AND e.mlflowRunId IS NOT NULL
+              AND e.mlflowRunId <> ''
+              AND e.modelVersion IS NOT NULL
+              AND e.modelVersion <> ''
+              AND e.productionVersion IS NOT NULL
+              AND e.productionVersion <> ''
+              AND e.modelVersion = e.productionVersion
+              AND e.primaryMetricValue IS NOT NULL
+              AND e.globalScore IS NOT NULL
+            ORDER BY COALESCE(e.finishedAt, e.startedAt, e.createdAt, e.updatedAt) DESC,
+                     e.id DESC
+            """)
+    List<MlExperiment> findProductionRetrainingSourcesWithFiles(
+            @Param("projectId") Long projectId,
+            @Param("registeredModelName") String registeredModelName
+    );
+
     /*
      * Recherche par MLflow Run ID.
      */
