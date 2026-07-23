@@ -335,7 +335,7 @@ public class KubernetesJobService {
     }
 
     private String buildRunnerShellCommand() {
-    return """
+        return """
             set -e
 
             echo "[CUSTOM-TRAINING] Starting platform runner"
@@ -349,6 +349,20 @@ public class KubernetesJobService {
 
             export PYTHONUNBUFFERED=1
             export PYTHONPATH="/app:/workspace:${PYTHONPATH:-}"
+
+            # Defensive cleanup:
+            # an empty optional variable must behave as if it was not defined.
+            # This preserves the same fallback behavior as local execution.
+            if [ -z "${TARGET_COLUMN:-}" ]; then
+              unset TARGET_COLUMN
+            fi
+
+            if [ -z "${ML_TARGET_COLUMN:-}" ]; then
+              unset ML_TARGET_COLUMN
+            fi
+
+            echo "[CUSTOM-TRAINING] TARGET_COLUMN=${TARGET_COLUMN:-<not-set>}"
+            echo "[CUSTOM-TRAINING] ML_TARGET_COLUMN=${ML_TARGET_COLUMN:-<not-set>}"
 
             RUNNER_PATH="/app/platform_runner.py"
 
@@ -437,7 +451,8 @@ public class KubernetesJobService {
 
             exec python "$RUNNER_PATH" --script "train.py" --tracking-uri "${MLFLOW_TRACKING_URI:-http://mlflow-service:5000}" --experiment-name "${MLFLOW_EXPERIMENT_NAME:-custom_training}" --run-name "${RUN_NAME:-custom_run}" --registered-model-name "${REGISTERED_MODEL_NAME:-custom_model}" --dataset-path "$DATASET_ARG" --workspace "$WORKSPACE_RUNTIME"
             """;
-}
+    }
+
     private String resolveImagePullPolicy(String imageUri) {
         if (!hasText(imageUri)) {
             return "IfNotPresent";
@@ -445,7 +460,8 @@ public class KubernetesJobService {
 
         String clean = imageUri.trim();
 
-        if (clean.endsWith(":latest")) {
+        if (clean.endsWith(":latest")
+                || clean.contains("/mlops-custom:")) {
             return "Always";
         }
 
@@ -531,13 +547,22 @@ public class KubernetesJobService {
         addEnv(envVars, "PROJECT_TYPE", safe(project.getProjectType()));
         addEnv(envVars, "PROBLEM_TYPE", safe(project.getProjectType()));
 
+        /*
+         * TARGET_COLUMN is optional.
+         *
+         * IMPORTANT:
+         * Never inject TARGET_COLUMN="" into Kubernetes.
+         * When no target is configured in the project/experiment, the variable
+         * must be absent so that the user training script can use its own
+         * default target column exactly as it does locally.
+         */
         String targetColumn = firstNonBlank(
-                safe(experiment.getTargetColumn()),
-                safe(project.getTargetColumn())
+                experiment.getTargetColumn(),
+                project.getTargetColumn()
         );
 
-        addEnv(envVars, "TARGET_COLUMN", targetColumn);
-        addEnv(envVars, "ML_TARGET_COLUMN", targetColumn);
+        addOptionalEnv(envVars, "TARGET_COLUMN", targetColumn);
+        addOptionalEnv(envVars, "ML_TARGET_COLUMN", targetColumn);
 
         /*
          * Do not set DATASET_PATH here.
@@ -602,6 +627,33 @@ public class KubernetesJobService {
                 new EnvVarBuilder()
                         .withName(name)
                         .withValue(value != null ? value : "")
+                        .build()
+        );
+    }
+
+    /**
+     * Adds an optional environment variable only when it contains a real value.
+     *
+     * This is required for TARGET_COLUMN:
+     * - configured target -> inject it;
+     * - absent/blank target -> do not create the variable;
+     * - the user script can then apply its local default automatically.
+     */
+    private void addOptionalEnv(
+            List<EnvVar> envVars,
+            String name,
+            String value
+    ) {
+        if (envVars == null
+                || !hasText(name)
+                || !hasText(value)) {
+            return;
+        }
+
+        envVars.add(
+                new EnvVarBuilder()
+                        .withName(name.trim())
+                        .withValue(value.trim())
                         .build()
         );
     }

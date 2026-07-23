@@ -1766,13 +1766,86 @@ private ModelVersionInfo findModelVersionInfoByRegisteredModelGet(
         return versions;
     }
 
-    private void syncSingleModelVersionToDatabase(MlflowModelVersionDto versionDto) {
-        if (versionDto == null || versionDto.getRunId() == null || versionDto.getRunId().isBlank()) {
+
+    /**
+     * Une version ne doit être attachée à la plateforme que si :
+     * - le run MLflow est réellement terminé avec succès ;
+     * - l'expérience MySQL associée est COMPLETED ;
+     * - le run contient un artefact modèle et des métriques utiles.
+     *
+     * Cette règle empêche les expériences FAILED/CANCELLED/RUNNING de recevoir
+     * un numéro de version dans l'interface et dans la base.
+     */
+    private boolean isVersionEligibleForPlatform(
+            MlExperiment experiment,
+            MlflowRunDetails runDetails
+    ) {
+        if (experiment == null || runDetails == null) {
+            return false;
+        }
+
+        if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
+            return false;
+        }
+
+        if (runDetails.getRunId() == null || runDetails.getRunId().isBlank()) {
+            return false;
+        }
+
+        if (!isSuccessfulMlflowRun(runDetails)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private boolean isVersionEligibleForPlatform(
+            MlExperiment experiment,
+            String runId
+    ) {
+        if (experiment == null || runId == null || runId.isBlank()) {
+            return false;
+        }
+
+        MlflowRunDetails details = getRunDetailsFromRunId(
+                runId.trim(),
+                experiment.getRegisteredModelName()
+        );
+
+        return isVersionEligibleForPlatform(experiment, details);
+    }
+
+    /**
+     * Nettoie tout état de version sur une expérience non réussie.
+     * On ne supprime pas la version MLflow technique déjà créée, mais on évite
+     * qu'elle soit comptée, affichée ou promue par la plateforme.
+     */
+    private void clearVersionStateForNonCompletedExperiment(
+            MlExperiment experiment
+    ) {
+        if (experiment == null) {
+            return;
+        }
+
+        experiment.setModelVersion(null);
+        experiment.setLatestVersion(null);
+        experiment.setProductionVersion(null);
+        experiment.setProduction(false);
+    }
+
+    private void syncSingleModelVersionToDatabase(
+            MlflowModelVersionDto versionDto
+    ) {
+        if (versionDto == null
+                || versionDto.getRunId() == null
+                || versionDto.getRunId().isBlank()) {
             return;
         }
 
         Optional<MlExperiment> optionalExperiment =
-                mlExperimentRepository.findByMlflowRunId(versionDto.getRunId());
+                mlExperimentRepository.findByMlflowRunId(
+                        versionDto.getRunId().trim()
+                );
 
         if (optionalExperiment.isEmpty()) {
             return;
@@ -1780,54 +1853,101 @@ private ModelVersionInfo findModelVersionInfoByRegisteredModelGet(
 
         MlExperiment experiment = optionalExperiment.get();
 
-        experiment.setMlflowRunId(versionDto.getRunId());
+        MlflowRunDetails runDetails = getRunDetailsFromRunId(
+                versionDto.getRunId(),
+                versionDto.getRegisteredModelName()
+        );
 
-        if (versionDto.getRegisteredModelName() != null && !versionDto.getRegisteredModelName().isBlank()) {
-    experiment.setRegisteredModelName(versionDto.getRegisteredModelName());
+        /*
+         * Règle centrale :
+         * une expérience FAILED/CANCELLED/RUNNING ne reçoit jamais
+         * modelVersion, productionVersion ou production=true.
+         */
+        if (!isVersionEligibleForPlatform(experiment, runDetails)) {
+            clearVersionStateForNonCompletedExperiment(experiment);
 
-    /*
-     * Important :
-     * registeredModelName = losshb_model
-     * mlflowExperimentName = losshb
-     *
-     * Ne pas écraser mlflowExperimentName avec le nom du registry.
-     */
-    if (experiment.getMlflowExperimentName() == null
-            || experiment.getMlflowExperimentName().isBlank()
-            || experiment.getMlflowExperimentName().endsWith("_model")) {
-        String cleanExperimentName = versionDto.getRegisteredModelName();
-
-        if (cleanExperimentName.endsWith("_model")) {
-            cleanExperimentName = cleanExperimentName.substring(
-                    0,
-                    cleanExperimentName.length() - "_model".length()
+            experiment.setMessage(
+                    "Version MLflow ignorée : seuls les runs COMPLETED "
+                            + "et réellement réussis sont comptabilisés."
             );
+
+            mlExperimentRepository.saveAndFlush(experiment);
+
+            System.out.println(
+                    "[MLFLOW_REGISTRY_SYNC] Version ignored for non-successful experiment."
+                            + " experimentId=" + experiment.getId()
+                            + ", status=" + experiment.getStatus()
+                            + ", runId=" + versionDto.getRunId()
+                            + ", technicalMlflowVersion=" + versionDto.getVersion()
+            );
+            return;
         }
 
-        experiment.setMlflowExperimentName(cleanExperimentName);
-    }
-}
-        if (versionDto.getVersion() != null && !versionDto.getVersion().isBlank()) {
-            experiment.setModelVersion(versionDto.getVersion());
+        experiment.setMlflowRunId(versionDto.getRunId().trim());
+
+        if (versionDto.getRegisteredModelName() != null
+                && !versionDto.getRegisteredModelName().isBlank()) {
+            String cleanRegisteredModelName =
+                    versionDto.getRegisteredModelName().trim();
+
+            experiment.setRegisteredModelName(cleanRegisteredModelName);
+
+            /*
+             * registeredModelName = my_model
+             * mlflowExperimentName = my
+             */
+            if (experiment.getMlflowExperimentName() == null
+                    || experiment.getMlflowExperimentName().isBlank()
+                    || experiment.getMlflowExperimentName().endsWith("_model")) {
+
+                String cleanExperimentName = cleanRegisteredModelName;
+
+                if (cleanExperimentName.endsWith("_model")) {
+                    cleanExperimentName = cleanExperimentName.substring(
+                            0,
+                            cleanExperimentName.length() - "_model".length()
+                    );
+                }
+
+                experiment.setMlflowExperimentName(cleanExperimentName);
+            }
         }
 
-        String productionVersion = getProductionVersion(experiment.getRegisteredModelName());
-
-        if (productionVersion != null && !productionVersion.isBlank()) {
-            experiment.setProductionVersion(productionVersion);
+        /*
+         * La seule version acceptée est celle réellement retournée
+         * par le Registry pour le run réussi.
+         */
+        if (versionDto.getVersion() != null
+                && !versionDto.getVersion().isBlank()) {
+            experiment.setModelVersion(versionDto.getVersion().trim());
         }
+
+        String productionVersion =
+                getProductionVersion(experiment.getRegisteredModelName());
+
+        experiment.setProductionVersion(
+                productionVersion == null || productionVersion.isBlank()
+                        ? null
+                        : productionVersion.trim()
+        );
 
         experiment.setProduction(
                 experiment.getProductionVersion() != null
                         && experiment.getModelVersion() != null
-                        && experiment.getProductionVersion().equals(experiment.getModelVersion())
+                        && experiment.getProductionVersion()
+                        .equals(experiment.getModelVersion())
         );
 
-        Map<String, Double> metrics = getMetricsByRunId(versionDto.getRunId());
+        Map<String, Double> metrics =
+                getMetricsByRunId(versionDto.getRunId());
 
         if (metrics != null && !metrics.isEmpty()) {
-            if (experiment.getPrimaryMetric() != null && !experiment.getPrimaryMetric().isBlank()) {
-                Double primaryMetricValue = getMetricValueIgnoreCase(metrics, experiment.getPrimaryMetric());
+            if (experiment.getPrimaryMetric() != null
+                    && !experiment.getPrimaryMetric().isBlank()) {
+                Double primaryMetricValue = getMetricValueIgnoreCase(
+                        metrics,
+                        experiment.getPrimaryMetric()
+                );
 
                 if (primaryMetricValue != null) {
                     experiment.setPrimaryMetricValue(primaryMetricValue);
@@ -1835,10 +1955,14 @@ private ModelVersionInfo findModelVersionInfoByRegisteredModelGet(
             }
 
             if (experiment.getPrimaryMetricValue() == null) {
-                updatePrimaryMetricFromAvailableMetrics(experiment, metrics);
+                updatePrimaryMetricFromAvailableMetrics(
+                        experiment,
+                        metrics
+                );
             }
 
-            if (experiment.getPrimaryMetric() != null && experiment.getPrimaryMetricValue() != null) {
+            if (experiment.getPrimaryMetric() != null
+                    && experiment.getPrimaryMetricValue() != null) {
                 experiment.setGlobalScore(
                         calculateSimpleGlobalScore(
                                 experiment.getPrimaryMetric(),
@@ -1848,12 +1972,18 @@ private ModelVersionInfo findModelVersionInfoByRegisteredModelGet(
             }
         }
 
-        syncDetectedAndUsedAlgorithmsFromMlflowTags(experiment, versionDto.getRunId());
+        syncDetectedAndUsedAlgorithmsFromMlflowTags(
+                experiment,
+                versionDto.getRunId()
+        );
 
-        experiment.setMessage("Synchronisation MLflow Registry terminée.");
+        experiment.setMessage(
+                "Synchronisation MLflow Registry terminée pour un run réussi."
+        );
         experiment.setErrorMessage(null);
 
-        MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(experiment);
+        MlExperiment savedExperiment =
+                mlExperimentRepository.saveAndFlush(experiment);
 
         if (metrics != null && !metrics.isEmpty()) {
             saveExperimentMetrics(savedExperiment, metrics);
@@ -1996,70 +2126,136 @@ public boolean deleteMlflowExperimentByName(String experimentName) {
         }
     }
 
-    public void syncModelRegistryForExperiment(MlExperiment experiment) {
-        if (experiment == null || experiment.getRegisteredModelName() == null || experiment.getRegisteredModelName().isBlank()) {
+    public void syncModelRegistryForExperiment(
+            MlExperiment experiment
+    ) {
+        if (experiment == null) {
             return;
         }
 
         if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
-            System.out.println("[MLFLOW_REGISTRY_SYNC] Skipping registry sync for non-COMPLETED experiment. experimentId="
-                    + (experiment.getId() != null ? experiment.getId() : "null")
-                    + ", status=" + experiment.getStatus());
+            clearVersionStateForNonCompletedExperiment(experiment);
+            mlExperimentRepository.saveAndFlush(experiment);
+
+            System.out.println(
+                    "[MLFLOW_REGISTRY_SYNC] Skipping non-COMPLETED experiment."
+                            + " experimentId=" + experiment.getId()
+                            + ", status=" + experiment.getStatus()
+            );
             return;
         }
 
-        if (experiment.getMlflowRunId() == null || experiment.getMlflowRunId().isBlank()) {
+        if (experiment.getMlflowRunId() == null
+                || experiment.getMlflowRunId().isBlank()) {
+            clearVersionStateForNonCompletedExperiment(experiment);
+            mlExperimentRepository.saveAndFlush(experiment);
             return;
         }
 
-        String registeredModelName = experiment.getRegisteredModelName().trim();
-        List<MlflowModelVersionDto> versions = getAllModelVersionsWithMetrics(registeredModelName);
+        MlflowRunDetails runDetails = getRunDetailsFromRunId(
+                experiment.getMlflowRunId(),
+                experiment.getRegisteredModelName()
+        );
+
+        if (!isVersionEligibleForPlatform(experiment, runDetails)) {
+            clearVersionStateForNonCompletedExperiment(experiment);
+            mlExperimentRepository.saveAndFlush(experiment);
+
+            System.out.println(
+                    "[MLFLOW_REGISTRY_SYNC] Run is not eligible for versioning."
+                            + " experimentId=" + experiment.getId()
+                            + ", runId=" + experiment.getMlflowRunId()
+            );
+            return;
+        }
+
+        String registeredModelName = firstNotBlank(
+                experiment.getRegisteredModelName(),
+                runDetails.getRegisteredModelName()
+        );
+
+        if (registeredModelName == null
+                || registeredModelName.isBlank()) {
+            return;
+        }
+
+        registeredModelName = registeredModelName.trim();
+
+        List<MlflowModelVersionDto> versions =
+                getAllModelVersionsWithMetrics(registeredModelName);
 
         if (versions == null || versions.isEmpty()) {
             return;
         }
 
-        String productionVersion = getProductionVersion(registeredModelName);
-        String latestVersion = null;
+        String productionVersion =
+                getProductionVersion(registeredModelName);
+
+        String latestSuccessfulVersion = null;
         String versionForRun = null;
 
         for (MlflowModelVersionDto versionDto : versions) {
-            if (versionDto == null || versionDto.getVersion() == null) {
+            if (versionDto == null
+                    || versionDto.getVersion() == null
+                    || versionDto.getVersion().isBlank()
+                    || versionDto.getRunId() == null
+                    || versionDto.getRunId().isBlank()) {
                 continue;
             }
 
-            if (latestVersion == null
-                    || compareVersionStrings(versionDto.getVersion(), latestVersion) > 0) {
-                latestVersion = versionDto.getVersion();
+            MlflowRunDetails candidateRun = getRunDetailsFromRunId(
+                    versionDto.getRunId(),
+                    registeredModelName
+            );
+
+            /*
+             * latestVersion côté plateforme = dernière version réussie,
+             * pas simplement le plus grand numéro technique MLflow.
+             */
+            if (candidateRun != null
+                    && isSuccessfulMlflowRun(candidateRun)
+                    && (latestSuccessfulVersion == null
+                    || compareVersionStrings(
+                    versionDto.getVersion(),
+                    latestSuccessfulVersion
+            ) > 0)) {
+                latestSuccessfulVersion = versionDto.getVersion();
             }
 
-            if (experiment.getMlflowRunId().equals(versionDto.getRunId())) {
+            if (experiment.getMlflowRunId()
+                    .equals(versionDto.getRunId())
+                    && isSuccessfulMlflowRun(candidateRun)) {
                 versionForRun = versionDto.getVersion();
             }
         }
 
-        if (versionForRun != null && !versionForRun.isBlank()) {
-            experiment.setModelVersion(versionForRun);
+        if (versionForRun == null || versionForRun.isBlank()) {
+            clearVersionStateForNonCompletedExperiment(experiment);
+            mlExperimentRepository.saveAndFlush(experiment);
+            return;
         }
 
-        if (latestVersion != null && !latestVersion.isBlank()) {
-            experiment.setLatestVersion(latestVersion);
-        }
-
-        experiment.setProductionVersion(productionVersion);
-        experiment.setProduction(
-                productionVersion != null
-                        && versionForRun != null
-                        && productionVersion.equals(versionForRun)
-                        && experiment.getMlflowRunId().equals(
-                                versions.stream()
-                                        .filter(v -> v != null && productionVersion.equals(v.getVersion()))
-                                        .map(MlflowModelVersionDto::getRunId)
-                                        .filter(id -> id != null && !id.isBlank())
-                                        .findFirst()
-                                        .orElse("")
-                        )
+        experiment.setRegisteredModelName(registeredModelName);
+        experiment.setModelVersion(versionForRun.trim());
+        experiment.setLatestVersion(
+                latestSuccessfulVersion == null
+                        ? versionForRun.trim()
+                        : latestSuccessfulVersion.trim()
         );
+
+        experiment.setProductionVersion(
+                productionVersion == null || productionVersion.isBlank()
+                        ? null
+                        : productionVersion.trim()
+        );
+
+        experiment.setProduction(
+                experiment.getProductionVersion() != null
+                        && experiment.getProductionVersion()
+                        .equals(experiment.getModelVersion())
+        );
+
+        mlExperimentRepository.saveAndFlush(experiment);
     }
 
     private int compareVersionStrings(String a, String b) {
@@ -2640,11 +2836,37 @@ private List<MlflowModelVersionDto> getLatestVersionsFromRegisteredModel(String 
         }
     }
 
+
+    /**
+     * Les fonctions de comparaison/promotion ne voient que les versions
+     * provenant de runs réellement réussis.
+     */
+    private boolean isSuccessfulRegisteredModelVersion(
+            MlflowModelVersionDto versionDto
+    ) {
+        if (versionDto == null
+                || versionDto.getRunId() == null
+                || versionDto.getRunId().isBlank()) {
+            return false;
+        }
+
+        MlflowRunDetails runDetails = getRunDetailsFromRunId(
+                versionDto.getRunId(),
+                versionDto.getRegisteredModelName()
+        );
+
+        return isSuccessfulMlflowRun(runDetails);
+    }
+
     public MlflowModelVersionDto chooseBestVersion(
             String registeredModelName,
             List<MetricPriorityDto> priorities
     ) {
-        List<MlflowModelVersionDto> versions = getAllModelVersionsWithMetrics(registeredModelName);
+        List<MlflowModelVersionDto> versions =
+                getAllModelVersionsWithMetrics(registeredModelName)
+                        .stream()
+                        .filter(this::isSuccessfulRegisteredModelVersion)
+                        .toList();
 
         if (versions.isEmpty()) {
             return null;

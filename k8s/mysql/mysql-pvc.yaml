@@ -3,9 +3,13 @@ kind: PersistentVolumeClaim
 metadata:
   name: mysql-pvc
   namespace: mlops
+
 spec:
   accessModes:
     - ReadWriteOnce
+
+  storageClassName: managed-csi
+
   resources:
     requests:
-      storage: 5Gi
+      storage: 10Gi

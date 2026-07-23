@@ -1,38 +1,115 @@
 apiVersion: apps/v1
 kind: Deployment
+
 metadata:
   name: mysql
   namespace: mlops
+
 spec:
   replicas: 1
+
+  strategy:
+    type: Recreate
+
   selector:
     matchLabels:
       app: mysql
+
   template:
     metadata:
       labels:
         app: mysql
+
     spec:
+      terminationGracePeriodSeconds: 60
+
       containers:
         - name: mysql
           image: mysql:8.0
+          imagePullPolicy: IfNotPresent
+
           ports:
-            - containerPort: 3306
+            - name: mysql
+              containerPort: 3306
+              protocol: TCP
+
           env:
             - name: MYSQL_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: mysql-secret
                   key: MYSQL_ROOT_PASSWORD
+
             - name: MYSQL_DATABASE
               valueFrom:
                 secretKeyRef:
                   name: mysql-secret
                   key: MYSQL_DATABASE
+
+          args:
+            - --default-authentication-plugin=mysql_native_password
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_unicode_ci
+            - --max-connections=300
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "1500m"
+              memory: "2Gi"
+
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD"
+            failureThreshold: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD"
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+
           volumeMounts:
             - name: mysql-storage
               mountPath: /var/lib/mysql
+
+            # Ce montage déclenche la synchronisation Key Vault
+            # vers le secret Kubernetes mysql-secret.
+            - name: keyvault-secrets
+              mountPath: /mnt/secrets-store
+              readOnly: true
+
       volumes:
         - name: mysql-storage
           persistentVolumeClaim:
             claimName: mysql-pvc
+
+        - name: keyvault-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: backend-keyvault-secrets

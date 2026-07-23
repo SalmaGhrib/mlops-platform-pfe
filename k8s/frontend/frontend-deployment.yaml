@@ -1,21 +1,65 @@
 apiVersion: apps/v1
 kind: Deployment
+
 metadata:
   name: mlops-frontend
   namespace: mlops
+
 spec:
   replicas: 1
+
+  revisionHistoryLimit: 3
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
   selector:
     matchLabels:
       app: mlops-frontend
+
   template:
     metadata:
       labels:
         app: mlops-frontend
+
     spec:
       containers:
         - name: mlops-frontend
-          image: docker.io/salmaghrib2003/mlops-frontend:latest
+
+          image: acrmlopssalmav2.azurecr.io/mlops-frontend:v2
           imagePullPolicy: Always
+
           ports:
-            - containerPort: 80
+            - name: http
+              containerPort: 80
+              protocol: TCP
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5

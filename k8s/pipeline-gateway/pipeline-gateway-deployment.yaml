@@ -1,25 +1,79 @@
 apiVersion: apps/v1
 kind: Deployment
+
 metadata:
   name: pipeline-gateway
+  namespace: mlops
   labels:
     app: pipeline-gateway
+
 spec:
   replicas: 1
+
+  revisionHistoryLimit: 3
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
   selector:
     matchLabels:
       app: pipeline-gateway
+
   template:
     metadata:
       labels:
         app: pipeline-gateway
+
     spec:
       containers:
         - name: pipeline-gateway
-          image: docker.io/salmaghrib2003/pipeline-gateway:latest
+
+          image: acrmlopssalmav2.azurecr.io/pipeline-gateway:v2
           imagePullPolicy: Always
+
           ports:
-            - containerPort: 8001
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
+
+            - name: MLFLOW_TRACKING_URI
+              value: "http://mlflow-service:5000"
+
+            - name: KUBEFLOW_API_URL
+              value: "http://ml-pipeline.kubeflow.svc.cluster.local:8888"
+
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+
+          startupProbe:
+            tcpSocket:
+              port: 8001
+            failureThreshold: 30
+            periodSeconds: 10
+
+          readinessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+
+          livenessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 5

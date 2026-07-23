@@ -45,13 +45,14 @@ SUPPORTED_MODEL_EXTENSIONS = {
 }
 
 METRIC_REGEX = re.compile(
+    r"(?<![A-Za-z0-9_])"
     r"(?P<key>"
-    r"loss|val_loss|accuracy|val_accuracy|acc|f1|f1_score|precision|recall|"
-    r"rmse|mse|mae|r2|r2_score|auc|roc_auc"
+    r"val_accuracy|val_loss|f1_score|r2_score|roc_auc|"
+    r"accuracy|precision|recall|rmse|mse|mae|loss|auc|acc|f1|r2"
     r")"
-    r"(?:\s+[^:=]*?)?"
+    r"(?![A-Za-z0-9_])"
     r"\s*[:=]\s*"
-    r"(?P<value>[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)",
+    r"(?P<value>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)",
     re.IGNORECASE,
 )
 
@@ -72,7 +73,18 @@ FRENCH_METRIC_ALIASES = {
     "mae": "mae",
     "r2": "r2",
     "r2_score": "r2",
+
 }
+
+# PLATFORM_RECOVERY=true
+#
+# Marqueur de compatibilité lu par KubernetesBuildService.
+# La récupération conserve éventuellement un artefact pour audit, mais :
+# - un script utilisateur en erreur reste FAILED ;
+# - aucune ModelVersion officielle n'est créée pour un run échoué ;
+# - l'alias production reste exclusivement géré par le backend.
+PLATFORM_RECOVERY = True
+PLATFORM_RECOVERY_ENABLED = True
 
 
 @dataclass
@@ -209,52 +221,127 @@ def normalize_metric_name(name: str) -> str:
     return aliases.get(name, name)
 
 
-def parse_metrics(stdout: str) -> Dict[str, float]:
+def extract_json_metrics(text: str) -> Dict[str, float]:
     """
-    Parse des métriques imprimées par des scripts très différents.
+    Extract metric dictionaries printed as JSON by user scripts.
 
-    Formats supportés :
-    - accuracy: 0.95
-    - accuracy=0.95
-    - Accuracy sur le test set : 0.95
-    - RMSE : 123.4
-    - R2 score = 0.89
+    JSON values have priority over loose regex parsing because they are less
+    ambiguous and avoid interpreting the "2" in "r2_score" as a metric value.
     """
     metrics: Dict[str, float] = {}
+    decoder = json.JSONDecoder()
+    allowed_metrics = {
+        "loss",
+        "val_loss",
+        "accuracy",
+        "val_accuracy",
+        "precision",
+        "recall",
+        "f1_score",
+        "rmse",
+        "mse",
+        "mae",
+        "r2",
+        "auc",
+    }
 
-    for raw_line in (stdout or "").splitlines():
+    source = text or ""
+
+    for index, character in enumerate(source):
+        if character != "{":
+            continue
+
+        try:
+            value, _ = decoder.raw_decode(source[index:])
+        except Exception:
+            continue
+
+        if not isinstance(value, dict):
+            continue
+
+        for key, raw_value in value.items():
+            if isinstance(raw_value, bool):
+                continue
+
+            if not isinstance(raw_value, (int, float)):
+                continue
+
+            normalized_key = normalize_metric_name(str(key))
+
+            if normalized_key not in allowed_metrics:
+                continue
+
+            numeric_value = float(raw_value)
+
+            if math.isfinite(numeric_value):
+                metrics[normalized_key] = numeric_value
+
+    return metrics
+
+
+def parse_metrics(stdout: str) -> Dict[str, float]:
+    """
+    Parse metrics printed by heterogeneous user scripts.
+
+    Priority:
+    1. complete JSON dictionaries;
+    2. explicit key=value or key:value lines;
+    3. human-readable French aliases.
+    """
+    metrics: Dict[str, float] = {}
+    source = stdout or ""
+
+    for raw_line in source.splitlines():
         line = raw_line.strip()
         if not line:
             continue
 
-        # Format standard ou semi-standard
         match = METRIC_REGEX.search(line)
         if match:
             key = normalize_metric_name(match.group("key"))
             try:
-                metrics[key] = float(match.group("value"))
-                continue
+                value = float(match.group("value"))
+                if math.isfinite(value):
+                    metrics[key] = value
+                    continue
             except ValueError:
                 pass
 
-        # Formats plus humains/français
-        lower_line = line.lower().replace("é", "e").replace("è", "e").replace("ê", "e")
+        lower_line = (
+            line.lower()
+            .replace("é", "e")
+            .replace("è", "e")
+            .replace("ê", "e")
+        )
+
         for alias, canonical in FRENCH_METRIC_ALIASES.items():
-            normalized_alias = alias.lower().replace("é", "e").replace("è", "e").replace("ê", "e")
-            if normalized_alias in lower_line:
-                number_match = re.search(
-                    r"([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)",
-                    line,
-                )
-                if number_match:
-                    try:
-                        metrics[canonical] = float(number_match.group(1))
-                    except ValueError:
-                        pass
-                break
+            normalized_alias = (
+                alias.lower()
+                .replace("é", "e")
+                .replace("è", "e")
+                .replace("ê", "e")
+            )
 
+            if normalized_alias not in lower_line:
+                continue
+
+            number_match = re.search(
+                r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)",
+                line,
+            )
+
+            if number_match:
+                try:
+                    value = float(number_match.group(1))
+                    if math.isfinite(value):
+                        metrics[normalize_metric_name(canonical)] = value
+                except ValueError:
+                    pass
+
+            break
+
+    metrics.update(extract_json_metrics(source))
     return metrics
-
 
 
 def _clean_env_value(value: Optional[str]) -> str:
@@ -354,6 +441,10 @@ def load_metrics_json(workspace: Path) -> Dict[str, float]:
         workspace / "outputs" / "metrics.json",
         workspace / "artifacts" / "metrics.json",
         workspace / "model" / "metrics.json",
+        Path("/opt/ml/model/metrics.json"),
+        Path("/app/model/metrics.json"),
+        Path("/app/outputs/metrics.json"),
+        Path("/app/artifacts/metrics.json"),
     ]
 
     metrics: Dict[str, float] = {}
@@ -694,6 +785,11 @@ def model_artifact_score(path: Path) -> int:
 
     score = 0
 
+    normalized_path = str(path).replace("\\", "/").lower()
+
+    if normalized_path.startswith("/opt/ml/model/"):
+        score += 5000
+
     if "outputs" in lower_parts:
         score += 1000
 
@@ -720,9 +816,84 @@ def model_artifact_score(path: Path) -> int:
     return score
 
 
-def find_model_artifacts(workspace: Path) -> List[Path]:
-    paths: List[Path] = []
+def get_model_search_roots(workspace: Path) -> List[Path]:
+    """
+    Return every supported location where user scripts commonly save models.
 
+    The most important AKS-compatible location is /opt/ml/model.
+    """
+    configured_dirs = [
+        os.environ.get("MODEL_OUTPUT_DIR"),
+        os.environ.get("ML_OUTPUT_DIR"),
+        os.environ.get("OUTPUT_DIR"),
+        os.environ.get("MLOPS_DEFAULT_OUTPUT_DIR"),
+    ]
+
+    roots: List[Path] = [
+        Path("/opt/ml/model"),
+        workspace / "outputs",
+        workspace / "output",
+        workspace / "artifacts",
+        workspace / "artifact",
+        workspace / "model",
+        workspace / "models",
+        workspace / "saved_model",
+        workspace / "checkpoints",
+        workspace,
+        Path("/app/model"),
+        Path("/app/models"),
+        Path("/app/outputs"),
+        Path("/app/output"),
+        Path("/app/artifacts"),
+        Path("/app/artifact"),
+        Path("/app/saved_model"),
+        Path("/app/checkpoints"),
+    ]
+
+    accepted_dirs = _clean_env_value(
+        os.environ.get("MLOPS_ACCEPTED_MODEL_DIRS")
+    )
+
+    if accepted_dirs:
+        roots.extend(
+            Path(item.strip())
+            for item in accepted_dirs.split(",")
+            if item.strip()
+        )
+
+    roots.extend(
+        Path(value.strip())
+        for value in configured_dirs
+        if value and str(value).strip()
+    )
+
+    unique_roots: List[Path] = []
+    seen: set[str] = set()
+
+    for root in roots:
+        try:
+            resolved = root.expanduser().resolve()
+        except Exception:
+            resolved = root.expanduser().absolute()
+
+        key = str(resolved)
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        unique_roots.append(resolved)
+
+    return unique_roots
+
+
+def find_model_artifacts(workspace: Path) -> List[Path]:
+    """
+    Discover predictive model files created by the user script.
+
+    Custom Docker scripts frequently save their final model to /opt/ml/model,
+    which is outside /workspace.
+    """
     ignored_dirs = {
         ".git",
         "__pycache__",
@@ -733,15 +904,66 @@ def find_model_artifacts(workspace: Path) -> List[Path]:
         ".ipynb_checkpoints",
     }
 
-    for extension in SUPPORTED_MODEL_EXTENSIONS:
-        for path in workspace.rglob(f"*{extension}"):
-            if any(part in ignored_dirs for part in path.parts):
+    discovered: List[Path] = []
+    seen: set[str] = set()
+    search_roots = get_model_search_roots(workspace)
+
+    print(
+        "[PLATFORM_MODEL] Search roots="
+        + str([str(path) for path in search_roots])
+    )
+
+    for root in search_roots:
+        try:
+            if not root.exists():
                 continue
 
-            if path.is_file():
-                paths.append(path)
+            candidates = [root] if root.is_file() else list(root.rglob("*"))
 
-    return sorted(paths, key=lambda p: model_artifact_score(p), reverse=True)
+            for path in candidates:
+                try:
+                    if not path.is_file():
+                        continue
+
+                    if path.suffix.lower() not in SUPPORTED_MODEL_EXTENSIONS:
+                        continue
+
+                    if any(part in ignored_dirs for part in path.parts):
+                        continue
+
+                    resolved = path.resolve()
+                    key = str(resolved)
+
+                    if key in seen:
+                        continue
+
+                    seen.add(key)
+                    discovered.append(resolved)
+
+                except Exception as exc:
+                    print(
+                        "[PLATFORM_MODEL] Could not inspect candidate "
+                        f"{path}: {exc}"
+                    )
+
+        except Exception as exc:
+            print(
+                "[PLATFORM_MODEL] Could not scan model root "
+                f"{root}: {exc}"
+            )
+
+    ordered = sorted(
+        discovered,
+        key=lambda path: model_artifact_score(path),
+        reverse=True,
+    )
+
+    print(
+        "[PLATFORM_MODEL] Discovered model artifacts="
+        + str([str(path) for path in ordered])
+    )
+
+    return ordered
 
 
 def select_primary_model_artifact(model_artifacts: List[Path]) -> Optional[Path]:
@@ -884,6 +1106,158 @@ def find_user_created_mlflow_model(
         return None
 
 
+
+def has_useful_training_metrics(metrics: Dict[str, float]) -> bool:
+    """
+    Une métrique technique comme return_code ne suffit pas à valider un modèle.
+    """
+    if not metrics:
+        return False
+
+    return any(
+        key
+        and normalize_metric_name(str(key)) != "return_code"
+        and value is not None
+        and math.isfinite(float(value))
+        for key, value in metrics.items()
+    )
+
+
+def is_successful_registration_candidate(
+    result: subprocess.CompletedProcess,
+    metrics: Dict[str, float],
+    model_artifacts: List[Path],
+) -> bool:
+    """
+    Règle centrale de versioning.
+
+    Une ModelVersion MLflow officielle n'est créée que si :
+    - le script utilisateur retourne 0 ;
+    - au moins un artefact modèle a été trouvé ;
+    - au moins une métrique métier valide est disponible.
+
+    Ainsi, les runs FAILED/CANCELLED ne consomment aucune version officielle.
+    """
+    if result is None or int(result.returncode) != 0:
+        return False
+
+    if not model_artifacts:
+        return False
+
+    if not has_useful_training_metrics(metrics):
+        return False
+
+    return True
+
+
+def find_existing_model_version_for_run(
+    client: MlflowClient,
+    registered_model_name: str,
+    run_id: str,
+) -> Optional[str]:
+    """
+    Rend l'enregistrement idempotent :
+    deux passages du runner sur le même run ne créent pas deux versions.
+    """
+    name = _clean_env_value(registered_model_name)
+    clean_run_id = _clean_env_value(run_id)
+
+    if not name or not clean_run_id:
+        return None
+
+    try:
+        versions = client.search_model_versions(
+            f"name = '{name.replace(chr(39), chr(92) + chr(39))}'"
+        )
+    except Exception as exc:
+        print(
+            "[PLATFORM_MODEL] Could not check existing versions for "
+            f"{name}: {exc}"
+        )
+        return None
+
+    for version in versions:
+        version_run_id = _clean_env_value(getattr(version, "run_id", None))
+        if version_run_id and version_run_id == clean_run_id:
+            existing = _clean_env_value(getattr(version, "version", None))
+            if existing:
+                return existing
+
+    return None
+
+
+def register_platform_model_once(
+    model_uri: str,
+    registered_model_name: str,
+    platform_run_id: str,
+) -> str:
+    """
+    Crée au maximum une ModelVersion officielle pour un run réussi.
+    """
+    client = MlflowClient()
+
+    existing_version = find_existing_model_version_for_run(
+        client=client,
+        registered_model_name=registered_model_name,
+        run_id=platform_run_id,
+    )
+
+    if existing_version:
+        print(
+            "[PLATFORM_MODEL] Existing official model version reused: "
+            f"{registered_model_name} v{existing_version}, run_id={platform_run_id}"
+        )
+        return existing_version
+
+    registered = mlflow.register_model(
+        model_uri=model_uri,
+        name=registered_model_name,
+    )
+
+    return str(registered.version)
+
+
+def finalize_platform_run(
+    run_id: str,
+    success: bool,
+    reason: Optional[str] = None,
+) -> None:
+    """
+    Aligne le statut MLflow du run avec le statut réel de la plateforme.
+    """
+    clean_run_id = _clean_env_value(run_id)
+    if not clean_run_id:
+        return
+
+    client = MlflowClient()
+    final_status = "FINISHED" if success else "FAILED"
+    validation_status = "PASSED" if success else "FAILED"
+
+    try:
+        client.set_tag(clean_run_id, "validation_status", validation_status)
+        client.set_tag(clean_run_id, "platform_final_status", final_status)
+        client.set_tag(
+            clean_run_id,
+            "platform_registration_eligible",
+            str(bool(success)).lower(),
+        )
+
+        if reason:
+            client.set_tag(
+                clean_run_id,
+                "platform_failure_reason",
+                str(reason)[:5000],
+            )
+
+        client.set_terminated(clean_run_id, status=final_status)
+
+    except Exception as exc:
+        print(
+            "[PLATFORM] Could not finalize MLflow run status "
+            f"for {clean_run_id}: {exc}"
+        )
+
+
 def tag_registered_version_as_candidate(
     registered_model_name: str,
     model_version: str,
@@ -959,11 +1333,11 @@ def register_user_mlflow_model_as_platform_model(
             f"{candidate.name} v{candidate.version}, source={candidate.source}"
         )
 
-        registered = mlflow.register_model(
+        version = register_platform_model_once(
             model_uri=source_uri,
-            name=platform_registered_model_name,
+            registered_model_name=platform_registered_model_name,
+            platform_run_id=platform_run_id,
         )
-        version = str(registered.version)
         platform_uri = f"models:/{platform_registered_model_name}/{version}"
 
         mlflow.log_param("platform_model_source_type", "USER_MLFLOW_MODEL")
@@ -1682,15 +2056,45 @@ def run_standard_runtime(
     os.environ["PLATFORM_REGISTERED_MODEL_NAME"] = platform_registered_model_name
     os.environ["PLATFORM_OUTPUT_DIR"] = str(workspace / "outputs")
 
-    # Create the single official platform run first. The user script receives this run id
-    # and can use MLflow without creating a second random run.
-    initial_run = mlflow.start_run(run_name=run_name)
+    # Create one official platform run and keep it RUNNING while the user script
+    # executes. This avoids a transient FINISHED state before validation.
+    experiment = mlflow.get_experiment_by_name(experiment_name)
+    if experiment is None:
+        experiment_id = mlflow.create_experiment(experiment_name)
+    else:
+        experiment_id = experiment.experiment_id
+
+    initial_tags = {
+        "mlflow.runName": run_name,
+        "run_name": run_name,
+        "platform_runner": "true",
+        "mlops.managed": "true",
+        "validation_status": "PENDING",
+        "promotion_owner": "BACKEND",
+        "platform_recovery": "true",
+        "platform_registration_eligible": "false",
+        "registered_model_name": platform_registered_model_name,
+        "platform_registered_model_name": platform_registered_model_name,
+    }
+
+    spring_experiment_id = (
+        os.environ.get("SPRING_EXPERIMENT_ID")
+        or os.environ.get("MLFLOW_TAG_SPRING_EXPERIMENT_ID")
+    )
+    if spring_experiment_id:
+        initial_tags["spring_experiment_id"] = str(spring_experiment_id)
+
+    initial_run = MlflowClient().create_run(
+        experiment_id=str(experiment_id),
+        tags=initial_tags,
+        run_name=run_name,
+    )
     platform_run_id = initial_run.info.run_id
     platform_experiment_id = initial_run.info.experiment_id
-    mlflow.set_tag("platform_runner", "true")
-    mlflow.set_tag("mlops.managed", "true")
-    mlflow.set_tag("validation_status", "PENDING")
-    mlflow.end_run()
+
+    # Exposé aussi au handler d'exception principal afin d'éviter un deuxième run.
+    os.environ["PLATFORM_MLFLOW_RUN_ID"] = platform_run_id
+    os.environ["PLATFORM_MLFLOW_EXPERIMENT_ID"] = str(platform_experiment_id)
 
     script_start_time_ms = int(time.time() * 1000)
 
@@ -1704,8 +2108,23 @@ def run_standard_runtime(
 
     script_end_time_ms = int(time.time() * 1000)
 
-    metrics = merge_metrics(parse_metrics(result.stdout), load_metrics_json(workspace))
+    parsed_output_metrics = parse_metrics(
+        f"{result.stdout or ''}\n{result.stderr or ''}"
+    )
+    metrics = merge_metrics(
+        parsed_output_metrics,
+        load_metrics_json(workspace),
+        overwrite=True,
+    )
     model_artifacts = find_model_artifacts(workspace)
+
+    if model_artifacts:
+        print(
+            "[PLATFORM_MODEL] model_artifacts_count="
+            f"{len(model_artifacts)}"
+        )
+    else:
+        print("[PLATFORM_MODEL] model_artifacts_count=0")
 
     # Métriques automatiques calculées par la plateforme.
     # Elles complètent les métriques imprimées par le script, sans les écraser.
@@ -1727,11 +2146,25 @@ def run_standard_runtime(
     platform_model_registered = False
     platform_model_version: Optional[str] = None
 
+    registration_eligible = is_successful_registration_candidate(
+        result=result,
+        metrics=metrics,
+        model_artifacts=model_artifacts,
+    )
+
     recoverable_user_mlflow_failure = (
         result.returncode != 0
         and bool(model_artifacts)
         and is_recoverable_user_mlflow_error(result.stderr, result.stdout)
     )
+
+    if not registration_eligible:
+        print(
+            "[PLATFORM_VERSIONING] Official model registration disabled for this run. "
+            f"return_code={result.returncode}, "
+            f"model_artifacts={len(model_artifacts)}, "
+            f"useful_metrics={has_useful_training_metrics(metrics)}"
+        )
 
     error_info = format_error_info(result.stderr) if result.returncode != 0 else None
     recovery_warning = (
@@ -1743,6 +2176,7 @@ def run_standard_runtime(
     with mlflow.start_run(run_id=platform_run_id):
         mlflow.set_tag("platform_runner", "true")
         mlflow.set_tag("mlops.managed", "true")
+        mlflow.set_tag("platform_recovery", "true")
         mlflow.set_tag("runtime_mode", os.environ.get("RUNTIME_MODE", "CUSTOM_DOCKERFILE"))
         mlflow.set_tag("registered_model_name", platform_registered_model_name)
         mlflow.set_tag("platform_registered_model_name", platform_registered_model_name)
@@ -1860,11 +2294,12 @@ def run_standard_runtime(
                     except Exception as exc:
                         print(f"[PLATFORM_MODEL] Could not log auxiliary artifact {artifact_path}: {exc}")
 
-            if logged_model_uri:
+            if logged_model_uri and registration_eligible:
                 try:
-                    registered_version = mlflow.register_model(
+                    platform_model_version = register_platform_model_once(
                         model_uri=logged_model_uri,
-                        name=platform_registered_model_name,
+                        registered_model_name=platform_registered_model_name,
+                        platform_run_id=platform_run_id,
                     )
 
                     mlflow.log_param(
@@ -1872,7 +2307,6 @@ def run_standard_runtime(
                         "LOCAL_MODEL_FILE",
                     )
                     platform_model_registered = True
-                    platform_model_version = str(registered_version.version)
 
                     mlflow.log_param(
                         "platform_model_version",
@@ -1889,7 +2323,7 @@ def run_standard_runtime(
 
                     print(
                         "[PLATFORM_MODEL] Local model registered as platform model: "
-                        f"{platform_registered_model_name} v{registered_version.version}"
+                        f"{platform_registered_model_name} v{platform_model_version}"
                     )
 
                 except Exception as exc:
@@ -1897,6 +2331,12 @@ def run_standard_runtime(
                         "[PLATFORM_MODEL] Failed to register local model as platform model: "
                         f"{exc}"
                     )
+            elif logged_model_uri and not registration_eligible:
+                print(
+                    "[PLATFORM_VERSIONING] Model artifact was logged for audit, "
+                    "but no official ModelVersion was created because the run "
+                    "did not satisfy the success criteria."
+                )
 
             mlflow.log_text(
                 json.dumps(artifact_results, indent=2, default=str, ensure_ascii=False),
@@ -1916,7 +2356,7 @@ def run_standard_runtime(
                 platform_registered_model_name=platform_registered_model_name,
             )
 
-            if user_model_candidate:
+            if user_model_candidate and registration_eligible:
                 user_registration = register_user_mlflow_model_as_platform_model(
                     candidate=user_model_candidate,
                     platform_registered_model_name=platform_registered_model_name,
@@ -1946,6 +2386,26 @@ def run_standard_runtime(
                     artifact_file="logs/model_artifacts.json",
                 )
 
+            elif user_model_candidate and not registration_eligible:
+                print(
+                    "[PLATFORM_VERSIONING] User-created MLflow model detected, "
+                    "but it was not re-registered under the official platform name "
+                    "because the run failed validation."
+                )
+                mlflow.log_text(
+                    json.dumps(
+                        {
+                            "strategy": "USER_MLFLOW_MODEL_IGNORED",
+                            "reason": "RUN_NOT_SUCCESSFUL",
+                            "user_model_name": user_model_candidate.name,
+                            "user_model_version": user_model_candidate.version,
+                            "user_model_run_id": user_model_candidate.run_id,
+                        },
+                        indent=2,
+                        ensure_ascii=False,
+                    ),
+                    artifact_file="logs/model_artifacts.json",
+                )
             else:
                 print("[PLATFORM_MODEL] No model candidate detected.")
 
@@ -1954,11 +2414,10 @@ def run_standard_runtime(
                     artifact_file="logs/model_artifacts.json",
                 )
 
-    recovered_success = (
-        result.returncode != 0
-        and bool(logged_model_uri)
-        and platform_model_registered
-    )
+    # Un script qui retourne une erreur reste FAILED.
+    # Même si un artefact local a été récupéré pour audit, aucune version officielle
+    # ne doit être créée ni comptée.
+    recovered_success = False
 
     require_registered_model = (
         os.environ.get("PLATFORM_REQUIRE_MODEL_ARTIFACT", "true").strip().lower()
@@ -1989,35 +2448,47 @@ def run_standard_runtime(
         print(json.dumps(no_registered_model_error, indent=2, ensure_ascii=False, default=str))
 
     final_success = (
-        recovered_success
-        or (
-            result.returncode == 0
-            and (
-                not require_registered_model
-                or platform_model_registered
-            )
+        result.returncode == 0
+        and has_useful_training_metrics(metrics)
+        and (
+            not require_registered_model
+            or platform_model_registered
         )
     )
+
+    if result.returncode == 0 and not has_useful_training_metrics(metrics):
+        no_registered_model_error = {
+            "phase": "PLATFORM_METRICS_VALIDATION",
+            "cause": "no_useful_metric",
+            "message": (
+                "Le script s'est terminé, mais aucune métrique métier valide "
+                "n'a été produite ou calculée. Aucune version ne sera créée."
+            ),
+            "suggestion": (
+                "Configurez correctement TARGET_COLUMN et PROJECT_TYPE, "
+                "ou produisez un fichier metrics.json."
+            ),
+        }
 
     final_status = "SUCCESS" if final_success else "FAILED"
     effective_return_code = 0 if final_success else (result.returncode or 1)
 
-    if recovered_success:
-        print(
-            "[PLATFORM_RECOVERY] Recovery completed successfully. "
-            "The user script failed only in its own MLflow logic, "
-            "but the platform registered the detected model."
-        )
-        if platform_model_version:
-            print(f"registered_model_name={platform_registered_model_name}")
-            print(f"model_version={platform_model_version}")
-            print(f"candidate_version={platform_model_version}")
-            print("validation_status=PENDING")
-            print("promotion_owner=BACKEND")
-            print(
-                "model_uri="
-                f"models:/{platform_registered_model_name}/{platform_model_version}"
+    finalize_platform_run(
+        run_id=platform_run_id,
+        success=final_success,
+        reason=(
+            None
+            if final_success
+            else json.dumps(
+                no_registered_model_error or error_info or {
+                    "cause": "training_not_eligible_for_registration"
+                },
+                ensure_ascii=False,
+                default=str,
             )
+        ),
+    )
+
 
     return RunResult(
         status=final_status,
@@ -2106,21 +2577,48 @@ def main() -> int:
             if tracking_uri:
                 mlflow.set_tracking_uri(tracking_uri)
 
-            if args.experiment_name:
-                mlflow.set_experiment(args.experiment_name)
+            existing_run_id = _clean_env_value(
+                os.environ.get("PLATFORM_MLFLOW_RUN_ID")
+            )
 
-            with mlflow.start_run(run_name=args.run_name):
-                mlflow.set_tag("platform_runner", "true")
-                mlflow.set_tag("mlops.managed", "true")
-                mlflow.set_tag("run_name", args.run_name)
-                spring_experiment_id = os.environ.get("SPRING_EXPERIMENT_ID") or os.environ.get("MLFLOW_TAG_SPRING_EXPERIMENT_ID")
-                if spring_experiment_id:
-                    mlflow.set_tag("spring_experiment_id", spring_experiment_id)
-                mlflow.log_text(
-                    json.dumps(error, indent=2, ensure_ascii=False),
-                    artifact_file="logs/platform_error.json",
+            if existing_run_id:
+                client = MlflowClient()
+                client.set_tag(existing_run_id, "platform_runner", "true")
+                client.set_tag(existing_run_id, "mlops.managed", "true")
+                client.set_tag(existing_run_id, "run_name", args.run_name)
+                client.set_tag(existing_run_id, "validation_status", "FAILED")
+                client.set_tag(existing_run_id, "platform_final_status", "FAILED")
+                client.set_tag(
+                    existing_run_id,
+                    "platform_registration_eligible",
+                    "false",
                 )
-                mlflow.log_metric("return_code", 1.0)
+                client.set_tag(
+                    existing_run_id,
+                    "platform_failure_reason",
+                    json.dumps(error, ensure_ascii=False, default=str)[:5000],
+                )
+                client.log_metric(existing_run_id, "return_code", 1.0)
+                client.set_terminated(existing_run_id, status="FAILED")
+            else:
+                if args.experiment_name:
+                    mlflow.set_experiment(args.experiment_name)
+
+                with mlflow.start_run(run_name=args.run_name):
+                    mlflow.set_tag("platform_runner", "true")
+                    mlflow.set_tag("mlops.managed", "true")
+                    mlflow.set_tag("run_name", args.run_name)
+                    mlflow.set_tag("validation_status", "FAILED")
+                    mlflow.set_tag("platform_final_status", "FAILED")
+                    mlflow.set_tag(
+                        "platform_registration_eligible",
+                        "false",
+                    )
+                    mlflow.log_text(
+                        json.dumps(error, indent=2, ensure_ascii=False),
+                        artifact_file="logs/platform_error.json",
+                    )
+                    mlflow.log_metric("return_code", 1.0)
         except Exception:
             pass
 

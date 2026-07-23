@@ -3,38 +3,95 @@ kind: ServiceAccount
 metadata:
   name: mlops-backend-sa
   namespace: mlops
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: mlops-backend-role
   namespace: mlops
+
 rules:
   - apiGroups: [""]
-    resources: ["pods", "pods/log", "services", "endpoints", "configmaps", "secrets", "persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - endpoints
+      - configmaps
+      - secrets
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+
   - apiGroups: ["apps"]
-    resources: ["deployments", "replicasets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    resources:
+      - deployments
+      - replicasets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+
   - apiGroups: ["batch"]
-    resources: ["jobs", "cronjobs"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+
   - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    resources:
+      - ingresses
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+
   - apiGroups: ["autoscaling"]
-    resources: ["horizontalpodautoscalers"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    resources:
+      - horizontalpodautoscalers
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: mlops-backend-rolebinding
   namespace: mlops
+
 subjects:
   - kind: ServiceAccount
     name: mlops-backend-sa
     namespace: mlops
+
 roleRef:
   kind: Role
   name: mlops-backend-role

@@ -3,10 +3,17 @@ kind: Service
 metadata:
   name: mysql-service
   namespace: mlops
+  labels:
+    app: mysql
+
 spec:
   type: ClusterIP
+
   selector:
     app: mysql
+
   ports:
-    - port: 3306
+    - name: mysql
+      protocol: TCP
+      port: 3306
       targetPort: 3306

@@ -1,10 +1,26 @@
 apiVersion: v1
 kind: ConfigMap
+
 metadata:
   name: backend-config
   namespace: mlops
+
 data:
   SERVER_PORT: "8081"
+
+  # ============================================================
+  # Frontend public / CORS
+  # ============================================================
+
+  # URL utilisée dans les emails de validation et mot de passe oublié
+  APP_FRONTEND_BASE_URL: "http://128.251.112.197"
+
+  # Origines autorisées en production et en développement local
+  APP_CORS_ALLOWED_ORIGINS: "http://128.251.112.197,http://localhost:4200,http://127.0.0.1:4200,http://localhost:4202,http://127.0.0.1:4202"
+
+  # ============================================================
+  # MySQL
+  # ============================================================
 
   SPRING_DATASOURCE_URL: "jdbc:mysql://mysql-service:3306/mlops_platform?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true"
   SPRING_DATASOURCE_USERNAME: "root"
@@ -13,54 +29,108 @@ data:
   SPRING_JPA_SHOW_SQL: "false"
   SPRING_JPA_OPEN_IN_VIEW: "true"
 
+  # ============================================================
+  # Uploads
+  # ============================================================
+
   APP_UPLOAD_DIR: "/app/uploads"
   APP_UPLOADS_PVC_ENABLED: "true"
-  APP_UPLOADS_PVC_NAME: "mlops-uploads-pvc"
+  APP_UPLOADS_PVC_NAME: "backend-uploads-pvc"
   APP_UPLOADS_MOUNT_PATH: "/app/uploads"
+
+  # ============================================================
+  # MLflow
+  # ============================================================
 
   APP_MLFLOW_TRACKING_URL: "http://mlflow-service:5000"
   APP_MLFLOW_TRACKING_URI: "http://mlflow-service:5000"
   MLFLOW_TRACKING_URI: "http://mlflow-service:5000"
+
+  # ============================================================
+  # Kubernetes / Kubeflow / Pipeline Gateway
+  # ============================================================
+
+  APP_KUBERNETES_NAMESPACE: "mlops"
+
+  APP_KUBEFLOW_API_URL: "http://ml-pipeline.kubeflow.svc.cluster.local:8888"
+
+  APP_PIPELINE_GATEWAY_URL: "http://pipeline-gateway-service:8001/upload-and-run-custom-model"
+
+  APP_RUNTIME_ANALYSIS_API_URL: "http://pipeline-gateway-service:8001/api/runtime/analyze-script"
+
+  # ============================================================
+  # Azure Container Registry V2
+  # ============================================================
+
+  APP_DOCKER_REGISTRY: "acrmlopssalmav2.azurecr.io"
+  APP_DOCKER_CUSTOM_IMAGE_PREFIX: "mlops-custom"
+
+  # L’AKS est attaché directement à l’ACR, donc pas de pull secret requis
+  APP_DOCKER_IMAGE_PULL_SECRET: ""
+
+  # ============================================================
+  # Runtime embarqué dans l’image backend
+  # ============================================================
+
+  APP_PLATFORM_RUNNER_PATH: "/app/mini-mlops/src/custom_models/platform_runner.py"
+  APP_PLATFORM_RUNTIME_ROOT: "/app/mini-mlops"
+  APP_SERVING_TEMPLATE_DIR: "/app/mini-mlops/serving-template"
+  APP_SERVING_LOCAL_DOCKER_BUILD_ENABLED: "false"
+
+  # ============================================================
+  # Schedulers MLOps
+  # ============================================================
+
+  APP_CUSTOM_DOCKER_WATCHER_ENABLED: "true"
+  APP_CUSTOM_DOCKER_WATCHER_DELAY_MS: "30000"
+
+  APP_MLOPS_AUTO_SYNC_ENABLED: "true"
+  APP_MLOPS_AUTO_SYNC_DELAY_MS: "300000"
+
+  APP_MLOPS_AUTO_DEPLOY_ENABLED: "true"
+
+  APP_MLOPS_PRODUCTION_RECONCILER_ENABLED: "true"
+  APP_MLOPS_PRODUCTION_RECONCILER_DELAY_MS: "60000"
+  APP_MLOPS_PRODUCTION_RECONCILER_INITIAL_DELAY_MS: "30000"
+
+  APP_RETRAINING_SCHEDULER_ENABLED: "true"
+  APP_RETRAINING_SCHEDULER_DELAY_MS: "30000"
+
+  # ============================================================
+  # Serving
+  # ============================================================
+
+  APP_SERVING_DEDICATED_IMAGE_ENABLED: "true"
+
+  APP_DEPLOYMENT_DEFAULT_DOCKER_IMAGE: "acrmlopssalmav2.azurecr.io/mlops-model-server:v2"
+
+  APP_SERVING_BUILD_DIR: "/tmp/mlops/generated-serving-images"
+
+  # ============================================================
+  # Kaniko
+  # ============================================================
+
+  APP_KANIKO_DOCKER_CONFIG_SECRET: "kaniko-docker-config"
+
+  APP_KANIKO_CACHE_REPO: "acrmlopssalmav2.azurecr.io/mlops-kaniko-cache"
+
+  # ============================================================
+  # Monitoring Spring Boot Actuator
+  # ============================================================
 
   MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,prometheus,metrics"
   MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: "always"
   MANAGEMENT_PROMETHEUS_METRICS_EXPORT_ENABLED: "true"
   MANAGEMENT_METRICS_TAGS_APPLICATION: "mlops-backend"
 
+  APP_MONITORING_ALERTS_ENABLED: "false"
+  APP_MONITORING_ALERTS_DELAY_MS: "60000"
+
+  # ============================================================
+  # Logs
+  # ============================================================
+
   LOGGING_LEVEL_ROOT: "WARN"
   LOGGING_LEVEL_ORG_SPRINGFRAMEWORK: "WARN"
   LOGGING_LEVEL_ORG_HIBERNATE: "ERROR"
   LOGGING_LEVEL_COM_MLOPS_PLATFORM: "INFO"
-
-  APP_KUBERNETES_NAMESPACE: "mlops"
-
-  APP_PIPELINE_GATEWAY_URL: "http://pipeline-gateway.mlops.svc.cluster.local:8001/upload-and-run-custom-model"
-  APP_RUNTIME_ANALYSIS_API_URL: "http://pipeline-gateway.mlops.svc.cluster.local:8001/api/runtime/analyze-script"
-  APP_DOCKER_REGISTRY: "acrmlopssalma.azurecr.io"
-  APP_DOCKER_CUSTOM_IMAGE_PREFIX: "mlops-custom"
-  APP_DOCKER_IMAGE_PULL_SECRET: ""
-  APP_PLATFORM_RUNNER_PATH: "/app/mini-mlops/src/custom_models/platform_runner.py"
-  APP_PLATFORM_RUNTIME_ROOT: "/app/mini-mlops"
-  APP_SERVING_TEMPLATE_DIR: "/app/mini-mlops/serving-template"
-  APP_SERVING_LOCAL_DOCKER_BUILD_ENABLED: "false"
-
-  # Fonctions nécessaires au cycle MLOps automatique sur AKS.
-  APP_CUSTOM_DOCKER_WATCHER_ENABLED: "true"
-  APP_CUSTOM_DOCKER_WATCHER_DELAY_MS: "30000"
-  APP_MLOPS_AUTO_SYNC_ENABLED: "true"
-  APP_MLOPS_AUTO_SYNC_DELAY_MS: "300000"
-  APP_MLOPS_AUTO_DEPLOY_ENABLED: "true"
-  APP_MLOPS_PRODUCTION_RECONCILER_ENABLED: "true"
-  APP_MLOPS_PRODUCTION_RECONCILER_DELAY_MS: "60000"
-  APP_MLOPS_PRODUCTION_RECONCILER_INITIAL_DELAY_MS: "30000"
-
-  APP_SERVING_DEDICATED_IMAGE_ENABLED: "true"
-  APP_DEPLOYMENT_DEFAULT_DOCKER_IMAGE: "acrmlopssalma.azurecr.io/mlops-generic-model-server:v6"
-  APP_SERVING_BUILD_DIR: "/tmp/mlops/generated-serving-images"
-  APP_KANIKO_DOCKER_CONFIG_SECRET: "kaniko-docker-config"
-  APP_KANIKO_CACHE_REPO: "acrmlopssalma.azurecr.io/mlops-kaniko-cache"
-
-  # Désactivés par défaut pour éviter le spam quand Prometheus/retraining n'est pas configuré.
-  APP_RETRAINING_SCHEDULER_ENABLED: "true"
-  APP_MONITORING_ALERTS_ENABLED: "false"
-  APP_MONITORING_ALERTS_DELAY_MS: "60000"

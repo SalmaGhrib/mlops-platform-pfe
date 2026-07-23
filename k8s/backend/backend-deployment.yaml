@@ -1,40 +1,108 @@
 apiVersion: apps/v1
 kind: Deployment
+
 metadata:
   name: mlops-backend
   namespace: mlops
+  labels:
+    app: mlops-backend
+
 spec:
   replicas: 1
+  revisionHistoryLimit: 3
+
+  strategy:
+    type: Recreate
+
   selector:
     matchLabels:
       app: mlops-backend
+
   template:
     metadata:
       labels:
         app: mlops-backend
+
     spec:
+      serviceAccountName: mlops-backend-sa
+      restartPolicy: Always
+
       containers:
         - name: mlops-backend
-          image: acrmlopssalma.azurecr.io/mlops-backend:stable
+
+          image: acrmlopssalmav2.azurecr.io/mlops-backend:model-detection-final-v1
           imagePullPolicy: Always
+
           ports:
-            - containerPort: 8081
+            - name: http
+              containerPort: 8081
+              protocol: TCP
+
           envFrom:
             - configMapRef:
                 name: backend-config
+
             - secretRef:
                 name: backend-secret
+
           resources:
             requests:
-              cpu: "500m"
-              memory: "1Gi"
+              cpu: "100m"
+              memory: "512Mi"
+
             limits:
               cpu: "1500m"
               memory: "2Gi"
+
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+            successThreshold: 1
+
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+            successThreshold: 1
+
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+            successThreshold: 1
+
           volumeMounts:
             - name: backend-uploads
               mountPath: /app/uploads
+
+            - name: keyvault-secrets
+              mountPath: /mnt/secrets-store
+              readOnly: true
+
       volumes:
         - name: backend-uploads
           persistentVolumeClaim:
-            claimName: mlops-uploads-pvc
+            claimName: backend-uploads-pvc
+
+        - name: keyvault-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: backend-keyvault-secrets

@@ -300,6 +300,7 @@ public class MlExperimentService {
 
                     savedExperiment.setKubeflowRunName(jobName);
                     savedExperiment.setTrainingJobName(jobName);
+                    savedExperiment.setKubeflowStatus("RUNNING");
                     savedExperiment.setBuildStatus("CUSTOM_IMAGE_JOB_RUNNING");
                     savedExperiment.setBuildLogs("Kubernetes Job launched successfully: " + jobName);
                     savedExperiment.setMessage(
@@ -1410,8 +1411,7 @@ private boolean isProductionExperimentRow(MlExperiment experiment) {
         return false;
     }
 
-    return Boolean.TRUE.equals(experiment.getProduction())
-            && hasText(experiment.getProductionVersion())
+    return hasText(experiment.getProductionVersion())
             && hasText(experiment.getModelVersion())
             && experiment.getProductionVersion().trim()
             .equalsIgnoreCase(experiment.getModelVersion().trim());
@@ -1478,8 +1478,16 @@ public void enforceProductionConsistencyForModel(String registeredModelName) {
     }
 
     String cleanRegisteredModelName = registeredModelName.trim();
+    String registryProductionVersion =
+            mlflowTrackingClientService.getProductionVersion(cleanRegisteredModelName);
 
     mlExperimentRepository.clearProductionByRegisteredModelName(cleanRegisteredModelName);
+
+    if (!hasText(registryProductionVersion)) {
+        System.out.println("[PRODUCTION_GUARD] No production alias in MLflow for model="
+                + cleanRegisteredModelName);
+        return;
+    }
 
     List<MlExperiment> candidates = mlExperimentRepository
             .findEligibleProductionCandidates(cleanRegisteredModelName);
@@ -1488,11 +1496,32 @@ public void enforceProductionConsistencyForModel(String registeredModelName) {
         return;
     }
 
-    MlExperiment selected = candidates.get(0);
-    selected.setProduction(true);
-    selected.setProductionVersion(selected.getModelVersion());
-    mlExperimentRepository.saveAndFlush(selected);
+    MlExperiment selected = null;
+
+    for (MlExperiment candidate : candidates) {
+        if (candidate == null || !hasText(candidate.getModelVersion())) {
+            continue;
+        }
+
+        candidate.setProductionVersion(registryProductionVersion);
+        candidate.setProduction(false);
+
+        if (registryProductionVersion.equals(candidate.getModelVersion().trim())) {
+            if (selected == null
+                    || compareProductionCandidates(candidate, selected) > 0) {
+                selected = candidate;
+            }
+        }
+    }
+
+    if (selected != null) {
+        selected.setProduction(true);
+    }
+
+    mlExperimentRepository.saveAll(candidates);
+    mlExperimentRepository.flush();
 }
+
 
 private List<MlExperiment> filterAndDeduplicateVisibleExperiments(List<MlExperiment> experiments) {
     if (experiments == null || experiments.isEmpty()) {
@@ -5186,7 +5215,7 @@ private MlExperimentResponse launchScheduledCustomDockerRetraining(
     if (cleanCustomImageUri != null) {
         newExperiment.setStatus(ExperimentStatus.RUNNING);
         markExperimentStarted(newExperiment);
-        newExperiment.setBuildStatus("IMAGE_REUSED");
+        newExperiment.setBuildStatus("CUSTOM_IMAGE_JOB_STARTING");
         newExperiment.setBuildLogs(
                 "Production image reused: " + cleanCustomImageUri
         );
@@ -5234,7 +5263,7 @@ private MlExperimentResponse launchScheduledCustomDockerRetraining(
         savedExperiment.setKubeflowRunName(jobName);
         savedExperiment.setTrainingJobName(jobName);
         savedExperiment.setKubeflowStatus("RUNNING");
-        savedExperiment.setBuildStatus("TRAINING_JOB_RUNNING");
+        savedExperiment.setBuildStatus("CUSTOM_IMAGE_JOB_RUNNING");
         savedExperiment.setBuildLogs(
                 "Kubernetes training Job created: " + jobName
         );

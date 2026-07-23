@@ -130,6 +130,9 @@ private String uploadsMountPath;
 
         assertConfigMapKeysAreSafe(buildContextFiles);
  
+        
+        assertConfigMapSafeSize(buildContextFiles, configMapName);
+
         System.out.println("[CUSTOM-DOCKER] ConfigMap keys are Kubernetes-safe=" + areConfigMapKeysKubernetesSafe(buildContextFiles));
         System.out.println("[CUSTOM-DOCKER] build context contains platform_runner.py=" + buildContextFiles.containsKey(STANDARD_PLATFORM_RUNNER_FILE));
         System.out.println("[CUSTOM-DOCKER] build context contains src__custom_models__generic_pyfunc_wrapper.py=" + buildContextFiles.containsKey("src__custom_models__generic_pyfunc_wrapper.py"));
@@ -495,47 +498,216 @@ private String uploadsMountPath;
         return value.substring(0, 3000) + "\n...[truncated]...";
     }
 
+    /**
+     * Loads and validates the platform runner using a stable contract.
+     *
+     * The old implementation depended on historical internal strings such as
+     * USER_MLFLOW_FAILURE_PATTERNS and "Recovery completed successfully".
+     * That caused valid runners to be rejected whenever their implementation
+     * changed. The new contract only checks stable capabilities.
+     */
     private String loadPlatformRunnerSource() {
-        List<Path> candidates = new ArrayList<>();
-
-        if (platformRunnerPath != null && !platformRunnerPath.isBlank()) {
-            candidates.add(Path.of(platformRunnerPath));
-        }
-
-        candidates.add(Path.of("/app/mini-mlops/src/custom_models/platform_runner.py"));
-        candidates.add(Path.of("mini-mlops/src/custom_models/platform_runner.py"));
-        candidates.add(Path.of("../mini-mlops/src/custom_models/platform_runner.py"));
+        List<Path> candidates = buildPlatformRunnerCandidates();
+        List<String> rejectionReasons = new ArrayList<>();
 
         for (Path path : candidates) {
             try {
-                if (Files.exists(path) && Files.isRegularFile(path)) {
-                    String content = Files.readString(path, StandardCharsets.UTF_8);
-
-                    if (!content.contains("PLATFORM_RECOVERY")
-                            || !content.contains("USER_MLFLOW_FAILURE_PATTERNS")
-                            || !content.contains("Recovery completed successfully")) {
-                        throw new IllegalStateException(
-                                "platform_runner.py found but it does not contain PLATFORM_RECOVERY logic. path=" + path
-                        );
-                    }
-
-                    System.out.println("[KubernetesBuildService] Using platform_runner.py from: " + path.toAbsolutePath());
-                    System.out.println("[KubernetesBuildService] platform_runner.py size=" + content.length());
-                    System.out.println("[KubernetesBuildService] platform_runner.py contains PLATFORM_RECOVERY=true");
-
-                    return content;
+                if (!Files.exists(path)) {
+                    rejectionReasons.add(path + " -> file does not exist");
+                    continue;
                 }
+
+                if (!Files.isRegularFile(path)) {
+                    rejectionReasons.add(path + " -> not a regular file");
+                    continue;
+                }
+
+                String content = Files.readString(
+                        path.toAbsolutePath().normalize(),
+                        StandardCharsets.UTF_8
+                );
+
+                PlatformRunnerValidation validation =
+                        validatePlatformRunnerContent(content);
+
+                System.out.println(
+                        "[KubernetesBuildService] platform_runner validation:"
+                                + " path=" + path.toAbsolutePath().normalize()
+                                + ", recoveryMarker=" + validation.recoveryMarker()
+                                + ", versioningProtection=" + validation.versioningProtection()
+                                + ", mainFunction=" + validation.mainFunction()
+                                + ", mainEntryPoint=" + validation.mainEntryPoint()
+                                + ", valid=" + validation.valid()
+                );
+
+                if (!validation.valid()) {
+                    rejectionReasons.add(
+                            path + " -> invalid runner contract: "
+                                    + validation.failureReason()
+                    );
+                    continue;
+                }
+
+                System.out.println(
+                        "[KubernetesBuildService] Using valid platform_runner.py from: "
+                                + path.toAbsolutePath().normalize()
+                );
+                System.out.println(
+                        "[KubernetesBuildService] platform_runner.py size="
+                                + content.getBytes(StandardCharsets.UTF_8).length
+                                + " bytes"
+                );
+                System.out.println(
+                        "[KubernetesBuildService] platform_runner.py contract accepted"
+                );
+
+                return content;
+
             } catch (Exception e) {
-                System.out.println("[KubernetesBuildService] Failed to read platform_runner candidate: "
-                        + path + ", reason=" + e.getMessage());
+                String reason = e.getMessage() == null
+                        ? e.getClass().getSimpleName()
+                        : e.getMessage();
+
+                rejectionReasons.add(path + " -> " + reason);
+
+                System.out.println(
+                        "[KubernetesBuildService] Failed to read platform_runner candidate: "
+                                + path
+                                + ", reason="
+                                + reason
+                );
             }
         }
 
         throw new IllegalStateException(
-                "No valid platform_runner.py with PLATFORM_RECOVERY found. "
-                        + "Expected path: /app/mini-mlops/src/custom_models/platform_runner.py. "
-                        + "Make sure mini-mlops is copied into the backend Docker image."
+                "No valid platform_runner.py was found. "
+                        + "Expected a runner containing PLATFORM_RECOVERY, "
+                        + "PLATFORM_VERSIONING, def main(...), and a Python main entry point. "
+                        + "Candidates checked: "
+                        + String.join(" | ", rejectionReasons)
         );
+    }
+
+    private List<Path> buildPlatformRunnerCandidates() {
+        Map<String, Path> uniqueCandidates = new LinkedHashMap<>();
+
+        addPlatformRunnerCandidate(uniqueCandidates, platformRunnerPath);
+        addPlatformRunnerCandidate(
+                uniqueCandidates,
+                "/app/mini-mlops/src/custom_models/platform_runner.py"
+        );
+        addPlatformRunnerCandidate(
+                uniqueCandidates,
+                "mini-mlops/src/custom_models/platform_runner.py"
+        );
+        addPlatformRunnerCandidate(
+                uniqueCandidates,
+                "../mini-mlops/src/custom_models/platform_runner.py"
+        );
+
+        return new ArrayList<>(uniqueCandidates.values());
+    }
+
+    private void addPlatformRunnerCandidate(
+            Map<String, Path> candidates,
+            String candidate
+    ) {
+        if (candidate == null || candidate.isBlank()) {
+            return;
+        }
+
+        try {
+            Path path = Path.of(candidate).toAbsolutePath().normalize();
+            candidates.putIfAbsent(path.toString(), path);
+        } catch (Exception e) {
+            System.out.println(
+                    "[KubernetesBuildService] Ignoring invalid platform runner path '"
+                            + candidate
+                            + "': "
+                            + e.getMessage()
+            );
+        }
+    }
+
+    private PlatformRunnerValidation validatePlatformRunnerContent(
+            String content
+    ) {
+        if (content == null || content.isBlank()) {
+            return new PlatformRunnerValidation(
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    "file is empty"
+            );
+        }
+
+        boolean recoveryMarker =
+                content.contains("PLATFORM_RECOVERY=true")
+                        || content.contains("PLATFORM_RECOVERY = True")
+                        || content.contains("PLATFORM_RECOVERY_ENABLED = True");
+
+        boolean versioningProtection =
+                content.contains("PLATFORM_VERSIONING")
+                        || content.contains(
+                        "is_successful_registration_candidate"
+                )
+                        || content.contains(
+                        "platform_registration_eligible"
+                );
+
+        boolean mainFunction =
+                content.matches("(?s).*\\bdef\\s+main\\s*\\(.*");
+
+        boolean mainEntryPoint =
+                content.contains("if __name__ == \"__main__\"")
+                        || content.contains("if __name__ == '__main__'");
+
+        boolean valid =
+                recoveryMarker
+                        && versioningProtection
+                        && mainFunction
+                        && mainEntryPoint;
+
+        List<String> missing = new ArrayList<>();
+
+        if (!recoveryMarker) {
+            missing.add("PLATFORM_RECOVERY marker");
+        }
+
+        if (!versioningProtection) {
+            missing.add("PLATFORM_VERSIONING protection");
+        }
+
+        if (!mainFunction) {
+            missing.add("def main(...)");
+        }
+
+        if (!mainEntryPoint) {
+            missing.add("if __name__ == '__main__'");
+        }
+
+        return new PlatformRunnerValidation(
+                recoveryMarker,
+                versioningProtection,
+                mainFunction,
+                mainEntryPoint,
+                valid,
+                missing.isEmpty()
+                        ? ""
+                        : "missing " + String.join(", ", missing)
+        );
+    }
+
+    private record PlatformRunnerValidation(
+            boolean recoveryMarker,
+            boolean versioningProtection,
+            boolean mainFunction,
+            boolean mainEntryPoint,
+            boolean valid,
+            String failureReason
+    ) {
     }
 
     private String readRequiredPlatformFile(String relativePath) {

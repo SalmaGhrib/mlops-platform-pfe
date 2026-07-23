@@ -33,15 +33,17 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# JAR Spring Boot
-COPY mlops-backend/mlops-backend/target/*.jar /app/app.jar
+RUN mkdir -p /app/scripts
 
-# Script utilisé pour standardiser les artefacts de modèles
+# JAR Spring Boot
+COPY mlops-backend/mlops-backend/target/mlops-backend-0.0.1-SNAPSHOT.jar \
+     /app/app.jar
+
+# Script de standardisation des artefacts
 COPY mlops-backend/scripts/standardize_model_artifact.py \
      /app/scripts/standardize_model_artifact.py
 
-# Indispensable pour préparer les contextes Kaniko
-# et récupérer platform_runner.py
+# Fichiers nécessaires aux builds Kaniko et au platform runner
 COPY mini-mlops /app/mini-mlops
 
 RUN chmod +x /app/scripts/standardize_model_artifact.py \

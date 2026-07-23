@@ -57,7 +57,7 @@ public class CustomDockerRunWatcher {
             initialDelayString = "${app.custom-docker.watcher.initial-delay-ms:10000}"
     )
     @SchedulerLock(
-            name = "mlopsLifecycleCoordinator",
+            name = "customDockerRunWatcher",
             lockAtMostFor = "PT5M",
             lockAtLeastFor = "PT1S"
     )
@@ -363,16 +363,23 @@ public class CustomDockerRunWatcher {
         } catch (Exception e) {
             String error = safe(e.getMessage());
 
+            if (isTransientPersistenceFailure(e)) {
+                System.out.println("[CUSTOM-DOCKER] Temporary persistence error while launching training. "
+                        + "The experiment remains actionable and will be retried. experimentId="
+                        + experiment.getId()
+                        + ", reason="
+                        + error);
+                return;
+            }
+
             System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
                     + " failed to launch custom image training job: " + error);
 
-            experiment.setStatus(ExperimentStatus.FAILED);
-            experiment.setBuildStatus("CUSTOM_IMAGE_JOB_FAILED");
-            experiment.setErrorMessage(error);
-            experiment.setMessage("Failed to launch custom Docker training job.");
-            experiment.setTrainingLogs(error);
-
-            mlExperimentRepository.saveAndFlush(experiment);
+            markFailed(
+                    experiment,
+                    "TRAINING",
+                    "Failed to launch custom Docker training job: " + error
+            );
         }
     }
 
@@ -528,6 +535,10 @@ public class CustomDockerRunWatcher {
         }
 
         mlExperimentRepository.saveAndFlush(experiment);
+
+        if (experiment.getProject() != null && experiment.getProject().getId() != null) {
+            mlExperimentService.triggerImmediateProjectSync(experiment.getProject().getId());
+        }
 
         boolean artifactReady =
                 tryStandardizeModelArtifactIfPossible(experiment, "training-completed");
@@ -713,6 +724,18 @@ public class CustomDockerRunWatcher {
             System.out.println("[CUSTOM-DOCKER-WATCHER] Native MLflow Registry fallback skipped. "
                     + "experimentId=" + experiment.getId()
                     + ", reason=no registered model name");
+            return false;
+        }
+
+        /*
+         * Never validate a new candidate by reusing the alias of the OLD production
+         * model. The candidate is deployable only when this exact MySQL row is linked
+         * to its own MLflow run and model version.
+         */
+        if (!hasText(experiment.getMlflowRunId()) || !hasText(experiment.getModelVersion())) {
+            System.out.println("[CUSTOM-DOCKER-WATCHER] Native Registry fallback refused. "
+                    + "experimentId=" + experiment.getId()
+                    + ", reason=exact MLflow run/version not synchronized yet");
             return false;
         }
 
@@ -918,12 +941,9 @@ public class CustomDockerRunWatcher {
 
         boolean nativeRegistryAccepted =
                 message.contains("native mlflow registry model ready for deployment")
-                        && Boolean.TRUE.equals(experiment.getProduction())
                         && hasText(experiment.getRegisteredModelName())
-                        && (
-                        hasText(experiment.getProductionVersion())
-                                || hasText(experiment.getModelVersion())
-                );
+                        && hasText(experiment.getMlflowRunId())
+                        && hasText(experiment.getModelVersion());
 
         return standardizedWithVersion || nativeRegistryAccepted;
     }
@@ -935,7 +955,7 @@ public class CustomDockerRunWatcher {
                 RunFailureAnalyzer.analyze(safeLogs);
 
         mlExperimentService.markExperimentFailedWithDetails(
-                experiment,
+                experiment.getId(),
                 failure.getPhase(),
                 failure.getReason(),
                 failure.getDetails(),
@@ -1231,6 +1251,7 @@ public class CustomDockerRunWatcher {
                 buildStatus.equals("IMAGE_BUILT")
                         || buildStatus.equals("IMAGE_BUILD_COMPLETED")
                         || buildStatus.equals("BUILD_COMPLETED")
+                        || buildStatus.equals("IMAGE_REUSED")
         );
     }
 
@@ -1239,6 +1260,7 @@ public class CustomDockerRunWatcher {
                 && (
                 buildStatus.equals("CUSTOM_IMAGE_JOB_STARTING")
                         || buildStatus.equals("CUSTOM_IMAGE_JOB_RUNNING")
+                        || buildStatus.equals("TRAINING_JOB_RUNNING")
                         || buildStatus.equals("TRAINING_STARTING")
                         || buildStatus.equals("TRAINING_RUNNING")
         );
@@ -1316,7 +1338,7 @@ public class CustomDockerRunWatcher {
             experiment.setStartedAt(
                     experiment.getCreatedAt() != null
                             ? experiment.getCreatedAt()
-                            : java.time.LocalDateTime.now()
+                            : java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)
             );
         }
 
@@ -1334,12 +1356,12 @@ public class CustomDockerRunWatcher {
             experiment.setStartedAt(
                     experiment.getCreatedAt() != null
                             ? experiment.getCreatedAt()
-                            : java.time.LocalDateTime.now()
+                            : java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)
             );
         }
 
         if (experiment.getFinishedAt() == null) {
-            experiment.setFinishedAt(java.time.LocalDateTime.now());
+            experiment.setFinishedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
         }
     }
 }

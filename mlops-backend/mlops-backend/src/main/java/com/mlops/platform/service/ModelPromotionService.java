@@ -253,17 +253,31 @@ public class ModelPromotionService {
             return false;
         }
 
-        if (experiment.getStatus()
-                != ExperimentStatus.COMPLETED) {
+        if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
             return false;
         }
 
-        return experiment.getModelVersion() != null
-                && !experiment.getModelVersion().isBlank()
-                && experiment.getMlflowRunId() != null
-                && !experiment.getMlflowRunId().isBlank()
-                && experiment.getPrimaryMetricValue() != null
-                && experiment.getGlobalScore() != null;
+        if (experiment.getModelVersion() == null
+                || experiment.getModelVersion().isBlank()
+                || experiment.getMlflowRunId() == null
+                || experiment.getMlflowRunId().isBlank()
+                || experiment.getPrimaryMetricValue() == null
+                || experiment.getGlobalScore() == null) {
+            return false;
+        }
+
+        MlflowTrackingClientService.MlflowRunDetails runDetails =
+                mlflowTrackingClientService.getRunDetailsFromRunId(
+                        experiment.getMlflowRunId(),
+                        experiment.getRegisteredModelName()
+                );
+
+        /*
+         * Même si une version technique existe dans MLflow, elle ne peut pas
+         * être comparée ni promue si le run n'est pas réellement réussi.
+         */
+        return mlflowTrackingClientService
+                .isSuccessfulMlflowRun(runDetails);
     }
 
     private Map<String, Double> loadMetricValues(

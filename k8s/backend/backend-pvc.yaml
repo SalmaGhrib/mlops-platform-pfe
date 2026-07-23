@@ -3,9 +3,13 @@ kind: PersistentVolumeClaim
 metadata:
   name: backend-uploads-pvc
   namespace: mlops
+
 spec:
   accessModes:
     - ReadWriteOnce
+
+  storageClassName: managed-csi
+
   resources:
     requests:
       storage: 5Gi
