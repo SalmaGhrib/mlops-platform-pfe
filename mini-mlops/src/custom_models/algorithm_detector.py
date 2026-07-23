@@ -27,7 +27,16 @@ import json
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-from src.custom_models.import_detector import normalize_module_name
+
+from src.custom_models.import_detector import (
+    STANDARD_LIBRARY_MODULES,
+    normalize_module_name,
+)
+
+
+def _is_standard_library_module(module_name: str) -> bool:
+    root = str(module_name or "").strip().split(".")[0]
+    return bool(root) and root in STANDARD_LIBRARY_MODULES
 
 
 SUPPORTED_LIBRARIES: dict[str, str] = {
@@ -406,50 +415,68 @@ def detect_algorithms(code: str) -> dict[str, Any]:
     }
 
 
-def extract_imports(tree: ast.AST) -> tuple[dict[str, dict[str, Any]], list[str]]:
+def extract_imports(
+    tree: ast.AST,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """
+    Extract only third-party imports for runtime compatibility checks.
+
+    Python standard-library modules such as json, os, pathlib and sys are
+    always available in the runtime and must never be reported as missing
+    dependencies.
+    """
     imports: dict[str, dict[str, Any]] = {}
     imported_modules: set[str] = set()
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            module = node.module or ""
+            module = (node.module or "").strip()
+            root = module.split(".")[0] if module else ""
 
             for alias in node.names:
                 local_name = alias.asname or alias.name
                 original_name = alias.name
-                root = module.split(".")[0] if module else ""
 
                 imports[local_name] = {
                     "local_name": local_name,
                     "original_name": original_name,
                     "module": module,
                     "root_library": root,
-                    "full_name": f"{module}.{original_name}" if module else original_name,
+                    "full_name": (
+                        f"{module}.{original_name}"
+                        if module
+                        else original_name
+                    ),
                 }
 
-            if module:
-                imported_modules.add(module)
-                if "." in module:
-                    imported_modules.add(module.split(".")[0])
+            if not module or _is_standard_library_module(module):
+                continue
+
+            imported_modules.add(module)
+            if "." in module:
+                imported_modules.add(root)
 
             for alias in node.names:
                 if alias.name == "*":
                     continue
 
-                imported_name = alias.name
+                imported_name = alias.name.strip()
                 if not imported_name:
                     continue
 
                 if module in {"torchvision", "torch.nn", "torch.optim"}:
                     imported_modules.add(f"{module}.{imported_name}")
-                elif module.startswith("sklearn") and imported_name[0].islower():
+                elif (
+                    module.startswith("sklearn")
+                    and imported_name[0].islower()
+                ):
                     imported_modules.add(f"{module}.{imported_name}")
 
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                local_name = alias.asname or alias.name.split(".")[0]
-                original_name = alias.name
+                original_name = alias.name.strip()
                 root = original_name.split(".")[0]
+                local_name = alias.asname or root
 
                 imports[local_name] = {
                     "local_name": local_name,
@@ -458,6 +485,9 @@ def extract_imports(tree: ast.AST) -> tuple[dict[str, dict[str, Any]], list[str]
                     "root_library": root,
                     "full_name": original_name,
                 }
+
+                if _is_standard_library_module(original_name):
+                    continue
 
                 imported_modules.add(original_name)
                 if "." in original_name:

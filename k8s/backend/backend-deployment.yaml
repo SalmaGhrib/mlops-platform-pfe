@@ -30,7 +30,7 @@ spec:
       containers:
         - name: mlops-backend
 
-          image: acrmlopssalmav2.azurecr.io/mlops-backend:model-detection-final-v1
+          image: acrmlopssalmav2.azurecr.io/mlops-backend:standard-runtime-final-v1
           imagePullPolicy: Always
 
           ports:

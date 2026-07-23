@@ -10,6 +10,7 @@ import com.mlops.platform.entity.MlExperimentMetric;
 import com.mlops.platform.repository.MlExperimentMetricRepository;
 import com.mlops.platform.repository.MlExperimentRepository;
 import org.springframework.transaction.annotation.Transactional;
+import org.hibernate.Hibernate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -586,7 +587,13 @@ private List<String> buildMlflowExperimentNameCandidates(MlExperiment experiment
 
     addCandidate(candidates, experiment.getMlflowExperimentName());
 
-    if (experiment.getProject() != null) {
+    /*
+     * Les schedulers peuvent recevoir une entité détachée. Ne jamais forcer
+     * l'initialisation d'un proxy project hors transaction : cela provoquait
+     * LazyInitializationException et interrompait toute la synchronisation.
+     */
+    if (experiment.getProject() != null
+            && Hibernate.isInitialized(experiment.getProject())) {
         addCandidate(candidates, experiment.getProject().getName());
     }
 

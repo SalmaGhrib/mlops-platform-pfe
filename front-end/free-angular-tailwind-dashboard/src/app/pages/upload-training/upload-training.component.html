@@ -1,3 +1,4 @@
+
 <div class="space-y-6">
   <div class="overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-white/[0.03]">
     <div class="border-b border-gray-100 bg-gradient-to-r from-blue-50 via-white to-indigo-50 px-6 py-6 dark:border-gray-800 dark:from-blue-950/20 dark:via-transparent dark:to-indigo-950/20">
@@ -368,260 +369,72 @@
 
         @if (isStandardRuntimeMode() && (modelFile || analyzingModelFile || analysisDone)) {
           <div class="mt-6 rounded-3xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900/60">
-            <div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-                  Analyse du script Python
+                  Vérification du Runtime standard
                 </h3>
 
                 <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  Détection des modules, composants ML/DL et compatibilité avec le Runtime standard.
+                  La plateforme vérifie uniquement les dépendances externes nécessaires au script.
                 </p>
               </div>
 
-              @if (runtimeAnalysis !== null) {
-                <div>
-                  @if (runtimeAnalysis?.runtimeCompatible) {
-                    <span class="inline-flex rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700 dark:bg-green-900/30 dark:text-green-300">
-                      Compatible avec le Runtime standard
-                    </span>
-                  } @else {
-                    <span class="inline-flex rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700 dark:bg-red-900/30 dark:text-red-300">
-                      Non compatible avec le Runtime standard
-                    </span>
-                  }
-                </div>
+              @if (!analyzingModelFile && runtimeAnalysis !== null) {
+                <span
+                  class="inline-flex rounded-full px-3 py-1 text-xs font-semibold"
+                  [ngClass]="runtimeAnalysis.runtimeCompatible
+                    ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+                    : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'"
+                >
+                  {{ runtimeAnalysis.runtimeCompatible ? 'Compatible' : 'Dépendances manquantes' }}
+                </span>
               }
             </div>
 
             @if (analyzingModelFile) {
-              <div class="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-semibold text-blue-700 dark:border-blue-900/40 dark:bg-blue-900/10 dark:text-blue-300">
+              <div class="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-semibold text-blue-700 dark:border-blue-900/40 dark:bg-blue-900/10 dark:text-blue-300">
                 Analyse du script en cours...
               </div>
             }
 
             @if (!analyzingModelFile && runtimeAnalysis !== null) {
-              <div class="space-y-5">
-                <div
-                  class="rounded-2xl border p-4"
-                  [ngClass]="runtimeAnalysis?.runtimeCompatible
-                    ? 'border-green-200 bg-green-50 dark:border-green-900/40 dark:bg-green-900/10'
-                    : 'border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-900/10'"
-                >
-                  @if (runtimeAnalysis?.runtimeCompatible) {
-                    <p class="text-sm font-semibold text-green-700 dark:text-green-300">
-                      ✓ Le script est compatible avec le Runtime standard.
-                    </p>
-                  } @else {
-                    <p class="text-sm font-semibold text-red-700 dark:text-red-300">
-                      ✗ Le script utilise des modules absents de l’image standard.
-                    </p>
-                    <p class="mt-2 text-sm text-red-600 dark:text-red-400">
-                      Utilisez le mode Dockerfile personnalisé pour fournir vos propres dépendances.
+              @if (runtimeAnalysis.runtimeCompatible) {
+                <div class="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 dark:border-green-900/40 dark:bg-green-900/10">
+                  <p class="text-sm font-semibold text-green-700 dark:text-green-300">
+                    ✓ Le script peut être lancé avec le Runtime standard.
+                  </p>
+
+                  @if (hasDetectedAlgorithms()) {
+                    <p class="mt-2 text-sm text-green-700 dark:text-green-300">
+                      Modèle détecté :
+                      <span class="font-semibold">
+                        {{ runtimeAnalysis.detectedAlgorithms[0].name }}
+                      </span>
                     </p>
                   }
 
-                  @if (runtimeAnalysis?.recommendation) {
-                    <p class="mt-3 text-xs text-gray-600 dark:text-gray-400">
-                      {{ runtimeAnalysis?.recommendation }}
+                  @if (runtimeAnalysis.recommendation) {
+                    <p class="mt-2 text-xs text-gray-600 dark:text-gray-400">
+                      {{ runtimeAnalysis.recommendation }}
                     </p>
                   }
                 </div>
+              } @else {
+                <div class="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 dark:border-red-900/40 dark:bg-red-900/10">
+                  <p class="text-sm font-semibold text-red-700 dark:text-red-300">
+                    Dépendances externes absentes
+                  </p>
 
-                @if (hasDetectedModules()) {
-                  <div class="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
-                    <div class="mb-3 flex items-center justify-between gap-3">
-                      <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
-                        Modules détectés
-                      </h4>
+                  <p class="mt-2 text-sm text-red-600 dark:text-red-400">
+                    {{ formatUnsupportedModules() }}
+                  </p>
 
-                      <span class="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                        {{ (runtimeAnalysis?.detectedModules || []).length }} module(s)
-                      </span>
-                    </div>
-
-                    <div class="grid gap-3 sm:grid-cols-2">
-                      @for (module of (runtimeAnalysis?.detectedModules || []); track formatModuleName(module)) {
-                        <div
-                          class="rounded-2xl border px-4 py-3 text-sm"
-                          [ngClass]="isModuleSupported(module)
-                            ? 'border-green-200 bg-white dark:border-green-900/30 dark:bg-gray-900/40'
-                            : 'border-red-200 bg-red-50 dark:border-red-900/30 dark:bg-red-900/10'"
-                        >
-                          <div class="flex items-center justify-between gap-3">
-                            <p class="font-medium text-gray-900 dark:text-white">
-                              {{ formatModuleName(module) }}
-                            </p>
-
-                            <span
-                              class="rounded-full px-2.5 py-0.5 text-xs font-semibold"
-                              [ngClass]="isModuleSupported(module)
-                                ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
-                                : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'"
-                            >
-                              {{ isModuleSupported(module) ? 'supporté' : 'non supporté' }}
-                            </span>
-                          </div>
-
-                          @if (module.message) {
-                            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                              {{ module.message }}
-                            </p>
-                          }
-                        </div>
-                      }
-                    </div>
-                  </div>
-                }
-
-                @if (hasUnsupportedModules()) {
-                  <div class="rounded-2xl border border-red-200 bg-red-50 p-4 dark:border-red-900/40 dark:bg-red-900/10">
-                    <h4 class="text-sm font-semibold text-red-700 dark:text-red-300">
-                      Modules non supportés
-                    </h4>
-
-                    <p class="mt-2 text-sm text-red-600 dark:text-red-400">
-                      {{ formatUnsupportedModules() }}
-                    </p>
-
-                    <p class="mt-3 text-sm text-gray-600 dark:text-gray-300">
-                      Solution : utilisez le mode Dockerfile personnalisé ou ajoutez ces modules à l’image standard.
-                    </p>
-                  </div>
-                }
-
-                @if (hasDetectedImports()) {
-                  <div class="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
-                    <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
-                      Imports détectés
-                    </h4>
-                    <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                      {{ (runtimeAnalysis?.detectedImports || []).join(', ') || '-' }}
-                    </p>
-                  </div>
-                }
-
-                @if (hasDetectedLibraries()) {
-                  <div class="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
-                    <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
-                      Bibliothèques détectées
-                    </h4>
-                    <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                      {{ ((runtimeAnalysis?.detectedLibraries || []).map(formatLibraryName)).join(', ') || '-' }}
-                    </p>
-                  </div>
-                }
-
-                @if (hasDetectedMetrics()) {
-                  <div class="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
-                    <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
-                      Métriques détectées
-                    </h4>
-                    <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                      {{ (runtimeAnalysis?.detectedMetrics || []).join(', ') || '-' }}
-                    </p>
-                  </div>
-                }
-
-                @if (hasMissingDependencies()) {
-                  <div class="rounded-2xl border border-yellow-200 bg-yellow-50 p-4 dark:border-yellow-900/40 dark:bg-yellow-900/10">
-                    <h4 class="text-sm font-semibold text-yellow-800 dark:text-yellow-300">
-                      Dépendances manquantes
-                    </h4>
-                    <p class="mt-2 text-sm text-yellow-800 dark:text-yellow-200">
-                      {{ (runtimeAnalysis?.missingDependencies || []).join(', ') || '-' }}
-                    </p>
-                  </div>
-                }
-
-                @if (hasDetectedAlgorithms()) {
-                  <div class="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
-                    <div class="mb-3 flex items-center justify-between gap-3">
-                      <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
-                        Algorithmes / composants détectés
-                      </h4>
-
-                      <span class="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
-                        {{ (runtimeAnalysis?.detectedAlgorithms || []).length }} composant(s)
-                      </span>
-                    </div>
-
-                    <div class="space-y-3">
-                      @for (item of (runtimeAnalysis?.detectedAlgorithms || []); track item.name) {
-                        <div class="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900/40">
-                          <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                            <div>
-                              <p class="font-semibold text-gray-900 dark:text-white">
-                                {{ item.name }}
-                              </p>
-
-                              <p class="text-xs text-gray-500 dark:text-gray-400">
-                                {{ item.category || 'Composant ML/DL' }}
-                              </p>
-                            </div>
-
-                            <div class="flex flex-wrap gap-2">
-                              <span
-                                class="rounded-full px-2.5 py-0.5 text-xs font-semibold"
-                                [ngClass]="item.supported
-                                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
-                                  : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'"
-                              >
-                                {{ item.supported ? 'supporté' : 'non supporté' }}
-                              </span>
-
-                              <span class="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-semibold text-gray-700 dark:bg-gray-800 dark:text-gray-300">
-                                {{ item.replaceable ? 'remplaçable' : 'non remplaçable' }}
-                              </span>
-                            </div>
-                          </div>
-
-                          @if (item.message) {
-                            <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
-                              {{ item.message }}
-                            </p>
-                          }
-
-                          <div class="mt-3 flex flex-wrap gap-3 text-xs text-gray-500 dark:text-gray-400">
-                            @if (item.module) {
-                              <span>Module : {{ item.module }}</span>
-                            }
-
-                            @if (item.variable) {
-                              <span>Variable : {{ item.variable }}</span>
-                            }
-
-                            @if (item.line !== undefined && item.line !== null) {
-                              <span>Ligne : {{ item.line }}</span>
-                            }
-                          </div>
-                        </div>
-                      }
-                    </div>
-                  </div>
-                }
-
-                @if (!hasDetectedModules() && !hasDetectedAlgorithms()) {
-                  <div class="rounded-2xl border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800 dark:border-yellow-900/40 dark:bg-yellow-900/10 dark:text-yellow-200">
-                    Aucun module ou composant ML/DL détaillé n’a été retourné par l’analyse.
-                    Vérifiez la réponse de l’endpoint <strong>/api/runtime/analyze-script</strong>.
-                  </div>
-                }
-
-                @if (hasAnalysisWarnings()) {
-                  <details class="rounded-2xl border border-yellow-200 bg-yellow-50 p-4 dark:border-yellow-900/40 dark:bg-yellow-900/10">
-                    <summary class="cursor-pointer text-sm font-semibold text-yellow-800 dark:text-yellow-300">
-                      Voir les avertissements
-                    </summary>
-
-                    <ul class="mt-3 list-disc space-y-1 pl-5 text-sm text-yellow-800 dark:text-yellow-200">
-                      @for (warning of (runtimeAnalysis?.warnings || []); track warning) {
-                        <li>{{ warning }}</li>
-                      }
-                    </ul>
-                  </details>
-                }
-              </div>
+                  <p class="mt-2 text-xs text-gray-600 dark:text-gray-400">
+                    Utilisez un Dockerfile personnalisé ou ajoutez ces bibliothèques à l’image standard.
+                  </p>
+                </div>
+              }
             }
           </div>
         }

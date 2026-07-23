@@ -240,10 +240,10 @@ async def analyze_runtime_script(
         import_analysis = analyze_script_imports(script_code)
         algorithm_analysis = detect_algorithms(script_code)
 
-        runtime_compatible = algorithm_analysis.get(
-            "runtimeCompatible",
-            algorithm_analysis.get("supported", import_analysis.get("supported", False))
-        )
+        # Runtime compatibility is determined exclusively from third-party
+        # imports. Algorithm detection is informational and must not turn
+        # Python standard-library modules into missing dependencies.
+        runtime_compatible = bool(import_analysis.get("supported", False))
 
         detected_imports = import_analysis.get("detectedImports", [])
         supported_imports = import_analysis.get("supportedImports", [])
@@ -286,9 +286,20 @@ async def analyze_runtime_script(
             "supportedImports": supported_imports,
             "unsupportedImports": unsupported_imports,
             "detectedMetrics": detected_metrics,
-            "detectedModules": algorithm_analysis.get("detectedModules", []),
-            "supportedModules": algorithm_analysis.get("supportedModules", []),
-            "unsupportedModules": algorithm_analysis.get("unsupportedModules", []),
+            "detectedModules": [
+                {
+                    "name": module_name,
+                    "supported": module_name in supported_imports,
+                    "source": (
+                        "standard_runtime"
+                        if module_name in supported_imports
+                        else "missing"
+                    ),
+                }
+                for module_name in detected_imports
+            ],
+            "supportedModules": supported_imports,
+            "unsupportedModules": unsupported_imports,
             "detectedLibraries": detected_libraries,
             "supportedLibraries": supported_libraries,
             "unsupportedLibraries": unsupported_libraries,

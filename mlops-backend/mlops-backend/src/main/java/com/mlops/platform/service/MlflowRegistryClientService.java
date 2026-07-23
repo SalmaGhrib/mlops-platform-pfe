@@ -107,29 +107,17 @@ public class MlflowRegistryClientService {
             System.out.println("version = " + cleanVersion);
             System.out.println("body = " + objectMapper.writeValueAsString(body));
 
-            ResponseEntity<String> response;
-
-            try {
-                /*
-                 * MLflow récent accepte PUT pour l'upsert d'un alias.
-                 */
-                response = restTemplate.exchange(
-                        url,
-                        HttpMethod.PUT,
-                        requestEntity,
-                        String.class
-                );
-            } catch (RestClientResponseException putFailure) {
-                /*
-                 * Compatibilité avec certaines versions MLflow qui attendent POST.
-                 */
-                response = restTemplate.exchange(
-                        url,
-                        HttpMethod.POST,
-                        requestEntity,
-                        String.class
-                );
-            }
+            /*
+             * MLflow 3.x expose l'upsert d'un alias en POST sur cet endpoint.
+             * Un PUT retourne 405 Method Not Allowed et bloque tout le cycle
+             * promotion -> déploiement.
+             */
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    requestEntity,
+                    String.class
+            );
 
             System.out.println("MLflow set alias status = " + response.getStatusCode());
             System.out.println("MLflow set alias body = " + response.getBody());

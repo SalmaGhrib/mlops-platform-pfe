@@ -18,6 +18,7 @@ import org.springframework.web.client.RestTemplate;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -84,35 +85,48 @@ public class AutoProductionDeploymentReconcilerService {
 
             reconcileDeploymentStatuses();
 
-            List<MlExperiment> experiments = mlExperimentRepository.findAll();
+            List<MlExperiment> experiments =
+                    mlExperimentRepository.findAllForProductionReconciliation();
 
             if (experiments == null || experiments.isEmpty()) {
                 log("No experiments found.");
                 return;
             }
 
-            Map<String, MlExperiment> productionCandidates = new LinkedHashMap<>();
+            /*
+             * Une seule candidate gagnante par projet + modèle.
+             * La comparaison se fait sur globalScore (plus grand = meilleur),
+             * puis sur la date et l'id pour rendre le choix déterministe.
+             */
+            Map<String, MlExperiment> bestCandidates = new LinkedHashMap<>();
 
             for (MlExperiment experiment : experiments) {
-                if (!isEligibleProductionExperiment(experiment)) {
+                if (!isEligibleScoredCandidate(experiment)) {
                     continue;
                 }
 
-                String key = buildCandidateKey(experiment);
-                MlExperiment current = productionCandidates.get(key);
+                String key = buildModelKey(experiment);
+                MlExperiment currentBest = bestCandidates.get(key);
 
-                if (current == null || isNewer(experiment, current)) {
-                    productionCandidates.put(key, experiment);
+                if (currentBest == null
+                        || compareScoredCandidates(experiment, currentBest) > 0) {
+                    bestCandidates.put(key, experiment);
                 }
             }
 
-            if (productionCandidates.isEmpty()) {
-                log("No production candidates found.");
+            if (bestCandidates.isEmpty()) {
+                log("No scored COMPLETED candidates found.");
                 return;
             }
 
-            for (MlExperiment candidate : productionCandidates.values()) {
-                deployCandidate(candidate);
+            for (MlExperiment bestCandidate : bestCandidates.values()) {
+                MlExperiment promoted = promoteBestCandidate(bestCandidate);
+
+                if (promoted == null) {
+                    continue;
+                }
+
+                deployCandidate(promoted);
             }
 
             log("Finished Production -> Deployment check.");
@@ -134,6 +148,177 @@ public class AutoProductionDeploymentReconcilerService {
             log("Deployment reconciliation failed before candidate evaluation: "
                     + safeMessage(e));
         }
+    }
+
+    private boolean isEligibleScoredCandidate(MlExperiment experiment) {
+        if (experiment == null
+                || experiment.getId() == null
+                || experiment.getProject() == null
+                || experiment.getProject().getId() == null) {
+            return false;
+        }
+
+        if (Boolean.FALSE.equals(
+                experiment.getProject().getAutoPromoteBestModel())) {
+            return false;
+        }
+
+        return experiment.getStatus() == ExperimentStatus.COMPLETED
+                && hasText(experiment.getMlflowRunId())
+                && hasText(resolveRegisteredModelName(experiment))
+                && hasText(experiment.getModelVersion())
+                && experiment.getPrimaryMetricValue() != null
+                && experiment.getGlobalScore() != null
+                && Double.isFinite(experiment.getGlobalScore());
+    }
+
+    private String buildModelKey(MlExperiment experiment) {
+        Long projectId = experiment.getProject().getId();
+        return projectId + "|" + clean(resolveRegisteredModelName(experiment));
+    }
+
+    private int compareScoredCandidates(
+            MlExperiment left,
+            MlExperiment right
+    ) {
+        int scoreComparison = Double.compare(
+                left.getGlobalScore(),
+                right.getGlobalScore()
+        );
+
+        if (scoreComparison != 0) {
+            return scoreComparison;
+        }
+
+        LocalDateTime leftDate = left.getFinishedAt() != null
+                ? left.getFinishedAt()
+                : (left.getUpdatedAt() != null
+                ? left.getUpdatedAt()
+                : left.getCreatedAt());
+
+        LocalDateTime rightDate = right.getFinishedAt() != null
+                ? right.getFinishedAt()
+                : (right.getUpdatedAt() != null
+                ? right.getUpdatedAt()
+                : right.getCreatedAt());
+
+        int dateComparison = Comparator.nullsFirst(
+                Comparator.<LocalDateTime>naturalOrder()
+        ).compare(leftDate, rightDate);
+
+        if (dateComparison != 0) {
+            return dateComparison;
+        }
+
+        return Comparator.nullsFirst(Long::compareTo)
+                .compare(left.getId(), right.getId());
+    }
+
+    /**
+     * Positionne l'alias MLflow sur la meilleure version, vérifie le Registry,
+     * puis synchronise toutes les lignes MySQL du même projet/modèle.
+     */
+    private MlExperiment promoteBestCandidate(MlExperiment candidate) {
+        try {
+            String modelName = resolveRegisteredModelName(candidate);
+            String version = trimToNull(candidate.getModelVersion());
+
+            if (!hasText(modelName) || version == null) {
+                return null;
+            }
+
+            String currentAliasVersion =
+                    getProductionVersionFromRegistryAlias(modelName);
+
+            if (!version.equalsIgnoreCase(
+                    trimToNull(currentAliasVersion) == null
+                            ? ""
+                            : currentAliasVersion.trim())) {
+                setRegisteredModelAlias(
+                        modelName,
+                        PRODUCTION_ALIAS,
+                        version
+                );
+            }
+
+            String confirmedVersion =
+                    getProductionVersionFromRegistryAlias(modelName);
+
+            if (!version.equalsIgnoreCase(
+                    trimToNull(confirmedVersion) == null
+                            ? ""
+                            : confirmedVersion.trim())) {
+                throw new IllegalStateException(
+                        "MLflow alias verification failed. expected="
+                                + version
+                                + ", actual="
+                                + confirmedVersion
+                );
+            }
+
+            synchronizeModelProductionState(
+                    candidate,
+                    modelName,
+                    version
+            );
+
+            MlExperiment refreshed = reload(candidate.getId());
+
+            log("Best candidate promoted automatically. projectId="
+                    + candidate.getProject().getId()
+                    + ", experimentId=" + candidate.getId()
+                    + ", model=" + modelName
+                    + ", version=" + version
+                    + ", globalScore=" + candidate.getGlobalScore());
+
+            return refreshed;
+
+        } catch (Exception e) {
+            log("Automatic best-model promotion failed. experimentId="
+                    + safeExperimentId(candidate)
+                    + ", reason=" + safeMessage(e));
+            return null;
+        }
+    }
+
+    private void synchronizeModelProductionState(
+            MlExperiment winner,
+            String registeredModelName,
+            String productionVersion
+    ) {
+        List<MlExperiment> sameModelExperiments =
+                mlExperimentRepository
+                        .findByProjectAndRegisteredModelNameOrderByCreatedAtDesc(
+                                winner.getProject(),
+                                registeredModelName
+                        );
+
+        for (MlExperiment experiment : sameModelExperiments) {
+            boolean selected = experiment.getId() != null
+                    && experiment.getId().equals(winner.getId());
+
+            experiment.setRegisteredModelName(registeredModelName);
+            experiment.setModelName(registeredModelName);
+            experiment.setProduction(selected);
+            experiment.setProductionVersion(
+                    selected ? productionVersion : null
+            );
+
+            if (selected) {
+                experiment.setErrorMessage(null);
+                experiment.setMessage(
+                        appendSafeMessage(
+                                experiment.getMessage(),
+                                "Automatically promoted as best global-score "
+                                        + "Production model. version="
+                                        + productionVersion
+                        )
+                );
+            }
+        }
+
+        mlExperimentRepository.saveAll(sameModelExperiments);
+        mlExperimentRepository.flush();
     }
 
     private void deployCandidate(MlExperiment candidate) {
@@ -450,7 +635,7 @@ public class AutoProductionDeploymentReconcilerService {
 
         ResponseEntity<String> response = restTemplate.exchange(
                 requestUrl,
-                HttpMethod.PUT,
+                HttpMethod.POST,
                 entity,
                 String.class
         );

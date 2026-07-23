@@ -29,7 +29,7 @@ spec:
       containers:
         - name: mlops-frontend
 
-          image: acrmlopssalmav2.azurecr.io/mlops-frontend:v2
+          image: acrmlopssalmav2.azurecr.io/mlops-frontend:runtime-ui-simple-v1
           imagePullPolicy: Always
 
           ports:

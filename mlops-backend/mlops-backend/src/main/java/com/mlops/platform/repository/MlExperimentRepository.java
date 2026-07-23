@@ -141,6 +141,22 @@ public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long
             @Param("registeredModelName") String registeredModelName
     );
 
+
+    /**
+     * Charge les expériences nécessaires au reconciler avec le projet déjà
+     * initialisé. Cela évite les LazyInitializationException dans les tâches
+     * planifiées et permet de comparer toutes les versions d'un même modèle.
+     */
+    @Query("""
+            SELECT DISTINCT e
+            FROM MlExperiment e
+            JOIN FETCH e.project p
+            LEFT JOIN FETCH e.modelFile mf
+            LEFT JOIN FETCH e.datasetFile df
+            ORDER BY e.createdAt DESC
+            """)
+    List<MlExperiment> findAllForProductionReconciliation();
+
     /*
      * Recherche par MLflow Run ID.
      */

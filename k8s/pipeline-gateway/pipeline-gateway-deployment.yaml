@@ -31,7 +31,7 @@ spec:
       containers:
         - name: pipeline-gateway
 
-          image: acrmlopssalmav2.azurecr.io/pipeline-gateway:v2
+          image: acrmlopssalmav2.azurecr.io/pipeline-gateway:runtime-analysis-fix-v2
           imagePullPolicy: Always
 
           ports:
