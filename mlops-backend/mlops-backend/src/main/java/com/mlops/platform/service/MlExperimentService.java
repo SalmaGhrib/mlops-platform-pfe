@@ -1417,16 +1417,23 @@ private boolean isProductionExperimentRow(MlExperiment experiment) {
             .equalsIgnoreCase(experiment.getModelVersion().trim());
 }
 
-private boolean isEligiblePlatformVersion(MlExperiment experiment) {
-    if (experiment == null) {
-        return false;
-    }
-
-    return experiment.getStatus() == ExperimentStatus.COMPLETED
+private boolean isRegistryAttachableVersion(MlExperiment experiment) {
+    return experiment != null
+            && experiment.getStatus() == ExperimentStatus.COMPLETED
             && hasText(experiment.getMlflowRunId())
-            && hasText(experiment.getModelVersion())
+            && hasText(experiment.getModelVersion());
+}
+
+private boolean isEligiblePlatformVersion(MlExperiment experiment) {
+    return isRegistryAttachableVersion(experiment)
             && experiment.getPrimaryMetricValue() != null
             && experiment.getGlobalScore() != null;
+}
+
+private boolean isTerminalFailure(MlExperiment experiment) {
+    return experiment != null
+            && (experiment.getStatus() == ExperimentStatus.FAILED
+            || experiment.getStatus() == ExperimentStatus.CANCELLED);
 }
 
 private void clearVersioningAndProduction(MlExperiment experiment) {
@@ -3051,8 +3058,11 @@ private void updateMessageFromFinalStatus(
         appendMetricWarningToMessage(experiment, metricWarningMessage);
     }
 
-    if (!isEligiblePlatformVersion(experiment)) {
+    if (isTerminalFailure(experiment)) {
         clearVersioningAndProduction(experiment);
+    } else if (!isEligiblePlatformVersion(experiment)) {
+        experiment.setProduction(false);
+        experiment.setProductionVersion(null);
     }
 
     MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(experiment);
@@ -3081,8 +3091,11 @@ private void updateMessageFromFinalStatus(
         savedExperiment.setProductionVersion(refreshedProductionVersion);
     }
 
-    if (!isEligiblePlatformVersion(savedExperiment)) {
+    if (isTerminalFailure(savedExperiment)) {
         clearVersioningAndProduction(savedExperiment);
+    } else if (!isEligiblePlatformVersion(savedExperiment)) {
+        savedExperiment.setProduction(false);
+        savedExperiment.setProductionVersion(null);
     }
 
     savedExperiment.setProduction(isProductionExperimentRow(savedExperiment));
@@ -4070,8 +4083,31 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
         return normalized;
     }
 
-    if (normalized.equals("acc")) {
+    if (normalized.equals("acc")
+            || normalized.equals("accuracy_score")
+            || normalized.equals("test_accuracy")
+            || normalized.equals("val_accuracy")
+            || normalized.equals("validation_accuracy")
+            || normalized.equals("model_accuracy")) {
         return "accuracy";
+    }
+
+    if (normalized.equals("precision_score")
+            || normalized.equals("precision_macro")
+            || normalized.equals("macro_precision")) {
+        return "precision";
+    }
+
+    if (normalized.equals("recall_score")
+            || normalized.equals("recall_macro")
+            || normalized.equals("macro_recall")) {
+        return "recall";
+    }
+
+    if (normalized.equals("f1_macro")
+            || normalized.equals("macro_f1")
+            || normalized.equals("f1_score_macro")) {
+        return "f1_score";
     }
 
     if (normalized.equals("r2score") || normalized.equals("r2_score")) {

@@ -468,12 +468,18 @@ public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long
     @Query(value = """
             UPDATE ml_experiments
             SET is_production = b'0',
-                model_version = NULL,
-                latest_version = NULL,
+                model_version = CASE
+                    WHEN status IN ('FAILED', 'CANCELLED') THEN NULL
+                    ELSE model_version
+                END,
+                latest_version = CASE
+                    WHEN status IN ('FAILED', 'CANCELLED') THEN NULL
+                    ELSE latest_version
+                END,
                 production_version = NULL
             WHERE registered_model_name IS NOT NULL
               AND (
-                    status <> 'COMPLETED'
+                    status IN ('FAILED', 'CANCELLED')
                     OR mlflow_run_id IS NULL
                     OR mlflow_run_id = ''
                     OR primary_metric_value IS NULL
@@ -518,6 +524,31 @@ public interface MlExperimentRepository extends JpaRepository<MlExperiment, Long
             """, nativeQuery = true)
     List<MlExperiment> findEligibleProductionCandidates(
             @Param("registeredModelName") String registeredModelName
+    );
+
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE ml_experiments
+            SET is_production = b'0',
+                production_version = NULL
+            WHERE registered_model_name = :registeredModelName
+            """, nativeQuery = true)
+    int clearProductionStateByRegisteredModelName(
+            @Param("registeredModelName") String registeredModelName
+    );
+
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE ml_experiments
+            SET is_production = b'1',
+                production_version = :productionVersion
+            WHERE id = :experimentId
+            """, nativeQuery = true)
+    int markExperimentAsProduction(
+            @Param("experimentId") Long experimentId,
+            @Param("productionVersion") String productionVersion
     );
 
 }

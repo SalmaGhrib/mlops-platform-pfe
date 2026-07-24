@@ -7,8 +7,6 @@ import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.repository.MlExperimentMetricRepository;
 import com.mlops.platform.repository.MlExperimentRepository;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -54,11 +52,7 @@ public class ModelPromotionService {
      * - productionVersion désigne la version actuellement promue ;
      * - une seule expérience exacte peut avoir production=true.
      */
-    @Transactional(
-            propagation = Propagation.REQUIRES_NEW,
-            timeout = 60
-    )
-    public MlExperiment recalculateProductionForProject(
+    public synchronized MlExperiment recalculateProductionForProject(
             MlProject project,
             String registeredModelName
     ) {
@@ -176,35 +170,34 @@ public class ModelPromotionService {
          */
         Long bestExperimentId = bestExperiment.getId();
 
+        mlExperimentRepository.clearProductionStateByRegisteredModelName(
+                cleanRegisteredModelName
+        );
+
         for (MlExperiment experiment : experiments) {
-            boolean isProduction =
-                    experiment.getId() != null
-                            && bestExperimentId != null
-                            && experiment.getId()
-                            .equals(bestExperimentId);
+            if (experiment == null || experiment.getId() == null) {
+                continue;
+            }
 
-            experiment.setProduction(isProduction);
-            experiment.setProductionVersion(
-                    isProduction ? bestVersion : null
-            );
+            boolean isProduction = experiment.getId().equals(bestExperimentId);
 
-            MlExperiment savedExperiment =
-                    mlExperimentRepository.save(experiment);
-
-            updateMetricsProductionState(
-                    savedExperiment,
+            mlExperimentMetricRepository.updateProductionStateByExperimentId(
+                    experiment.getId(),
                     isProduction,
                     isProduction ? bestVersion : null
             );
         }
 
-        mlExperimentRepository.flush();
+        mlExperimentRepository.markExperimentAsProduction(
+                bestExperimentId,
+                bestVersion
+        );
 
-        bestExperiment.setProduction(true);
-        bestExperiment.setProductionVersion(bestVersion);
-
-        MlExperiment finalProduction =
-                mlExperimentRepository.saveAndFlush(bestExperiment);
+        MlExperiment finalProduction = mlExperimentRepository
+                .findById(bestExperimentId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Production experiment disappeared after promotion"
+                ));
 
         /*
          * Important :
@@ -683,20 +676,14 @@ public class ModelPromotionService {
             MlExperiment experiment,
             Double globalScore
     ) {
-        List<MlExperimentMetric> metrics =
-                mlExperimentMetricRepository
-                        .findByExperiment(experiment);
-
-        if (metrics == null || metrics.isEmpty()) {
+        if (experiment == null || experiment.getId() == null) {
             return;
         }
 
-        for (MlExperimentMetric metric : metrics) {
-            metric.setGlobalScore(globalScore);
-        }
-
-        mlExperimentMetricRepository.saveAll(metrics);
-        mlExperimentMetricRepository.flush();
+        mlExperimentMetricRepository.updateGlobalScoreByExperimentId(
+                experiment.getId(),
+                globalScore
+        );
     }
 
     private void updateMetricsProductionState(
@@ -704,23 +691,15 @@ public class ModelPromotionService {
             boolean isProduction,
             String productionVersion
     ) {
-        List<MlExperimentMetric> metrics =
-                mlExperimentMetricRepository
-                        .findByExperiment(experiment);
-
-        if (metrics == null || metrics.isEmpty()) {
+        if (experiment == null || experiment.getId() == null) {
             return;
         }
 
-        for (MlExperimentMetric metric : metrics) {
-            metric.setProduction(isProduction);
-            metric.setProductionVersion(
-                    productionVersion
-            );
-        }
-
-        mlExperimentMetricRepository.saveAll(metrics);
-        mlExperimentMetricRepository.flush();
+        mlExperimentMetricRepository.updateProductionStateByExperimentId(
+                experiment.getId(),
+                isProduction,
+                productionVersion
+        );
     }
 
     private String inferDirection(String metricName) {

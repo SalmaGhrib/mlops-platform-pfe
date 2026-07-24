@@ -11,7 +11,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
@@ -67,7 +66,6 @@ public class AutoProductionDeploymentReconcilerService {
             lockAtMostFor = "PT10M",
             lockAtLeastFor = "PT2S"
     )
-    @Transactional
     public void reconcileProductionDeployments() {
         if (!autoDeployEnabled || !reconcilerEnabled) {
             return;
@@ -431,6 +429,19 @@ public class AutoProductionDeploymentReconcilerService {
             }
 
             String newVersion = trimToNull(result.getNewVersion());
+
+            if (newVersion == null
+                    && (result.isAlreadyMlflowModel() || result.isSkipped())
+                    && currentVersion != null) {
+                managedExperiment.setMessage(
+                        appendSafeMessage(
+                                managedExperiment.getMessage(),
+                                buildStandardizedMarker(currentVersion)
+                        )
+                );
+                managedExperiment.setErrorMessage(null);
+                mlExperimentRepository.saveAndFlush(managedExperiment);
+            }
 
             /*
              * Cas 1 : une nouvelle version standardisée a été créée.

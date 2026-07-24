@@ -1,7 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute, RouterModule } from '@angular/router';
+import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import { HttpErrorResponse } from '@angular/common/http';
 import { AuthService } from '../../../core/services/auth.service';
 
@@ -28,6 +28,7 @@ export class ResetPasswordComponent implements OnInit {
 
   constructor(
     private route: ActivatedRoute,
+    private router: Router,
     private authService: AuthService
   ) {}
 
@@ -72,6 +73,12 @@ export class ResetPasswordComponent implements OnInit {
         this.loading = false;
         this.successMessage =
           response.message || 'Mot de passe réinitialisé avec succès.';
+
+        setTimeout(() => {
+          void this.router.navigate(['/signin'], {
+            queryParams: { passwordReset: 'success' }
+          });
+        }, 1500);
       },
       error: (error: HttpErrorResponse) => {
         console.error('Reset password error:', error);

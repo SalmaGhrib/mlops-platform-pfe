@@ -5,6 +5,7 @@ import com.mlops.platform.entity.MlExperimentMetric;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -53,4 +54,30 @@ public interface MlExperimentMetricRepository extends JpaRepository<MlExperiment
             deleteAllByExperimentIdBulk(experiment.getId());
         }
     }
+    @Transactional
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            update MlExperimentMetric m
+               set m.globalScore = :globalScore
+             where m.experiment.id = :experimentId
+            """)
+    int updateGlobalScoreByExperimentId(
+            @Param("experimentId") Long experimentId,
+            @Param("globalScore") Double globalScore
+    );
+
+    @Transactional
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            update MlExperimentMetric m
+               set m.production = :production,
+                   m.productionVersion = :productionVersion
+             where m.experiment.id = :experimentId
+            """)
+    int updateProductionStateByExperimentId(
+            @Param("experimentId") Long experimentId,
+            @Param("production") boolean production,
+            @Param("productionVersion") String productionVersion
+    );
+
 }

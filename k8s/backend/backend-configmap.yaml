@@ -57,6 +57,7 @@ data:
   APP_PIPELINE_GATEWAY_URL: "http://pipeline-gateway-service:8001/upload-and-run-custom-model"
 
   APP_RUNTIME_ANALYSIS_API_URL: "http://pipeline-gateway-service:8001/api/runtime/analyze-script"
+  CUSTOM_PREDICT_API_URL: "http://pipeline-gateway-service:8001"
 
   # ============================================================
   # Azure Container Registry V2
@@ -85,12 +86,12 @@ data:
   APP_CUSTOM_DOCKER_WATCHER_DELAY_MS: "30000"
 
   APP_MLOPS_AUTO_SYNC_ENABLED: "true"
-  APP_MLOPS_AUTO_SYNC_DELAY_MS: "300000"
+  APP_MLOPS_AUTO_SYNC_DELAY_MS: "15000"
 
   APP_MLOPS_AUTO_DEPLOY_ENABLED: "true"
 
   APP_MLOPS_PRODUCTION_RECONCILER_ENABLED: "true"
-  APP_MLOPS_PRODUCTION_RECONCILER_DELAY_MS: "60000"
+  APP_MLOPS_PRODUCTION_RECONCILER_DELAY_MS: "300000"
   APP_MLOPS_PRODUCTION_RECONCILER_INITIAL_DELAY_MS: "30000"
 
   APP_RETRAINING_SCHEDULER_ENABLED: "true"

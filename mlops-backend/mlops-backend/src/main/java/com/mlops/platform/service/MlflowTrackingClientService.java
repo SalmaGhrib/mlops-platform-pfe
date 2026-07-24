@@ -1011,59 +1011,75 @@ result.add(details);
 
 
     public boolean isSuccessfulMlflowRun(MlflowRunDetails details) {
-    if (details == null) {
-        return false;
-    }
+        if (details == null) {
+            return false;
+        }
 
-    String status = details.getStatus();
+        String status = details.getStatus();
+        boolean mlflowFinished =
+                status != null && status.equalsIgnoreCase("FINISHED");
 
-    Map<String, Double> metrics = details.getMetrics();
-    Map<String, String> tags = details.getTags();
+        if (!mlflowFinished) {
+            return false;
+        }
 
-    boolean mlflowFinished =
-            status != null && status.equalsIgnoreCase("FINISHED");
+        Map<String, Double> metrics = details.getMetrics();
+        Map<String, String> tags = details.getTags();
 
-    boolean returnCodeOk = false;
+        /*
+         * return_code is optional for STANDARD_RUNTIME.
+         * When present, a non-zero value is a hard failure.
+         */
+        Double numericReturnCode =
+                metrics != null ? metrics.get("return_code") : null;
 
-    if (metrics != null && metrics.containsKey("return_code")) {
-        Double returnCode = metrics.get("return_code");
-        returnCodeOk = returnCode != null && returnCode.doubleValue() == 0.0;
-    }
+        if (numericReturnCode != null
+                && numericReturnCode.doubleValue() != 0.0) {
+            return false;
+        }
 
-    if (!returnCodeOk && tags != null) {
-        String returnCodeTag = firstNotBlank(
-                tags.get("return_code"),
-                tags.get("mlops.return_code")
-        );
+        String returnCodeTag = tags == null
+                ? null
+                : firstNotBlank(
+                        tags.get("return_code"),
+                        tags.get("mlops.return_code")
+                );
 
         if (returnCodeTag != null) {
             try {
-                returnCodeOk = Double.parseDouble(returnCodeTag.trim()) == 0.0;
-            } catch (Exception ignored) {
+                if (Double.parseDouble(returnCodeTag.trim()) != 0.0) {
+                    return false;
+                }
+            } catch (NumberFormatException ignored) {
+                // Unknown textual value: do not reject an otherwise FINISHED run.
             }
         }
+
+        boolean hasUsefulMetric =
+                metrics != null
+                        && metrics.entrySet().stream()
+                        .anyMatch(entry ->
+                                entry.getKey() != null
+                                        && entry.getValue() != null
+                                        && !entry.getKey().equalsIgnoreCase("return_code")
+                        );
+
+        boolean hasModelEvidence =
+                (details.getModelVersion() != null
+                        && !details.getModelVersion().isBlank())
+                        || (details.getRegisteredModelName() != null
+                        && !details.getRegisteredModelName().isBlank())
+                        || (tags != null
+                        && firstNotBlank(
+                                tags.get("main_model_file"),
+                                tags.get("model_file"),
+                                tags.get("mlflow_model_uri"),
+                                tags.get("model_version"),
+                                tags.get("registered_model_name")
+                        ) != null);
+
+        return hasUsefulMetric && hasModelEvidence;
     }
-
-    boolean hasUsefulMetric =
-            metrics != null &&
-                    metrics.entrySet().stream()
-                            .anyMatch(e ->
-                                    e.getKey() != null
-                                            && e.getValue() != null
-                                            && !e.getKey().equalsIgnoreCase("return_code")
-                            );
-
-    boolean hasModel =
-            tags != null &&
-                    firstNotBlank(
-                            tags.get("main_model_file"),
-                            tags.get("model_file"),
-                            tags.get("mlflow_model_uri"),
-                            tags.get("model_version")
-                    ) != null;
-
-    return mlflowFinished && returnCodeOk && hasUsefulMetric && hasModel;
-}
 
     public MlflowRunDetails findLatestRunByTag(
             String tagKey,
@@ -1840,6 +1856,24 @@ private ModelVersionInfo findModelVersionInfoByRegisteredModelGet(
         experiment.setProduction(false);
     }
 
+    private boolean isTerminalFailure(MlExperiment experiment) {
+        if (experiment == null || experiment.getStatus() == null) {
+            return false;
+        }
+
+        return experiment.getStatus() == ExperimentStatus.FAILED
+                || experiment.getStatus() == ExperimentStatus.CANCELLED;
+    }
+
+    private void clearVersionStateOnlyForTerminalFailure(MlExperiment experiment) {
+        if (isTerminalFailure(experiment)) {
+            clearVersionStateForNonCompletedExperiment(experiment);
+        } else if (experiment != null) {
+            experiment.setProduction(false);
+            experiment.setProductionVersion(null);
+        }
+    }
+
     private void syncSingleModelVersionToDatabase(
             MlflowModelVersionDto versionDto
     ) {
@@ -2141,11 +2175,11 @@ public boolean deleteMlflowExperimentByName(String experimentName) {
         }
 
         if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
-            clearVersionStateForNonCompletedExperiment(experiment);
+            clearVersionStateOnlyForTerminalFailure(experiment);
             mlExperimentRepository.saveAndFlush(experiment);
 
             System.out.println(
-                    "[MLFLOW_REGISTRY_SYNC] Skipping non-COMPLETED experiment."
+                    "[MLFLOW_REGISTRY_SYNC] Postponed until local status is COMPLETED."
                             + " experimentId=" + experiment.getId()
                             + ", status=" + experiment.getStatus()
             );
@@ -2154,7 +2188,7 @@ public boolean deleteMlflowExperimentByName(String experimentName) {
 
         if (experiment.getMlflowRunId() == null
                 || experiment.getMlflowRunId().isBlank()) {
-            clearVersionStateForNonCompletedExperiment(experiment);
+            clearVersionStateOnlyForTerminalFailure(experiment);
             mlExperimentRepository.saveAndFlush(experiment);
             return;
         }
@@ -2165,7 +2199,7 @@ public boolean deleteMlflowExperimentByName(String experimentName) {
         );
 
         if (!isVersionEligibleForPlatform(experiment, runDetails)) {
-            clearVersionStateForNonCompletedExperiment(experiment);
+            clearVersionStateOnlyForTerminalFailure(experiment);
             mlExperimentRepository.saveAndFlush(experiment);
 
             System.out.println(
@@ -2237,8 +2271,14 @@ public boolean deleteMlflowExperimentByName(String experimentName) {
         }
 
         if (versionForRun == null || versionForRun.isBlank()) {
-            clearVersionStateForNonCompletedExperiment(experiment);
+            experiment.setProduction(false);
+            experiment.setProductionVersion(null);
             mlExperimentRepository.saveAndFlush(experiment);
+            System.out.println(
+                    "[MLFLOW_REGISTRY_SYNC] Model version not visible yet; retry later."
+                            + " experimentId=" + experiment.getId()
+                            + ", runId=" + experiment.getMlflowRunId()
+            );
             return;
         }
 
@@ -2986,40 +3026,56 @@ private List<MlflowModelVersionDto> getLatestVersionsFromRegisteredModel(String 
     }
 
     public void setProductionAlias(String registeredModelName, String version) {
-        try {
-            if (registeredModelName == null || registeredModelName.isBlank()) {
-                return;
-            }
-
-            if (version == null || version.isBlank()) {
-                return;
-            }
-
-            String url = cleanMlflowUri(mlflowTrackingUri)
-                    + "/api/2.0/mlflow/registered-models/alias";
-
-            String requestBody = "{"
-                    + "\"name\":\"" + jsonEscape(registeredModelName.trim()) + "\","
-                    + "\"alias\":\"production\","
-                    + "\"version\":\"" + jsonEscape(version.trim()) + "\""
-                    + "}";
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
-
-            HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
-
-            restTemplate.exchange(
-                    url,
-                    HttpMethod.POST,
-                    entity,
-                    String.class
-            );
-
-        } catch (Exception e) {
-            System.out.println("Erreur setProductionAlias : " + e.getMessage());
+        if (registeredModelName == null || registeredModelName.isBlank()) {
+            throw new IllegalArgumentException("registeredModelName is required");
         }
+
+        if (version == null || version.isBlank()) {
+            throw new IllegalArgumentException("version is required");
+        }
+
+        String cleanName = registeredModelName.trim();
+        String cleanVersion = version.trim();
+        String url = cleanMlflowUri(mlflowTrackingUri)
+                + "/api/2.0/mlflow/registered-models/alias";
+
+        String requestBody = "{"
+                + "\"name\":\"" + jsonEscape(cleanName) + "\","
+                + "\"alias\":\"production\","
+                + "\"version\":\"" + jsonEscape(cleanVersion) + "\""
+                + "}";
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+
+        ResponseEntity<String> response = restTemplate.exchange(
+                url,
+                HttpMethod.POST,
+                new HttpEntity<>(requestBody, headers),
+                String.class
+        );
+
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            throw new IllegalStateException(
+                    "MLflow rejected production alias update: "
+                            + response.getStatusCode()
+            );
+        }
+
+        String verifiedVersion = getProductionVersion(cleanName);
+        if (verifiedVersion == null
+                || !cleanVersion.equals(verifiedVersion.trim())) {
+            throw new IllegalStateException(
+                    "MLflow production alias verification failed. expected="
+                            + cleanVersion + ", actual=" + verifiedVersion
+            );
+        }
+
+        System.out.println(
+                "[MLFLOW_ALIAS] production verified. model="
+                        + cleanName + ", version=" + cleanVersion
+        );
     }
 
     public boolean deleteRun(String runId) {

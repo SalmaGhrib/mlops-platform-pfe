@@ -9,7 +9,6 @@ import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.entity.ModelDeployment;
 import com.mlops.platform.repository.ModelDeploymentRepository;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
 
@@ -42,7 +41,6 @@ public class AutoModelLifecycleService {
      *    - quand le nouveau est READY, ModelDeploymentService désactive l'ancien.
      * 6. La clé API est conservée.
      */
-    @Transactional
     public MlExperiment evaluateAndAutoPromoteAndDeploy(
             MlProject project,
             String registeredModelName
