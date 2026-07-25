@@ -7,11 +7,11 @@ import com.mlops.platform.repository.ModelDeploymentShareRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Sort;
 import org.springframework.scheduling.annotation.Scheduled;
-import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -42,11 +42,15 @@ public class ModelDeploymentCleanupService {
         this.kubernetesModelServingService = kubernetesModelServingService;
     }
 
-    @Scheduled(
-            fixedDelayString = "${app.mlops.deployment-cleanup.delay-ms:120000}",
-            initialDelayString = "${app.mlops.deployment-cleanup.initial-delay-ms:60000}"
-    )
-    @SchedulerLock(name = "modelDeploymentCleanup", lockAtMostFor = "15m", lockAtLeastFor = "1m")
+   @Scheduled(
+        fixedDelayString = "${app.mlops.deployment-cleanup.delay-ms:120000}",
+        initialDelayString = "${app.mlops.deployment-cleanup.initial-delay-ms:60000}"
+)
+@SchedulerLock(
+        name = "modelDeploymentCleanup",
+        lockAtMostFor = "15m",
+        lockAtLeastFor = "1m"
+)
     @Transactional
     public void cleanupUselessDeploymentRows() {
         if (!cleanupEnabled) {

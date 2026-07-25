@@ -12,6 +12,7 @@ import mlflow
 import mlflow.pyfunc
 import mlflow.sklearn
 import pandas as pd
+import requests
 from mlflow.tracking import MlflowClient
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -265,6 +266,140 @@ def parse_metrics_from_stdout(stdout: str) -> Dict[str, float]:
             continue
 
     return metrics
+
+
+
+def resolve_dataset_from_config(
+    config: Dict[str, Any],
+    workspace: Path,
+) -> Optional[Path]:
+    """
+    Résout la source du dataset pour les différents modes de transport.
+
+    Types acceptés :
+    - none   : aucun dataset ;
+    - inline : ancien fonctionnement, contenu inclus dans la configuration ;
+    - path   : dataset déjà téléchargé/localisé par le composant Kubeflow ;
+    - url    : téléchargement de secours lorsque le pipeline n'a pas encore
+               transformé l'URL en chemin local.
+
+    Cette fonction corrige l'erreur :
+        data.source_type must be inline or none
+    """
+    data_config = config.get("data") if isinstance(config.get("data"), dict) else {}
+    source_type = safe_str(data_config.get("source_type"), "none").lower()
+
+    if source_type == "none":
+        print("[CUSTOM RUNNER] No dataset configured.")
+        return None
+
+    if source_type == "inline":
+        dataset_path = create_inline_dataset(config, workspace)
+
+        if dataset_path is None:
+            raise ValueError(
+                "data.source_type='inline' but no dataset was materialized."
+            )
+
+        dataset_path = Path(dataset_path).resolve()
+
+        if not dataset_path.is_file():
+            raise FileNotFoundError(
+                f"Inline dataset was not created correctly: {dataset_path}"
+            )
+
+        print(f"[CUSTOM RUNNER] Inline dataset materialized: {dataset_path}")
+        return dataset_path
+
+    if source_type == "path":
+        raw_path = (
+            data_config.get("path")
+            or data_config.get("dataset_path")
+            or data_config.get("datasetPath")
+        )
+
+        if not raw_path:
+            raise ValueError(
+                "data.source_type='path' requires data.path."
+            )
+
+        dataset_path = Path(str(raw_path)).expanduser()
+
+        if not dataset_path.is_absolute():
+            dataset_path = workspace / dataset_path
+
+        dataset_path = dataset_path.resolve()
+
+        if not dataset_path.exists():
+            raise FileNotFoundError(
+                f"Dataset path does not exist: {dataset_path}"
+            )
+
+        if not dataset_path.is_file() and not dataset_path.is_dir():
+            raise ValueError(
+                f"Dataset path is neither a file nor a directory: {dataset_path}"
+            )
+
+        print(f"[CUSTOM RUNNER] Dataset loaded from path: {dataset_path}")
+        return dataset_path
+
+    if source_type == "url":
+        url = safe_str(data_config.get("url"), "")
+
+        if not url:
+            raise ValueError(
+                "data.source_type='url' requires data.url."
+            )
+
+        filename = Path(
+            safe_str(
+                data_config.get("filename")
+                or data_config.get("dataset_name"),
+                "dataset.csv",
+            )
+        ).name
+
+        download_dir = workspace / ".platform_downloads"
+        download_dir.mkdir(parents=True, exist_ok=True)
+        dataset_path = (download_dir / filename).resolve()
+
+        expected_sha256 = safe_str(data_config.get("sha256"), "")
+
+        print(f"[CUSTOM RUNNER] Downloading dataset from URL: {url}")
+
+        import hashlib
+
+        digest = hashlib.sha256()
+
+        with requests.get(url, stream=True, timeout=(10, 300)) as response:
+            response.raise_for_status()
+
+            with dataset_path.open("wb") as output:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if not chunk:
+                        continue
+
+                    output.write(chunk)
+                    digest.update(chunk)
+
+        actual_sha256 = digest.hexdigest()
+
+        if expected_sha256 and actual_sha256.lower() != expected_sha256.lower():
+            dataset_path.unlink(missing_ok=True)
+            raise ValueError(
+                "Dataset integrity verification failed: "
+                f"expected={expected_sha256}, actual={actual_sha256}"
+            )
+
+        print(f"[CUSTOM RUNNER] Dataset downloaded: {dataset_path}")
+        print(f"[CUSTOM RUNNER] Dataset SHA-256: {actual_sha256}")
+        return dataset_path
+
+    raise ValueError(
+        "Unsupported data.source_type. "
+        "Expected one of: none, inline, path, url. "
+        f"Received: {source_type}"
+    )
 
 
 def prepare_outputs_dir(workspace: Path) -> Path:
@@ -2290,14 +2425,40 @@ def is_auto_promotion_enabled(config: Dict[str, Any]) -> bool:
     return bool(value)
 
 
-def extract_runtime_ids(config: Dict[str, Any], run_name: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+def extract_runtime_ids(
+    config: Dict[str, Any],
+    run_name: str,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Extrait les identifiants permettant de relier sans ambiguïté :
+
+        expérience MySQL
+        <-> run Kubeflow
+        <-> run MLflow
+
+    La fonction accepte les anciennes clés plates ainsi que les nouvelles
+    structures ``run``, ``experiment`` et ``kubeflow``.
+    """
     spring_experiment_id = get_nested(
         config,
         [
             ["spring_experiment_id"],
             ["springExperimentId"],
+            ["platform_experiment_id"],
+            ["platformExperimentId"],
+
             ["experiment", "spring_experiment_id"],
+            ["experiment", "springExperimentId"],
+            ["experiment", "platform_experiment_id"],
+            ["experiment", "platformExperimentId"],
             ["experiment", "id"],
+
+            ["run", "spring_experiment_id"],
+            ["run", "springExperimentId"],
+            ["run", "experiment_id"],
+            ["run", "experimentId"],
+            ["run", "platform_experiment_id"],
+            ["run", "platformExperimentId"],
         ],
         None,
     )
@@ -2307,7 +2468,15 @@ def extract_runtime_ids(config: Dict[str, Any], run_name: str) -> tuple[Optional
         [
             ["kubeflow_run_id"],
             ["kubeflowRunId"],
+
             ["kubeflow", "run_id"],
+            ["kubeflow", "runId"],
+            ["kubeflow", "id"],
+
+            ["run", "kubeflow_run_id"],
+            ["run", "kubeflowRunId"],
+            ["run", "kubeflow_id"],
+            ["run", "kubeflowId"],
         ],
         None,
     )
@@ -2317,14 +2486,34 @@ def extract_runtime_ids(config: Dict[str, Any], run_name: str) -> tuple[Optional
         [
             ["kubeflow_run_name"],
             ["kubeflowRunName"],
+
             ["kubeflow", "run_name"],
+            ["kubeflow", "runName"],
+            ["kubeflow", "name"],
+
+            ["run", "kubeflow_run_name"],
+            ["run", "kubeflowRunName"],
+            ["run", "name"],
+            ["run", "run_name"],
+            ["run", "runName"],
         ],
         run_name,
     )
 
-    spring_experiment_id = safe_str(spring_experiment_id, "")
-    kubeflow_run_id = safe_str(kubeflow_run_id, "")
-    kubeflow_run_name = safe_str(kubeflow_run_name, run_name)
+    spring_experiment_id = safe_str(
+        spring_experiment_id,
+        "",
+    )
+
+    kubeflow_run_id = safe_str(
+        kubeflow_run_id,
+        "",
+    )
+
+    kubeflow_run_name = safe_str(
+        kubeflow_run_name,
+        run_name,
+    )
 
     return (
         spring_experiment_id or None,
@@ -2359,8 +2548,16 @@ def run_custom_model_pipeline(config_path: str) -> Dict[str, Any]:
             [
                 ["run_name"],
                 ["runName"],
+
+                # Structure réellement générée par custom_upload_api.py
+                ["run", "name"],
+                ["run", "run_name"],
+                ["run", "runName"],
+
                 ["experiment", "run_name"],
                 ["experiment", "runName"],
+                ["experiment", "name"],
+
                 ["model", "run_name"],
                 ["model", "runName"],
             ],
@@ -2558,8 +2755,35 @@ def run_custom_model_pipeline(config_path: str) -> Dict[str, Any]:
     print(f"[CUSTOM RUNNER] workspace={workspace}")
     print(f"[CUSTOM RUNNER] entrypoint={entrypoint}")
 
-    dataset_path = create_inline_dataset(config, workspace)
-    validate_dataset_for_data_type(dataset_path, data_type)
+    # Résolution unique et centralisée du dataset.
+    # Supporte : none, inline, path et url.
+    # IMPORTANT : ne pas appeler directement create_inline_dataset() ici,
+    # car cette fonction n'accepte que les anciens modes inline/none.
+    dataset_path = resolve_dataset_from_config(
+        config=config,
+        workspace=workspace,
+    )
+
+    validate_dataset_for_data_type(
+        dataset_path=dataset_path,
+        data_type=data_type,
+    )
+
+    # Expose également le chemin réel aux scripts utilisateurs et à
+    # l'adaptateur universel. Les alias standards seront créés ensuite.
+    if dataset_path is not None:
+        resolved_dataset_path = str(Path(dataset_path).resolve())
+        os.environ["DATASET_PATH"] = resolved_dataset_path
+        os.environ["DATA_PATH"] = resolved_dataset_path
+        os.environ["MLOPS_DATASET_PATH"] = resolved_dataset_path
+        os.environ["DATASET_FILE_PATH"] = resolved_dataset_path
+
+        print(
+            "[CUSTOM RUNNER] Dataset resolved successfully: "
+            f"{resolved_dataset_path}"
+        )
+    else:
+        print("[CUSTOM RUNNER] No dataset resolved for this run.")
 
     algorithm_injection_info = {
         "enabled": False,
@@ -2650,6 +2874,8 @@ def run_custom_model_pipeline(config_path: str) -> Dict[str, Any]:
         mlflow.set_tag("project_name", project_name)
         mlflow.set_tag("model_name", model_name)
         mlflow.set_tag("run_name", run_name)
+        mlflow.set_tag("platform_run_name", run_name)
+        mlflow.set_tag("requested_run_name", run_name)
         mlflow.set_tag("registered_model_name", registered_model_name)
         mlflow.set_tag("alias", alias)
         mlflow.set_tag("primary_metric", primary_metric or "")
@@ -2660,7 +2886,20 @@ def run_custom_model_pipeline(config_path: str) -> Dict[str, Any]:
         mlflow.set_tag("mlops.managed", "true")
         mlflow.set_tag("platform.managed", "true")
         mlflow.set_tag("platform_runner", "true")
-        mlflow.set_tag("runtime_mode", "CUSTOM_DOCKERFILE")
+        runtime_mode = safe_str(
+            get_nested(
+                config,
+                [
+                    ["runtime_mode"],
+                    ["runtimeMode"],
+                    ["runtime", "mode"],
+                    ["model", "runtime_mode"],
+                ],
+                None,
+            ),
+            "STANDARD",
+        ).upper()
+        mlflow.set_tag("runtime_mode", runtime_mode)
 
         mlflow.set_tag("requested_experiment_name", requested_experiment_name)
         mlflow.set_tag("mlflow_experiment_status", str(mlflow_experiment_info.get("status", "")))
@@ -2780,6 +3019,40 @@ def run_custom_model_pipeline(config_path: str) -> Dict[str, Any]:
         mlflow.log_artifacts(str(outputs_dir), artifact_path="raw_outputs")
 
         print(f"[MODEL LOGGING] Preparing to log model: {model_path.name}")
+
+        # Traçabilité : conserver aussi le fichier modèle original dans les
+        # artefacts du run. MLflow 3 peut stocker le modèle principal comme
+        # Logged Model, ce qui ne l'affiche pas toujours dans l'arbre classique
+        # des artefacts du run.
+        if model_path is not None and Path(model_path).is_file():
+            try:
+                mlflow.log_artifact(
+                    local_path=str(model_path),
+                    artifact_path="raw_model_file",
+                )
+
+                mlflow.set_tag(
+                    "raw_model_artifact_path",
+                    f"raw_model_file/{Path(model_path).name}",
+                )
+
+                mlflow.set_tag(
+                    "raw_model_filename",
+                    Path(model_path).name,
+                )
+
+                print(
+                    "[MODEL ARTIFACT] Raw model file uploaded: "
+                    f"raw_model_file/{Path(model_path).name}"
+                )
+
+            except Exception as exc:
+                # Le logging MLflow natif continue même si la copie d'audit
+                # du fichier brut échoue.
+                print(
+                    "[MODEL ARTIFACT] Could not upload raw model file: "
+                    f"{exc}"
+                )
 
         logged_model_uri = get_model_wrapper_and_log_model(
             model_path=model_path,

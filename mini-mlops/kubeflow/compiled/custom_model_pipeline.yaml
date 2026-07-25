@@ -1,6 +1,6 @@
 # PIPELINE DEFINITION
 # Name: custom-model-training-registry-pipeline
-# Description: Train custom uploaded model, support TABULAR/IMAGE/TEXT data types, track metrics in MLflow, register model, version it, and promote production alias.
+# Description: Download the uploaded dataset from the gateway, train the model, log metrics in MLflow and register the model version.
 # Inputs:
 #    config_yaml: str
 components:
@@ -15,21 +15,83 @@ deploymentSpec:
     exec-run-custom-model-component:
       container:
         args:
-        - "\nfrom pathlib import Path\nimport subprocess\nimport sys\n\nconfig_yaml\
-          \ = sys.argv[1]\n\nconfig_path = Path(\"/tmp/custom_config.yaml\")\nconfig_path.write_text(config_yaml,\
-          \ encoding=\"utf-8\")\n\nprint(\"[KFP CUSTOM PIPELINE] config written to:\"\
-          , config_path)\nprint(\"[KFP CUSTOM PIPELINE] launching src.custom_models.custom_main\"\
-          )\n\nsubprocess.run(\n    [\n        sys.executable,\n        \"-m\",\n\
+        - "\nimport hashlib\nimport os\nimport subprocess\nimport sys\nfrom pathlib\
+          \ import Path\n\nimport requests\nimport yaml\n\n\ndef download_dataset(config:\
+          \ dict) -> None:\n    data = config.get(\"data\")\n\n    if not isinstance(data,\
+          \ dict):\n        print(\"[KFP] No valid dataset configuration.\")\n   \
+          \     return\n\n    source_type = str(data.get(\"source_type\") or \"none\"\
+          ).strip().lower()\n\n    if source_type == \"none\":\n        print(\"[KFP]\
+          \ No dataset configured.\")\n        return\n\n    if source_type == \"\
+          path\":\n        dataset_path = Path(str(data.get(\"path\") or \"\")).expanduser()\n\
+          \n        if not dataset_path.is_file():\n            raise FileNotFoundError(\n\
+          \                f\"Configured dataset path does not exist: {dataset_path}\"\
+          \n            )\n\n        os.environ[\"DATASET_PATH\"] = str(dataset_path.resolve())\n\
+          \        print(f\"[KFP] Dataset already available at {dataset_path}\")\n\
+          \        return\n\n    if source_type != \"url\":\n        raise ValueError(\n\
+          \            \"Unsupported data.source_type. Expected one of: none, path,\
+          \ url. \"\n            f\"Received: {source_type}\"\n        )\n\n    url\
+          \ = str(data.get(\"url\") or \"\").strip()\n    expected_sha256 = str(data.get(\"\
+          sha256\") or \"\").strip().lower()\n    filename = Path(\n        str(\n\
+          \            data.get(\"filename\")\n            or data.get(\"dataset_name\"\
+          )\n            or \"dataset.csv\"\n        )\n    ).name\n\n    if not url:\n\
+          \        raise ValueError(\"data.source_type='url' but data.url is missing\"\
+          )\n\n    input_dir = Path(\"/tmp/mlops_input\")\n    input_dir.mkdir(parents=True,\
+          \ exist_ok=True)\n    dataset_path = input_dir / filename\n\n    print(\"\
+          [KFP] Downloading dataset from pipeline-gateway\")\n    print(f\"[KFP] URL={url}\"\
+          )\n    print(f\"[KFP] destination={dataset_path}\")\n\n    digest = hashlib.sha256()\n\
+          \n    try:\n        with requests.get(url, stream=True, timeout=(10, 300))\
+          \ as response:\n            response.raise_for_status()\n\n            with\
+          \ dataset_path.open(\"wb\") as output:\n                for chunk in response.iter_content(chunk_size=1024\
+          \ * 1024):\n                    if not chunk:\n                        continue\n\
+          \n                    output.write(chunk)\n                    digest.update(chunk)\n\
+          \n    except requests.RequestException as exc:\n        dataset_path.unlink(missing_ok=True)\n\
+          \        raise RuntimeError(f\"Dataset download failed: {exc}\") from exc\n\
+          \n    if not dataset_path.is_file() or dataset_path.stat().st_size <= 0:\n\
+          \        dataset_path.unlink(missing_ok=True)\n        raise ValueError(\"\
+          Downloaded dataset is missing or empty\")\n\n    actual_sha256 = digest.hexdigest().lower()\n\
+          \n    if expected_sha256 and actual_sha256 != expected_sha256:\n       \
+          \ dataset_path.unlink(missing_ok=True)\n        raise ValueError(\n    \
+          \        \"Dataset SHA-256 verification failed: \"\n            f\"expected={expected_sha256},\
+          \ actual={actual_sha256}\"\n        )\n\n    data.clear()\n    data.update(\n\
+          \        {\n            \"source_type\": \"path\",\n            \"dataset_name\"\
+          : filename,\n            \"filename\": filename,\n            \"path\":\
+          \ str(dataset_path),\n            \"sha256\": actual_sha256,\n         \
+          \   \"size_bytes\": dataset_path.stat().st_size,\n        }\n    )\n\n \
+          \   os.environ[\"DATASET_PATH\"] = str(dataset_path)\n    os.environ[\"\
+          DATA_PATH\"] = str(dataset_path)\n    os.environ[\"MLOPS_DATASET_PATH\"\
+          ] = str(dataset_path)\n\n    print(f\"[KFP] Dataset ready: {dataset_path}\"\
+          )\n    print(f\"[KFP] SHA-256={actual_sha256}\")\n\n\ndef validate_config(config:\
+          \ dict) -> None:\n    if not isinstance(config, dict):\n        raise ValueError(\"\
+          config_yaml must decode to a mapping\")\n\n    required = (\"project_name\"\
+          , \"model\", \"run\", \"tracking\", \"custom_code\")\n    missing = [name\
+          \ for name in required if name not in config]\n\n    if missing:\n     \
+          \   raise ValueError(\n            \"Missing required configuration fields:\
+          \ \" + \", \".join(missing)\n        )\n\n\ndef main() -> None:\n    if\
+          \ len(sys.argv) < 2 or not str(sys.argv[1]).strip():\n        raise ValueError(\"\
+          config_yaml argument is missing or empty\")\n\n    try:\n        config\
+          \ = yaml.safe_load(sys.argv[1]) or {}\n    except yaml.YAMLError as exc:\n\
+          \        raise ValueError(f\"Invalid YAML configuration: {exc}\") from exc\n\
+          \n    validate_config(config)\n    download_dataset(config)\n\n    config_path\
+          \ = Path(\"/tmp/custom_config.yaml\")\n    config_path.write_text(\n   \
+          \     yaml.safe_dump(\n            config,\n            sort_keys=False,\n\
+          \            allow_unicode=True,\n        ),\n        encoding=\"utf-8\"\
+          ,\n    )\n\n    command = [\n        sys.executable,\n        \"-m\",\n\
           \        \"src.custom_models.custom_main\",\n        \"--config\",\n   \
-          \     str(config_path),\n    ],\n    check=True,\n)\n            "
+          \     str(config_path),\n    ]\n\n    print(f\"[KFP] Config written to {config_path}\"\
+          )\n    print(\"[KFP] Launching: \" + \" \".join(command))\n\n    completed\
+          \ = subprocess.run(command, check=False)\n\n    if completed.returncode\
+          \ != 0:\n        raise RuntimeError(\n            f\"Training runner failed\
+          \ with exit code {completed.returncode}\"\n        )\n\n    print(\"[KFP]\
+          \ Training completed successfully\")\n\n\nif __name__ == \"__main__\":\n\
+          \    main()\n"
         - '{{$.inputs.parameters[''config_yaml'']}}'
         command:
         - python
         - -c
-        image: docker.io/salmaghrib2003/mini-mlops-runtime:v1
+        image: acrmlopssalmav2.azurecr.io/mini-mlops:sync-artifacts-final-v9
 pipelineInfo:
-  description: Train custom uploaded model, support TABULAR/IMAGE/TEXT data types,
-    track metrics in MLflow, register model, version it, and promote production alias.
+  description: Download the uploaded dataset from the gateway, train the model, log
+    metrics in MLflow and register the model version.
   name: custom-model-training-registry-pipeline
 root:
   dag:

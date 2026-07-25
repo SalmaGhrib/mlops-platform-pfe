@@ -1,6 +1,17 @@
 package com.mlops.platform.entity;
 
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import org.hibernate.annotations.OnDelete;
 import org.hibernate.annotations.OnDeleteAction;
 
@@ -29,48 +40,71 @@ public class MlExperimentMetric {
     @Column(name = "direction", nullable = false, length = 10)
     private String direction;
 
-    @Column(name = "production_version")
+    @Column(name = "production_version", length = 100)
     private String productionVersion;
 
     @Column(name = "is_production", nullable = false)
-    private Boolean production = false;
+    private Boolean production = Boolean.FALSE;
 
     @Column(name = "global_score")
     private Double globalScore;
 
-    @ManyToOne(fetch = FetchType.LAZY)
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "experiment_id", nullable = false)
     @OnDelete(action = OnDeleteAction.CASCADE)
     private MlExperiment experiment;
 
+    public MlExperimentMetric() {
+        // Constructeur requis par JPA.
+    }
+
+    public MlExperimentMetric(
+            MlExperiment experiment,
+            String metricName,
+            Double metricValue,
+            String direction
+    ) {
+        this.experiment = experiment;
+        this.metricName = metricName;
+        this.metricValue = metricValue;
+        this.direction = direction;
+        normalize();
+    }
+
     @PrePersist
     @PreUpdate
     public void normalize() {
-        if (metricName != null) {
-            metricName = metricName.trim().toLowerCase();
+        metricName = cleanLower(metricName);
+
+        if (metricName == null) {
+            throw new IllegalStateException("metricName ne peut pas être null ou vide.");
         }
 
-        if (direction == null || direction.isBlank()) {
-            direction = inferDirection(metricName);
-        } else {
-            direction = direction.trim().toLowerCase();
+        if (metricValue == null) {
+            throw new IllegalStateException("metricValue ne peut pas être null.");
         }
+
+        direction = cleanLower(direction);
 
         if (!"min".equals(direction) && !"max".equals(direction)) {
             direction = inferDirection(metricName);
         }
 
         if (production == null) {
-            production = false;
+            production = Boolean.FALSE;
+        }
+
+        if (productionVersion != null && productionVersion.isBlank()) {
+            productionVersion = null;
         }
     }
 
-    private String inferDirection(String metricName) {
-        if (metricName == null) {
+    private String inferDirection(String name) {
+        if (name == null) {
             return "max";
         }
 
-        String normalized = metricName.trim().toLowerCase();
+        String normalized = name.trim().toLowerCase();
 
         if (normalized.contains("rmse")
                 || normalized.contains("mse")
@@ -81,6 +115,14 @@ public class MlExperimentMetric {
         }
 
         return "max";
+    }
+
+    private String cleanLower(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+
+        return value.trim().toLowerCase();
     }
 
     public Long getId() {
@@ -107,8 +149,8 @@ public class MlExperimentMetric {
         return production;
     }
 
-    public Boolean isProduction() {
-        return production;
+    public boolean isProduction() {
+        return Boolean.TRUE.equals(production);
     }
 
     public Double getGlobalScore() {
@@ -136,7 +178,10 @@ public class MlExperimentMetric {
     }
 
     public void setProductionVersion(String productionVersion) {
-        this.productionVersion = productionVersion;
+        this.productionVersion =
+                productionVersion == null || productionVersion.isBlank()
+                        ? null
+                        : productionVersion.trim();
     }
 
     public void setProduction(Boolean production) {
@@ -149,12 +194,5 @@ public class MlExperimentMetric {
 
     public void setExperiment(MlExperiment experiment) {
         this.experiment = experiment;
-    }
-
-    private String cleanLower(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        return value.trim().toLowerCase();
     }
 }

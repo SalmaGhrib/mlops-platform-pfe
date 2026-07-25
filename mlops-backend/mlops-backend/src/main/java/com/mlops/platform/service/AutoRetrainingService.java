@@ -47,58 +47,75 @@ public class AutoRetrainingService {
         this.transactionManager = transactionManager;
     }
 
-    /**
-     * Point d'entrée utilisé par AutoRetrainingScheduler.
-     *
-     * La configuration a déjà été réclamée atomiquement par le scheduler :
-     * running=true est donc attendu. Cette méthode ne refait jamais le claim.
-     */
-    public void processClaimedConfig(Long configId) {
+    public void processClaimedConfig(
+            Long configId
+    ) {
         if (configId == null) {
             return;
         }
 
         RetrainingConfig config =
-                retrainingConfigRepository.findById(configId).orElse(null);
+                retrainingConfigRepository
+                        .findById(configId)
+                        .orElse(null);
 
         if (config == null) {
-            releaseAfterFailure(configId, null);
+            releaseAfterFailure(
+                    configId,
+                    null
+            );
+
             System.err.println(
-                    "[AUTO_RETRAINING] Claimed config not found. configId="
+                    "[AUTO_RETRAINING] Claimed config not found. "
+                            + "configId="
                             + configId
             );
+
             return;
         }
 
-        Long projectId = config.getProjectId();
+        Long projectId =
+                config.getProjectId();
 
         if (!config.isEnabled()) {
-            releaseAfterFailure(configId, null);
+            releaseAfterFailure(
+                    configId,
+                    null
+            );
+
             System.out.println(
-                    "[AUTO_RETRAINING] Claimed config became disabled. configId="
+                    "[AUTO_RETRAINING] Claimed config became disabled. "
+                            + "configId="
                             + configId
             );
+
             return;
         }
 
         if (!config.isRunning()) {
             System.out.println(
-                    "[AUTO_RETRAINING] Claimed config is no longer marked running. "
-                            + "configId="
+                    "[AUTO_RETRAINING] Claimed config is no longer "
+                            + "marked running. configId="
                             + configId
                             + ", projectId="
                             + projectId
             );
+
             return;
         }
 
         if (projectId == null) {
-            releaseAfterFailure(configId, null);
-            System.out.println(
-                    "[AUTO_RETRAINING] Ignored claimed config because projectId is null. "
+            releaseAfterFailure(
+                    configId,
+                    null
+            );
+
+            System.err.println(
+                    "[AUTO_RETRAINING] projectId is null. "
                             + "configId="
                             + configId
             );
+
             return;
         }
 
@@ -113,21 +130,40 @@ public class AutoRetrainingService {
                             + config.getSourceExperimentId()
                             + ", strategy="
                             + config.getStrategy()
+                            + ", manual="
+                            + config.isManualTriggerRequested()
+                            + ", nextRetrainingAt="
+                            + config.getNextRetrainingAt()
             );
 
             RetrainingDecisionResult decision =
-                    buildRetrainingDecision(config);
+                    buildRetrainingDecision(
+                            config
+                    );
 
-            if (decision == null || !decision.isShouldRetrain()) {
-                LocalDateTime now = utcNow();
+            if (decision == null
+                    || !decision.isShouldRetrain()) {
+
+                LocalDateTime now =
+                        utcNow();
+
                 LocalDateTime next =
-                        config.calculateNextRetrainingDate(now);
+                        config.calculateNextRetrainingDate(
+                                now
+                        );
 
-                String reason = decision != null
-                        ? safeMessage(decision.getReason())
-                        : "Aucune décision de monitoring disponible.";
+                String reason =
+                        decision != null
+                                ? safeMessage(
+                                        decision.getReason()
+                                )
+                                : "Aucune décision de monitoring disponible.";
 
-                releaseAfterSkipped(configId, next, reason);
+                releaseAfterSkipped(
+                        configId,
+                        next,
+                        reason
+                );
 
                 notifyRetrainingInfo(
                         projectId,
@@ -142,7 +178,7 @@ public class AutoRetrainingService {
                 );
 
                 System.out.println(
-                        "[AUTO_RETRAINING] Skipped by monitoring decision. "
+                        "[AUTO_RETRAINING] Skipped by decision. "
                                 + "configId="
                                 + configId
                                 + ", projectId="
@@ -152,26 +188,36 @@ public class AutoRetrainingService {
                                 + ", reason="
                                 + reason
                 );
+
                 return;
             }
 
-            String trigger = decision.getTriggerType() != null
-                    ? decision.getTriggerType().name()
-                    : "UNKNOWN";
+            String trigger =
+                    decision.getTriggerType() != null
+                            ? decision.getTriggerType().name()
+                            : "UNKNOWN";
 
             String decisionReason =
-                    safeMessage(decision.getReason());
+                    safeMessage(
+                            decision.getReason()
+                    );
 
             /*
-             * La source est toujours recalculée à partir de la Production
-             * courante. Le sourceExperimentId de la config reste un cache.
+             * Utilise d'abord sourceExperimentId.
+             * Si la source n'est plus valide, le resolver retrouve
+             * automatiquement la Production courante.
              */
             Long productionSourceExperimentId =
-                    sourceResolver.resolveSourceExperimentId(projectId);
+                    sourceResolver
+                            .resolveSourceExperimentId(
+                                    projectId,
+                                    config.getSourceExperimentId()
+                            );
 
             System.out.println(
-                    "[AUTO_RETRAINING] Starting retraining from CURRENT "
-                            + "PRODUCTION version. configId="
+                    "[AUTO_RETRAINING] Starting retraining from "
+                            + "Production source. "
+                            + "configId="
                             + configId
                             + ", projectId="
                             + projectId
@@ -201,31 +247,50 @@ public class AutoRetrainingService {
                                     productionSourceExperimentId
                             );
 
-            LocalDateTime now = utcNow();
-            LocalDateTime next =
-                    config.calculateNextRetrainingDate(now);
+            if (newExperiment == null
+                    || newExperiment.getId() == null) {
+                throw new IllegalStateException(
+                        "The retraining request did not create "
+                                + "a new experiment. projectId="
+                                + projectId
+                );
+            }
 
-            releaseAfterSuccess(configId, now, next);
+            LocalDateTime now =
+                    utcNow();
+
+            LocalDateTime next =
+                    config.calculateNextRetrainingDate(
+                            now
+                    );
+
+            releaseAfterSuccess(
+                    configId,
+                    now,
+                    next
+            );
 
             Long newExperimentId =
-                    newExperiment != null
-                            ? newExperiment.getId()
-                            : null;
+                    newExperiment.getId();
 
             notifyRetrainingInfo(
                     projectId,
                     newExperimentId,
-                    "Réentraînement planifié lancé",
+                    "Réentraînement automatique lancé",
                     "Le réentraînement automatique a été lancé avec "
-                            + "succès. Prochaine exécution : "
+                            + "succès. Nouvelle expérience : "
+                            + newExperimentId
+                            + ". Prochaine exécution : "
                             + next
                             + "."
             );
 
             System.out.println(
-                    "[AUTO_RETRAINING] Scheduled retraining launched successfully. "
+                    "[AUTO_RETRAINING] Retraining launched successfully. "
                             + "projectId="
                             + projectId
+                            + ", sourceExperimentId="
+                            + productionSourceExperimentId
                             + ", newExperimentId="
                             + newExperimentId
                             + ", nextRetrainingAt="
@@ -233,69 +298,79 @@ public class AutoRetrainingService {
             );
 
         } catch (Exception error) {
+
             RetrainingConfig latest =
                     retrainingConfigRepository
                             .findById(configId)
                             .orElse(config);
 
             LocalDateTime next =
-                    latest != null && latest.isEnabled()
-                            ? latest.calculateNextRetrainingDate(utcNow())
+                    latest != null
+                            && latest.isEnabled()
+                            ? latest.calculateNextRetrainingDate(
+                                    utcNow()
+                            )
                             : null;
 
-            releaseAfterFailure(configId, next);
+            releaseAfterFailure(
+                    configId,
+                    next
+            );
 
             String errorMessage =
-                    safeMessage(error.getMessage());
+                    safeMessage(
+                            error.getMessage()
+                    );
 
             notifyRetrainingInfo(
                     projectId,
                     null,
                     "Réentraînement automatique échoué",
-                    "Le réentraînement automatique n'a pas pu être lancé. "
-                            + "Erreur : "
+                    "Le réentraînement automatique n'a pas pu être "
+                            + "lancé. Erreur : "
                             + errorMessage
             );
 
             System.err.println(
-                    "[AUTO_RETRAINING] Scheduled retraining failed. "
+                    "[AUTO_RETRAINING] Retraining failed. "
                             + "configId="
                             + configId
                             + ", projectId="
                             + projectId
-                            + ", fallbackSourceExperimentId="
+                            + ", cachedSourceExperimentId="
                             + config.getSourceExperimentId()
                             + ", nextRetrainingAt="
                             + next
                             + ", error="
                             + errorMessage
             );
+
             error.printStackTrace();
         }
     }
 
-    /**
-     * Point d'entrée compatible pour un appel qui n'a pas encore fait le claim.
-     *
-     * Cette méthode effectue exactement un claim, puis délègue au traitement
-     * d'une configuration déjà réclamée.
-     */
-    public void launchScheduledRetraining(Long configId) {
+    public void launchScheduledRetraining(
+            Long configId
+    ) {
         if (configId == null) {
             return;
         }
 
-        LocalDateTime claimTime = utcNow();
+        LocalDateTime claimTime =
+                utcNow();
 
-        int claimed = executeInNewTransaction(() ->
-                retrainingConfigRepository.claimDueConfig(
-                        configId,
-                        claimTime
-                )
-        );
+        int claimed =
+                executeInNewTransaction(() ->
+                        retrainingConfigRepository
+                                .claimDueConfig(
+                                        configId,
+                                        claimTime
+                                )
+                );
 
         System.out.println(
-                "[AUTO_RETRAINING] Service claim configId="
+                "[AUTO_RETRAINING] Service claim. "
+                        + "configId="
                         + configId
                         + ", result="
                         + claimed
@@ -304,40 +379,51 @@ public class AutoRetrainingService {
         if (claimed != 1) {
             System.out.println(
                     "[AUTO_RETRAINING] Config was not claimed. "
-                            + "It may be disabled, already running, or not due. "
-                            + "configId="
+                            + "It may be disabled, already running "
+                            + "or not due. configId="
                             + configId
             );
+
             return;
         }
 
-        processClaimedConfig(configId);
+        processClaimedConfig(
+                configId
+        );
     }
 
-    /**
-     * Ancienne signature conservée pour compatibilité.
-     *
-     * Si running=true, la configuration est considérée comme déjà réclamée.
-     * Sinon, le service effectue le claim une seule fois.
-     */
-    public void launchScheduledRetraining(RetrainingConfig config) {
-        if (config == null || config.getId() == null) {
+    public void launchScheduledRetraining(
+            RetrainingConfig config
+    ) {
+        if (config == null
+                || config.getId() == null) {
             return;
         }
 
         if (config.isRunning()) {
-            processClaimedConfig(config.getId());
+            processClaimedConfig(
+                    config.getId()
+            );
         } else {
-            launchScheduledRetraining(config.getId());
+            launchScheduledRetraining(
+                    config.getId()
+            );
         }
     }
 
     private RetrainingDecisionResult buildRetrainingDecision(
             RetrainingConfig config
     ) {
-        RetrainingStrategy strategy = config.getStrategy() != null
-                ? config.getStrategy()
-                : RetrainingStrategy.SCHEDULED_ONLY;
+        if (config == null) {
+            return RetrainingDecisionResult.skip(
+                    "Configuration de réentraînement absente."
+            );
+        }
+
+        RetrainingStrategy strategy =
+                config.getStrategy() != null
+                        ? config.getStrategy()
+                        : RetrainingStrategy.SCHEDULED_ONLY;
 
         if (config.isManualTriggerRequested()) {
             return RetrainingDecisionResult.run(
@@ -346,17 +432,43 @@ public class AutoRetrainingService {
             );
         }
 
+        boolean scheduleDue =
+                config.getNextRetrainingAt() != null
+                        && !config.getNextRetrainingAt()
+                        .isAfter(
+                                utcNow()
+                        );
+
         return switch (strategy) {
-            case SCHEDULED_ONLY -> RetrainingDecisionResult.run(
-                    RetrainingTriggerType.SCHEDULED,
-                    "Échéance planifiée atteinte."
-            );
+
+            case SCHEDULED_ONLY -> {
+                if (!scheduleDue) {
+                    yield RetrainingDecisionResult.skip(
+                            "Échéance planifiée non atteinte."
+                    );
+                }
+
+                yield RetrainingDecisionResult.run(
+                        RetrainingTriggerType.SCHEDULED,
+                        "Échéance planifiée atteinte."
+                );
+            }
 
             case SCHEDULED_WITH_MONITORING -> {
-                RetrainingDecisionResult monitoring =
-                        retrainingDecisionService.evaluateMonitoringSignals(config);
+                if (!scheduleDue) {
+                    yield RetrainingDecisionResult.skip(
+                            "Échéance planifiée non atteinte."
+                    );
+                }
 
-                if (monitoring != null && monitoring.isShouldRetrain()) {
+                RetrainingDecisionResult monitoring =
+                        retrainingDecisionService
+                                .evaluateMonitoringSignals(
+                                        config
+                                );
+
+                if (monitoring != null
+                        && monitoring.isShouldRetrain()) {
                     yield monitoring;
                 }
 
@@ -364,57 +476,112 @@ public class AutoRetrainingService {
                         RetrainingDecisionResult.run(
                                 RetrainingTriggerType.SCHEDULED,
                                 "Échéance planifiée atteinte. "
-                                        + (monitoring != null
-                                        ? safeMessage(monitoring.getReason())
-                                        : "Aucun signal de monitoring disponible.")
+                                        + (
+                                        monitoring != null
+                                                ? safeMessage(
+                                                        monitoring.getReason()
+                                                )
+                                                : "Aucun signal de monitoring "
+                                                + "disponible."
+                                )
                         );
 
-                if (monitoring != null) {
-                    scheduled.setRecentPredictionCount(
-                            monitoring.getRecentPredictionCount()
-                    );
-                    scheduled.setPredictionErrorRatePercent(
-                            monitoring.getPredictionErrorRatePercent()
-                    );
-                    scheduled.setDataDriftScorePercent(
-                            monitoring.getDataDriftScorePercent()
-                    );
-                    scheduled.setRecentFailedRuns(
-                            monitoring.getRecentFailedRuns()
-                    );
-                }
+                copyMonitoringValues(
+                        monitoring,
+                        scheduled
+                );
 
                 yield scheduled;
             }
 
             case SMART_MONITORING_ONLY -> {
                 RetrainingDecisionResult monitoring =
-                        retrainingDecisionService.evaluateMonitoringSignals(config);
+                        retrainingDecisionService
+                                .evaluateMonitoringSignals(
+                                        config
+                                );
 
-                yield monitoring != null
-                        ? monitoring
-                        : RetrainingDecisionResult.skip(
-                                "Aucune décision de monitoring disponible."
-                        );
+                if (monitoring == null) {
+                    yield RetrainingDecisionResult.skip(
+                            "Aucune décision de monitoring disponible."
+                    );
+                }
+
+                yield monitoring;
             }
 
             case FULL_SMART -> {
                 RetrainingDecisionResult monitoring =
-                        retrainingDecisionService.evaluateMonitoringSignals(config);
+                        retrainingDecisionService
+                                .evaluateMonitoringSignals(
+                                        config
+                                );
 
-                if (monitoring != null && monitoring.isShouldRetrain()) {
+                if (monitoring != null
+                        && monitoring.isShouldRetrain()) {
                     yield monitoring;
                 }
 
-                yield RetrainingDecisionResult.run(
-                        RetrainingTriggerType.SCHEDULED,
-                        "Mode FULL_SMART : échéance planifiée atteinte. "
-                                + (monitoring != null
-                                ? safeMessage(monitoring.getReason())
-                                : "Aucun signal de monitoring disponible.")
+                if (scheduleDue) {
+                    RetrainingDecisionResult scheduled =
+                            RetrainingDecisionResult.run(
+                                    RetrainingTriggerType.SCHEDULED,
+                                    "Mode FULL_SMART : échéance "
+                                            + "planifiée atteinte. "
+                                            + (
+                                            monitoring != null
+                                                    ? safeMessage(
+                                                            monitoring.getReason()
+                                                    )
+                                                    : "Aucun signal de monitoring "
+                                                    + "supplémentaire."
+                                    )
+                            );
+
+                    copyMonitoringValues(
+                            monitoring,
+                            scheduled
+                    );
+
+                    yield scheduled;
+                }
+
+                yield RetrainingDecisionResult.skip(
+                        monitoring != null
+                                ? safeMessage(
+                                        monitoring.getReason()
+                                )
+                                : "Aucun signal de monitoring et "
+                                + "échéance non atteinte."
                 );
             }
         };
+    }
+
+    private void copyMonitoringValues(
+            RetrainingDecisionResult source,
+            RetrainingDecisionResult target
+    ) {
+        if (source == null
+                || target == null) {
+            return;
+        }
+
+        target.setRecentPredictionCount(
+                source.getRecentPredictionCount()
+        );
+
+        target.setPredictionErrorRatePercent(
+                source.getPredictionErrorRatePercent()
+        );
+
+        target.setDataDriftScorePercent(
+                source.getDataDriftScorePercent()
+        );
+
+        target.setRecentFailedRuns(
+                source.getRecentFailedRuns()
+        );
     }
 
     private void releaseAfterSuccess(
@@ -422,15 +589,26 @@ public class AutoRetrainingService {
             LocalDateTime lastRetrainingAt,
             LocalDateTime nextRetrainingAt
     ) {
-        LocalDateTime updatedAt = utcNow();
+        LocalDateTime updatedAt =
+                utcNow();
 
-        executeInNewTransaction(() ->
-                retrainingConfigRepository.releaseAfterSuccess(
-                        configId,
-                        lastRetrainingAt,
-                        nextRetrainingAt,
-                        updatedAt
-                )
+        int updated =
+                executeInNewTransaction(() ->
+                        retrainingConfigRepository
+                                .releaseAfterSuccess(
+                                        configId,
+                                        lastRetrainingAt,
+                                        nextRetrainingAt,
+                                        updatedAt
+                                )
+                );
+
+        System.out.println(
+                "[AUTO_RETRAINING] Released after success. "
+                        + "configId="
+                        + configId
+                        + ", updatedRows="
+                        + updated
         );
     }
 
@@ -438,14 +616,27 @@ public class AutoRetrainingService {
             Long configId,
             LocalDateTime nextRetrainingAt
     ) {
-        LocalDateTime updatedAt = utcNow();
+        LocalDateTime updatedAt =
+                utcNow();
 
-        executeInNewTransaction(() ->
-                retrainingConfigRepository.releaseAfterFailure(
-                        configId,
-                        nextRetrainingAt,
-                        updatedAt
-                )
+        int updated =
+                executeInNewTransaction(() ->
+                        retrainingConfigRepository
+                                .releaseAfterFailure(
+                                        configId,
+                                        nextRetrainingAt,
+                                        updatedAt
+                                )
+                );
+
+        System.out.println(
+                "[AUTO_RETRAINING] Released after failure. "
+                        + "configId="
+                        + configId
+                        + ", updatedRows="
+                        + updated
+                        + ", retryAt="
+                        + nextRetrainingAt
         );
     }
 
@@ -454,15 +645,28 @@ public class AutoRetrainingService {
             LocalDateTime nextRetrainingAt,
             String decisionReason
     ) {
-        LocalDateTime updatedAt = utcNow();
+        LocalDateTime updatedAt =
+                utcNow();
 
-        executeInNewTransaction(() ->
-                retrainingConfigRepository.releaseAfterSkipped(
-                        configId,
-                        nextRetrainingAt,
-                        safeMessage(decisionReason),
-                        updatedAt
-                )
+        int updated =
+                executeInNewTransaction(() ->
+                        retrainingConfigRepository
+                                .releaseAfterSkipped(
+                                        configId,
+                                        nextRetrainingAt,
+                                        safeMessage(
+                                                decisionReason
+                                        ),
+                                        updatedAt
+                                )
+                );
+
+        System.out.println(
+                "[AUTO_RETRAINING] Released after skipped decision. "
+                        + "configId="
+                        + configId
+                        + ", updatedRows="
+                        + updated
         );
     }
 
@@ -470,20 +674,30 @@ public class AutoRetrainingService {
             IntTransactionCallback callback
     ) {
         TransactionTemplate template =
-                new TransactionTemplate(transactionManager);
+                new TransactionTemplate(
+                        transactionManager
+                );
 
         template.setPropagationBehavior(
-                TransactionDefinition.PROPAGATION_REQUIRES_NEW
+                TransactionDefinition
+                        .PROPAGATION_REQUIRES_NEW
         );
+
         template.setIsolationLevel(
-                TransactionDefinition.ISOLATION_READ_COMMITTED
+                TransactionDefinition
+                        .ISOLATION_READ_COMMITTED
         );
+
         template.setTimeout(10);
 
         Integer result =
-                template.execute(status -> callback.execute());
+                template.execute(
+                        status -> callback.execute()
+                );
 
-        return result == null ? 0 : result;
+        return result == null
+                ? 0
+                : result;
     }
 
     private void notifyRetrainingInfo(
@@ -527,8 +741,9 @@ public class AutoRetrainingService {
 
         } catch (Exception notificationError) {
             System.out.println(
-                    "[AUTO_RETRAINING][NOTIFICATION] Could not send "
-                            + "retraining notification. projectId="
+                    "[AUTO_RETRAINING][NOTIFICATION] "
+                            + "Could not send notification. "
+                            + "projectId="
                             + projectId
                             + ", reason="
                             + safeMessage(
@@ -539,22 +754,31 @@ public class AutoRetrainingService {
     }
 
     private LocalDateTime utcNow() {
-        return LocalDateTime.now(Clock.systemUTC());
+        return LocalDateTime.now(
+                Clock.systemUTC()
+        );
     }
 
-    private String safeMessage(String message) {
-        if (message == null || message.isBlank()) {
+    private String safeMessage(
+            String message
+    ) {
+        if (message == null
+                || message.isBlank()) {
             return "Erreur inconnue";
         }
 
-        String clean = message
-                .replace("\n", " ")
-                .replace("\r", " ")
-                .replace("\u0000", "")
-                .trim();
+        String clean =
+                message
+                        .replace("\n", " ")
+                        .replace("\r", " ")
+                        .replace("\u0000", "")
+                        .trim();
 
         return clean.length() > 500
-                ? clean.substring(0, 497) + "..."
+                ? clean.substring(
+                        0,
+                        497
+                ) + "..."
                 : clean;
     }
 

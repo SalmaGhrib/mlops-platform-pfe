@@ -507,9 +507,28 @@ if (!hasText(modelVersion)) {
                         ? apiConfig.visibility
                         : DeploymentVisibility.PUBLIC_API
         );
-        deployment.setApiKey(apiConfig.apiKey);
-        deployment.setApiKeyCreatedAt(apiConfig.apiKeyCreatedAt);
-        deployment.setApiKeyLastUsedAt(apiConfig.apiKeyLastUsedAt);
+
+        /*
+         * api_key is UNIQUE in MySQL. A blue/green candidate is initially a new
+         * database row, so copying the active row's key causes Duplicate entry.
+         * Existing rows keep their key; new candidates receive a unique key.
+         * The stable external endpoint remains the Kubernetes Service, while the
+         * active row becomes authoritative after readiness.
+         */
+        boolean isNewRow = deployment.getId() == null;
+        boolean requestedKeyAlreadyOwned = apiConfig.apiKey != null
+                && !apiConfig.apiKey.isBlank()
+                && modelDeploymentRepository.existsByApiKey(apiConfig.apiKey);
+
+        if (isNewRow && requestedKeyAlreadyOwned) {
+            deployment.setApiKey(generateUniqueApiKey());
+            deployment.setApiKeyCreatedAt(LocalDateTime.now());
+            deployment.setApiKeyLastUsedAt(null);
+        } else {
+            deployment.setApiKey(apiConfig.apiKey);
+            deployment.setApiKeyCreatedAt(apiConfig.apiKeyCreatedAt);
+            deployment.setApiKeyLastUsedAt(apiConfig.apiKeyLastUsedAt);
+        }
     }
 
     private boolean isNativeMlflowRegistryModelReadyForDeployment(MlExperiment experiment) {

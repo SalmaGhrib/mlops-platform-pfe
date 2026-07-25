@@ -190,8 +190,34 @@ export class UploadTrainingComponent implements OnInit, OnDestroy {
     return this.getSelectedRuntimeMode() === 'STANDARD_RUNTIME';
   }
 
-  getRuntimeModeLabel(): string {
-    return this.isCustomDockerfileMode() ? 'Dockerfile personnalisé' : 'Runtime standard';
+  getRuntimeModeLabel(experiment?: MlExperimentResponse): string {
+    if (!experiment) {
+      return this.isCustomDockerfileMode()
+        ? 'Dockerfile personnalisé'
+        : 'Runtime standard';
+    }
+
+    const raw = String(
+      experiment?.runtimeMode ??
+      experiment?.runtime_mode ??
+      experiment?.['runtimeMode'] ??
+      experiment?.['runtime_mode'] ??
+      ''
+    ).trim().toUpperCase();
+
+    if (raw === 'STANDARD_RUNTIME' || raw === 'STANDARD') {
+      return 'STANDARD';
+    }
+
+    if (
+      raw === 'CUSTOM_DOCKERFILE' ||
+      raw === 'CUSTOM_DOCKER' ||
+      raw === 'CUSTOM_IMAGE'
+    ) {
+      return 'DOCKERISÉ';
+    }
+
+    return raw || '-';
   }
 
   getRuntimeModeDescription(): string {
@@ -1439,10 +1465,12 @@ getDetectedComponentsCount(): number {
   }
 
   getModelVersion(experiment: MlExperimentResponse): string {
-    if (!this.hasValidScoreForVersioning(experiment) || experiment.status !== 'COMPLETED') {
+    if (!experiment || experiment.status !== 'COMPLETED') {
       return '-';
     }
 
+    // A technical MLflow version is valid even when promotion is postponed
+    // because a business metric is temporarily missing.
     const value =
       experiment.modelVersion ??
       experiment.mlflowModelVersion ??

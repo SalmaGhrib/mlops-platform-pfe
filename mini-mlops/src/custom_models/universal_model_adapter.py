@@ -1,6 +1,7 @@
 import ast
 import importlib.util
 import json
+import math
 import os
 import re
 import shutil
@@ -418,27 +419,128 @@ def validate_model_artifact(model_path: Path) -> Tuple[bool, List[str]]:
     return True, validation_messages
 
 
+def sanitize_metric_payload(payload: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Normalise et filtre les métriques métier.
+
+    Exclut les informations techniques ou descriptives comme :
+    train_rows, test_rows, target_column et model_type.
+    """
+    excluded_keys = {
+        "return_code",
+        "exit_code",
+        "train_rows",
+        "test_rows",
+        "target_column",
+        "model_type",
+        "duration",
+        "execution_time",
+    }
+
+    metrics: Dict[str, float] = {}
+
+    for raw_key, raw_value in (payload or {}).items():
+        if isinstance(raw_value, bool):
+            continue
+
+        key = normalize_metric_name(str(raw_key))
+
+        if not key or key in excluded_keys:
+            continue
+
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+
+        if math.isfinite(value):
+            metrics[key] = value
+
+    return metrics
+
+
+def extract_json_metrics(text: str) -> Dict[str, float]:
+    """
+    Extrait tous les objets JSON valides présents dans stdout/stderr.
+
+    Supporte notamment les sorties multi-lignes comme :
+
+    {
+      "accuracy": 0.83,
+      "precision": 0.81,
+      "recall": 0.82,
+      "f1_score": 0.80
+    }
+    """
+    source = text or ""
+    decoder = json.JSONDecoder()
+    metrics: Dict[str, float] = {}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            direct = sanitize_metric_payload(value)
+            metrics.update(direct)
+
+            nested = value.get("metrics")
+            if isinstance(nested, dict):
+                metrics.update(sanitize_metric_payload(nested))
+
+            for child in value.values():
+                if isinstance(child, (dict, list)):
+                    visit(child)
+
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    for index, character in enumerate(source):
+        if character != "{":
+            continue
+
+        try:
+            value, _ = decoder.raw_decode(source[index:])
+        except json.JSONDecodeError:
+            continue
+
+        visit(value)
+
+    return metrics
+
+
 def parse_metrics_from_text(text: str) -> Dict[str, float]:
+    """
+    Extraction robuste des métriques depuis stdout/stderr.
+
+    Priorité :
+    1. objets JSON complets, même affichés sur plusieurs lignes ;
+    2. lignes key=value ou key:value ;
+    3. pourcentages convertis en valeurs décimales.
+    """
     metrics: Dict[str, float] = {}
 
     if not text:
         return metrics
 
-    lines = text.splitlines()
+    # 1) JSON multi-ligne
+    metrics.update(extract_json_metrics(text))
 
-    for line in lines:
+    # 2) Lignes simples
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+
         if not line:
             continue
 
-        matches = re.findall(r"([A-Za-z0-9_À-ÿ ]+?)\s*[:=]\s*([-+]?\d+(?:\.\d+)?%?)", line)
+        matches = re.findall(
+            r'["\']?([A-Za-z0-9_À-ÿ ]+?)["\']?\s*[:=]\s*'
+            r'([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?%?)',
+            line,
+        )
 
-        if not matches:
-            matches = re.findall(r"^([A-Za-z0-9_À-ÿ ]+?)\s+([-+]?\d+(?:\.\d+)?%?)$", line)
+        for raw_key, raw_value in matches:
+            key = normalize_metric_name(raw_key)
 
-        for key, raw_value in matches:
-            name = normalize_metric_name(key)
-
-            if not name:
+            if not key:
                 continue
 
             try:
@@ -446,13 +548,20 @@ def parse_metrics_from_text(text: str) -> Dict[str, float]:
                     value = float(raw_value[:-1]) / 100.0
                 else:
                     value = float(raw_value)
-
-                metrics[name] = value
             except ValueError:
                 continue
 
-    return metrics
+            if math.isfinite(value):
+                metrics[key] = value
 
+    metrics = sanitize_metric_payload(metrics)
+
+    if metrics:
+        print(f"[UNIVERSAL ADAPTER][METRICS] extracted={metrics}")
+    else:
+        print("[UNIVERSAL ADAPTER][METRICS] no business metric extracted")
+
+    return metrics
 
 def load_metrics_from_file(outputs_dir: Path) -> Dict[str, float]:
     metrics_json = outputs_dir / "metrics.json"

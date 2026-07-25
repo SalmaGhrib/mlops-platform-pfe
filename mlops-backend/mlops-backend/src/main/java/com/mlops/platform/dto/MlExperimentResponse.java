@@ -47,9 +47,9 @@ public class MlExperimentResponse {
     private String errorMessage;
 
     private String createdAt;
+    private String updatedAt;
     private String startedAt;
     private String finishedAt;
-    private String updatedAt;
 
     private String detectedAlgorithms;
     private String usedAlgorithms;
@@ -287,16 +287,16 @@ public class MlExperimentResponse {
         return createdAt;
     }
 
+    public String getUpdatedAt() {
+        return updatedAt;
+    }
+
     public String getStartedAt() {
         return startedAt;
     }
 
     public String getFinishedAt() {
         return finishedAt;
-    }
-
-    public String getUpdatedAt() {
-        return updatedAt;
     }
 
     public String getDetectedAlgorithms() {
@@ -485,16 +485,16 @@ public class MlExperimentResponse {
         this.createdAt = createdAt;
     }
 
+    public void setUpdatedAt(String updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
     public void setStartedAt(String startedAt) {
         this.startedAt = startedAt;
     }
 
     public void setFinishedAt(String finishedAt) {
         this.finishedAt = finishedAt;
-    }
-
-    public void setUpdatedAt(String updatedAt) {
-        this.updatedAt = updatedAt;
     }
 
     public void setDetectedAlgorithms(String detectedAlgorithms) {

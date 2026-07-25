@@ -1,6 +1,5 @@
 apiVersion: apps/v1
 kind: Deployment
-
 metadata:
   name: pipeline-gateway
   namespace: mlops
@@ -9,14 +8,9 @@ metadata:
 
 spec:
   replicas: 1
-
   revisionHistoryLimit: 3
-
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
 
   selector:
     matchLabels:
@@ -28,10 +22,11 @@ spec:
         app: pipeline-gateway
 
     spec:
+      restartPolicy: Always
+
       containers:
         - name: pipeline-gateway
-
-          image: acrmlopssalmav2.azurecr.io/pipeline-gateway:runtime-analysis-fix-v2
+          image: acrmlopssalmav2.azurecr.io/pipeline-gateway:sync-artifacts-final-v9
           imagePullPolicy: Always
 
           ports:
@@ -40,40 +35,72 @@ spec:
               protocol: TCP
 
           env:
-            - name: PYTHONUNBUFFERED
-              value: "1"
-
-            - name: MLFLOW_TRACKING_URI
-              value: "http://mlflow-service:5000"
-
-            - name: KUBEFLOW_API_URL
+            - name: KUBEFLOW_HOST
               value: "http://ml-pipeline.kubeflow.svc.cluster.local:8888"
+
+            - name: GATEWAY_INTERNAL_BASE_URL
+              value: "http://pipeline-gateway-service.mlops.svc.cluster.local:8001"
+
+            # Stockage temporaire local au pod : aucun PVC.
+            - name: SHARED_ROOT
+              value: "/tmp/mlops-gateway"
+
+            - name: GENERATED_CONFIG_DIR
+              value: "/tmp/mlops-gateway/configs"
+
+            - name: DATASET_STORAGE_DIR
+              value: "/tmp/mlops-gateway/datasets"
+
+            - name: CUSTOM_PIPELINE_PATH
+              value: "/app/kubeflow/compiled/custom_model_pipeline.yaml"
+
+            - name: MAX_MODEL_FILE_BYTES
+              value: "5242880"
+
+            - name: MAX_DATASET_FILE_BYTES
+              value: "209715200"
+
+          readinessProbe:
+            httpGet:
+              path: /health/details
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
 
           resources:
             requests:
-              cpu: "200m"
+              cpu: "100m"
               memory: "256Mi"
-
             limits:
               cpu: "1000m"
               memory: "1Gi"
 
-          startupProbe:
-            tcpSocket:
-              port: 8001
-            failureThreshold: 30
-            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pipeline-gateway-service
+  namespace: mlops
 
-          readinessProbe:
-            tcpSocket:
-              port: 8001
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            failureThreshold: 6
+spec:
+  type: ClusterIP
 
-          livenessProbe:
-            tcpSocket:
-              port: 8001
-            initialDelaySeconds: 30
-            periodSeconds: 20
-            failureThreshold: 5
+  selector:
+    app: pipeline-gateway
+
+  ports:
+    - name: http
+      port: 8001
+      targetPort: http
+      protocol: TCP

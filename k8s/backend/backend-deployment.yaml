@@ -30,7 +30,7 @@ spec:
       containers:
         - name: mlops-backend
 
-          image: acrmlopssalmav2.azurecr.io/mlops-backend:lifecycle-reliability-final-v1
+          image: acrmlopssalmav2.azurecr.io/mlops-backend:retraining-final-fix-v1
           imagePullPolicy: Always
 
           ports:

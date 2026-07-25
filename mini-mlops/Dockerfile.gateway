@@ -2,11 +2,25 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    CUSTOM_PIPELINE_PATH=/app/kubeflow/compiled/custom_model_pipeline.yaml \
+    GENERATED_CONFIG_DIR=/app/uploaded_configs \
+    KUBEFLOW_HOST=http://ml-pipeline.kubeflow.svc.cluster.local:8888
+
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY src /app/src
-COPY kubeflow /app/kubeflow
+
+# Copie explicite du pipeline compilé.
+# Cette forme évite qu'un dossier vide passe silencieusement dans l'image.
+RUN mkdir -p /app/kubeflow/compiled /app/uploaded_configs
+COPY kubeflow/compiled/custom_model_pipeline.yaml /app/kubeflow/compiled/custom_model_pipeline.yaml
+
+# Échec immédiat du build si le pipeline manque.
+RUN test -s /app/kubeflow/compiled/custom_model_pipeline.yaml
 
 EXPOSE 8001
 

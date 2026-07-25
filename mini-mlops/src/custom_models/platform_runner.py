@@ -209,43 +209,120 @@ def prepare_outputs_dir(workspace: Path) -> Path:
 
 
 def normalize_metric_name(name: str) -> str:
-    name = name.strip().lower()
+    """Return one stable metric name across scripts, MLflow and the backend."""
+    normalized = re.sub(
+        r"[^a-zA-Z0-9]+",
+        "_",
+        str(name or "").strip().lower(),
+    ).strip("_")
 
     aliases = {
         "acc": "accuracy",
+        "accuracy_score": "accuracy",
+        "test_accuracy": "accuracy",
+        "validation_accuracy": "accuracy",
+        "val_accuracy": "accuracy",
+        "model_accuracy": "accuracy",
+        "classification_accuracy": "accuracy",
+
         "f1": "f1_score",
+        "f1score": "f1_score",
+        "f1_weighted": "f1_score",
+        "weighted_f1": "f1_score",
+        "macro_f1": "f1_score",
+        "f1_macro": "f1_score",
+
+        "precision": "precision_score",
+        "precision_weighted": "precision_score",
+        "weighted_precision": "precision_score",
+        "macro_precision": "precision_score",
+
+        "recall": "recall_score",
+        "recall_weighted": "recall_score",
+        "weighted_recall": "recall_score",
+        "macro_recall": "recall_score",
+
         "r2_score": "r2",
         "roc_auc": "auc",
+        "auc_score": "auc",
+        "root_mean_squared_error": "rmse",
+        "mean_squared_error": "mse",
+        "mean_absolute_error": "mae",
     }
 
-    return aliases.get(name, name)
+    return aliases.get(normalized, normalized)
+
+
+TECHNICAL_METRICS = {
+    "return_code",
+    "exit_code",
+    "duration",
+    "execution_time",
+    "execution_duration",
+    "train_rows",
+    "test_rows",
+}
+
+
+def sanitize_metrics(payload: Dict[str, Any]) -> Dict[str, float]:
+    """Keep only finite numeric business metrics."""
+    clean: Dict[str, float] = {}
+
+    for raw_name, raw_value in (payload or {}).items():
+        if isinstance(raw_value, bool):
+            continue
+
+        name = normalize_metric_name(str(raw_name))
+        if not name or name in TECHNICAL_METRICS:
+            continue
+
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+
+        if math.isfinite(value):
+            clean[name] = value
+
+    return clean
 
 
 def extract_json_metrics(text: str) -> Dict[str, float]:
     """
-    Extract metric dictionaries printed as JSON by user scripts.
+    Extract metrics from every valid JSON object printed by a user script.
 
-    JSON values have priority over loose regex parsing because they are less
-    ambiguous and avoid interpreting the "2" in "r2_score" as a metric value.
+    Accepted forms:
+      {"accuracy": 0.91}
+      {"metrics": {"accuracy": 0.91}}
+      {"result": {"metrics": {"accuracy": 0.91}}}
     """
-    metrics: Dict[str, float] = {}
-    decoder = json.JSONDecoder()
-    allowed_metrics = {
-        "loss",
-        "val_loss",
-        "accuracy",
-        "val_accuracy",
-        "precision",
-        "recall",
-        "f1_score",
-        "rmse",
-        "mse",
-        "mae",
-        "r2",
-        "auc",
-    }
-
     source = text or ""
+    decoder = json.JSONDecoder()
+    merged: Dict[str, float] = {}
+
+    def visit(value: Any) -> None:
+        nonlocal merged
+
+        if isinstance(value, dict):
+            direct = sanitize_metrics(value)
+            if direct:
+                merged = merge_metrics(merged, direct, overwrite=True)
+
+            nested_metrics = value.get("metrics")
+            if isinstance(nested_metrics, dict):
+                merged = merge_metrics(
+                    merged,
+                    sanitize_metrics(nested_metrics),
+                    overwrite=True,
+                )
+
+            for nested_value in value.values():
+                if isinstance(nested_value, (dict, list)):
+                    visit(nested_value)
+
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
 
     for index, character in enumerate(source):
         if character != "{":
@@ -253,30 +330,15 @@ def extract_json_metrics(text: str) -> Dict[str, float]:
 
         try:
             value, _ = decoder.raw_decode(source[index:])
-        except Exception:
+        except json.JSONDecodeError:
             continue
 
-        if not isinstance(value, dict):
-            continue
+        visit(value)
 
-        for key, raw_value in value.items():
-            if isinstance(raw_value, bool):
-                continue
+    if merged:
+        print(f"[PLATFORM_METRICS] extracted from stdout: {merged}")
 
-            if not isinstance(raw_value, (int, float)):
-                continue
-
-            normalized_key = normalize_metric_name(str(key))
-
-            if normalized_key not in allowed_metrics:
-                continue
-
-            numeric_value = float(raw_value)
-
-            if math.isfinite(numeric_value):
-                metrics[normalized_key] = numeric_value
-
-    return metrics
+    return merged
 
 
 def parse_metrics(stdout: str) -> Dict[str, float]:
@@ -341,6 +403,14 @@ def parse_metrics(stdout: str) -> Dict[str, float]:
             break
 
     metrics.update(extract_json_metrics(source))
+    metrics = sanitize_metrics(metrics)
+
+    if metrics:
+        for name, value in sorted(metrics.items()):
+            print(f"[PLATFORM_METRIC_AUTO] {name}={value}")
+    else:
+        print("[PLATFORM_METRICS] no business metric extracted from stdout/stderr")
+
     return metrics
 
 
@@ -456,12 +526,12 @@ def load_metrics_json(workspace: Path) -> Dict[str, float]:
             data = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 continue
-            parsed = {}
-            for key, value in data.items():
-                try:
-                    parsed[normalize_metric_name(str(key))] = float(value)
-                except Exception:
-                    pass
+
+            # Accept both {"accuracy": 0.9} and {"metrics": {"accuracy": 0.9}}.
+            if isinstance(data.get("metrics"), dict):
+                data = data["metrics"]
+
+            parsed = sanitize_metrics(data)
             if parsed:
                 print(f"[PLATFORM_METRICS] metrics loaded from {path}: {parsed}")
                 metrics = merge_metrics(metrics, parsed)
@@ -652,7 +722,37 @@ def predict_with_artifacts_for_metrics(model_path: Path, companion_artifacts: Di
     X_work = _apply_transformer_if_present(scaler, X_work, "scaler")
 
     if hasattr(model, "predict"):
-        return model.predict(X_work)
+        try:
+            return model.predict(X_work)
+        except Exception as transformed_error:
+            print(f"[PLATFORM_METRICS] transformed model.predict failed: {transformed_error}")
+
+            # Common STANDARD_RUNTIME case: the user trained with pandas.get_dummies
+            # but only persisted the estimator. Recreate deterministic dummy columns
+            # and align them with feature_names_in_ when available.
+            try:
+                import pandas as pd
+
+                if isinstance(X, pd.DataFrame):
+                    encoded = pd.get_dummies(X, drop_first=False)
+                    expected = _object_feature_names(model)
+                    if expected:
+                        for column in expected:
+                            if column not in encoded.columns:
+                                encoded[column] = 0
+                        encoded = encoded[[column for column in expected]]
+                    elif getattr(model, "n_features_in_", None) == encoded.shape[1]:
+                        pass
+                    else:
+                        encoded = None
+
+                    if encoded is not None:
+                        print("[PLATFORM_METRICS] retrying prediction with pandas.get_dummies alignment")
+                        return model.predict(encoded)
+            except Exception as dummy_error:
+                print(f"[PLATFORM_METRICS] dummy-encoding fallback failed: {dummy_error}")
+
+            raise transformed_error
 
     if callable(model):
         return model(X_work)
@@ -727,8 +827,8 @@ def auto_evaluate_metrics_from_platform(
             metrics["r2"] = float(r2_score(y_true, y_pred))
         else:
             metrics["accuracy"] = float(accuracy_score(y_true, y_pred))
-            metrics["precision"] = float(precision_score(y_true, y_pred, average="weighted", zero_division=0))
-            metrics["recall"] = float(recall_score(y_true, y_pred, average="weighted", zero_division=0))
+            metrics["precision_score"] = float(precision_score(y_true, y_pred, average="weighted", zero_division=0))
+            metrics["recall_score"] = float(recall_score(y_true, y_pred, average="weighted", zero_division=0))
             metrics["f1_score"] = float(f1_score(y_true, y_pred, average="weighted", zero_division=0))
 
         print(
@@ -1769,10 +1869,13 @@ def run_user_script(
     }
     if platform_run_id:
         env["PLATFORM_MLFLOW_RUN_ID"] = str(platform_run_id)
-        env["MLFLOW_RUN_ID"] = str(platform_run_id)
     if platform_experiment_id:
         env["PLATFORM_MLFLOW_EXPERIMENT_ID"] = str(platform_experiment_id)
-        env["MLFLOW_EXPERIMENT_ID"] = str(platform_experiment_id)
+
+    # The platform owns the official MLflow run. Removing these generic
+    # variables prevents user scripts from accidentally hijacking or ending it.
+    env.pop("MLFLOW_RUN_ID", None)
+    env.pop("MLFLOW_EXPERIMENT_ID", None)
 
     if dataset_path is not None:
         env.update(
@@ -2116,6 +2219,13 @@ def run_standard_runtime(
         load_metrics_json(workspace),
         overwrite=True,
     )
+    metrics = sanitize_metrics(metrics)
+
+    print(
+        "[PLATFORM_METRICS] metrics available after script execution: "
+        f"{json.dumps(metrics, ensure_ascii=False, sort_keys=True)}"
+    )
+
     model_artifacts = find_model_artifacts(workspace)
 
     if model_artifacts:
@@ -2141,6 +2251,7 @@ def run_standard_runtime(
         companion_artifacts=pre_companion_artifacts,
     )
     metrics = merge_metrics(metrics, auto_metrics, overwrite=False)
+    metrics = sanitize_metrics(metrics)
 
     logged_model_uri: Optional[str] = None
     platform_model_registered = False
@@ -2199,10 +2310,23 @@ def run_standard_runtime(
         mlflow.log_param("workspace", str(workspace))
         mlflow.log_param("platform_registered_model_name", platform_registered_model_name)
 
+        configured_priorities = get_platform_metric_priorities()
+        if configured_priorities:
+            mlflow.set_tag("primary_metric", configured_priorities[0])
+            mlflow.set_tag(
+                "metric_priorities",
+                json.dumps(configured_priorities, ensure_ascii=False),
+            )
+
         if dataset_path is not None:
             mlflow.log_param("dataset_path", str(dataset_path))
 
-        mlflow.log_metric("return_code", float(result.returncode))
+        tracking_client = MlflowClient()
+        tracking_client.log_metric(
+            platform_run_id,
+            "return_code",
+            float(result.returncode),
+        )
         mlflow.log_param("original_return_code", str(result.returncode))
         mlflow.log_param(
             "recoverable_user_mlflow_failure",
@@ -2231,11 +2355,74 @@ def run_standard_runtime(
                 artifact_file="logs/recovered_user_mlflow_failure.json",
             )
 
-        if metrics:
-            mlflow.log_metrics(metrics)
+        business_metrics = sanitize_metrics(metrics)
+
+        if business_metrics:
+            for metric_name, metric_value in business_metrics.items():
+                tracking_client.log_metric(
+                    platform_run_id,
+                    metric_name,
+                    float(metric_value),
+                )
+                print(
+                    "[PLATFORM_MLFLOW_METRIC] "
+                    f"run_id={platform_run_id}, "
+                    f"{metric_name}={metric_value}"
+                )
+
+            tracking_client.set_tag(
+                platform_run_id,
+                "metrics_status",
+                "logged",
+            )
+            tracking_client.set_tag(
+                platform_run_id,
+                "logged_metric_names",
+                json.dumps(
+                    sorted(business_metrics.keys()),
+                    ensure_ascii=False,
+                ),
+            )
+
             mlflow.log_text(
-                json.dumps(metrics, indent=2, ensure_ascii=False),
+                json.dumps(
+                    business_metrics,
+                    indent=2,
+                    ensure_ascii=False,
+                ),
                 artifact_file="logs/parsed_metrics.json",
+            )
+
+            # Read-after-write verification: a run is not eligible for official
+            # versioning unless MLflow really persisted its business metrics.
+            persisted_run = tracking_client.get_run(platform_run_id)
+            persisted_metrics = sanitize_metrics(
+                dict(persisted_run.data.metrics or {})
+            )
+
+            missing_metric_names = sorted(
+                set(business_metrics) - set(persisted_metrics)
+            )
+            if missing_metric_names:
+                raise RuntimeError(
+                    "MLflow did not persist expected metrics: "
+                    + ", ".join(missing_metric_names)
+                )
+
+            print(
+                "[PLATFORM_MLFLOW_METRIC] persisted metrics verified: "
+                f"{persisted_metrics}"
+            )
+        else:
+            tracking_client.set_tag(
+                platform_run_id,
+                "metrics_status",
+                "missing",
+            )
+            tracking_client.set_tag(
+                platform_run_id,
+                "metrics_warning",
+                "No business metric could be parsed or automatically evaluated.",
             )
 
         if model_artifacts:

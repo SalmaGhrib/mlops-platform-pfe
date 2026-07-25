@@ -701,90 +701,64 @@ experiment.setMessage(
     }
 
     public List<MlExperimentResponse> syncProjectResults(String authHeader, Long projectId) {
-    User owner = getUserFromAuthorizationHeader(authHeader);
+        User owner = getUserFromAuthorizationHeader(authHeader);
 
-    MlProject project = mlProjectRepository.findByIdAndOwner(projectId, owner)
-            .orElseThrow(() -> new RuntimeException("Project not found"));
+        MlProject project = mlProjectRepository.findByIdAndOwner(projectId, owner)
+                .orElseThrow(() -> new RuntimeException("Project not found"));
 
-    /*
-     * 1) Sync first the rows already created by Spring Boot/Kubeflow.
-     * This prevents creating a second MySQL row when the Kubeflow row already exists.
-     */
-    syncExistingProjectExperiments(project, "before-mlflow-import");
+        /*
+         * Une seule passe des expériences déjà créées, puis import et fusion.
+         * Les anciennes trois passes consécutives écrivaient plusieurs fois les
+         * mêmes métriques dans une seule transaction.
+         */
+        syncExistingProjectExperiments(project, "manual-sync-existing");
+        importMissingMlflowRunsIntoMysql(project);
+        mergeDuplicateMlflowKubeflowRows(project);
 
-    /*
-     * 2) Import MLflow runs only after trying to enrich existing rows.
-     * The import method below attaches MLflow details to an existing Kubeflow row
-     * before creating a new row.
-     */
-    importMissingMlflowRunsIntoMysql(project);
+        List<MlExperiment> refreshedExperiments =
+                mlExperimentRepository.findByProjectOrderByCreatedAtDesc(project);
 
-    /*
-     * 3) Merge old duplicates if they already exist:
-     * - one row has kubeflow_run_id only
-     * - one row has mlflow_run_id/version/production only
-     * They become one complete row.
-     */
-    mergeDuplicateMlflowKubeflowRows(project);
+        List<String> registeredNames = refreshedExperiments == null
+                ? new ArrayList<>()
+                : refreshedExperiments.stream()
+                        .map(MlExperiment::getRegisteredModelName)
+                        .filter(name -> name != null && !name.isBlank())
+                        .distinct()
+                        .toList();
 
-    /*
-     * 4) Resync after import/merge.
-     */
-    syncExistingProjectExperiments(project, "after-mlflow-import");
-
-    List<MlExperiment> refreshedExperiments =
-            mlExperimentRepository.findByProjectOrderByCreatedAtDesc(project);
-
-    List<String> registeredNames = refreshedExperiments == null
-            ? new ArrayList<>()
-            : refreshedExperiments.stream()
-                    .map(MlExperiment::getRegisteredModelName)
-                    .filter(name -> name != null && !name.isBlank())
-                    .distinct()
-                    .toList();
-
-    for (String registeredName : registeredNames) {
-        try {
-            recalculateGlobalScoresForProject(project, registeredName);
-            refreshProductionVersionFlagsForProject(project, registeredName);
-            enforceProductionConsistencyForModel(registeredName);
-
-            if (isAutoPromoteEnabled(project)) {
-                autoModelLifecycleService.evaluateAndAutoPromoteAndDeploy(project, registeredName);
+        for (String registeredName : registeredNames) {
+            try {
                 recalculateGlobalScoresForProject(project, registeredName);
+                refreshProductionVersionFlagsForProject(project, registeredName);
+
+                if (isAutoPromoteEnabled(project)) {
+                    autoModelLifecycleService.evaluateAndAutoPromoteAndDeploy(
+                            project,
+                            registeredName
+                    );
+                    refreshProductionVersionFlagsForProject(project, registeredName);
+                    recalculateGlobalScoresForProject(project, registeredName);
+                }
+
+                enforceProductionConsistencyForModel(registeredName);
+
+            } catch (Exception e) {
+                System.out.println("[SYNC] Lifecycle failed for model=" + registeredName);
+                System.out.println("[SYNC] Reason: " + e.getMessage());
+                e.printStackTrace();
             }
-        } catch (Exception e) {
-            System.out.println("[SYNC] Auto-promotion/global score failed for model=" + registeredName);
-            System.out.println("[SYNC] Reason: " + e.getMessage());
-            e.printStackTrace();
         }
+
+        mergeDuplicateMlflowKubeflowRows(project);
+
+        List<MlExperiment> experiments =
+                mlExperimentRepository.findByProjectOrderByCreatedAtDesc(project);
+
+        return filterAndDeduplicateVisibleExperiments(experiments)
+                .stream()
+                .map(this::mapToResponse)
+                .toList();
     }
-
-    /*
-     * 5) Final sync after promotion to refresh:
-     * model_version, production_version, is_production, primary metric and global score.
-     */
-    syncExistingProjectExperiments(project, "after-production-promotion");
-    mergeDuplicateMlflowKubeflowRows(project);
-
-    /*
-     * 6) Récupérer les expériences finales visibles.
-     */
-    List<MlExperiment> experiments =
-            mlExperimentRepository.findByProjectOrderByCreatedAtDesc(project);
-
-    List<MlExperiment> visibleExperiments =
-            filterAndDeduplicateVisibleExperiments(experiments);
-
-
-    /*
-     * 8) Retourner la réponse Angular.
-     */
-    return visibleExperiments
-            .stream()
-            .map(this::mapToResponse)
-            .toList();
-}
 
     private void syncExistingProjectExperiments(MlProject project, String phase) {
         List<MlExperiment> experiments =
@@ -3223,49 +3197,54 @@ private String limitForDatabase(String value, int maxLength) {
     }
 
     private void saveExperimentMetrics(MlExperiment experiment, Map<String, Double> metrics) {
-        if (experiment == null || experiment.getId() == null || metrics == null || metrics.isEmpty()) {
+        if (experiment == null
+                || experiment.getId() == null
+                || metrics == null
+                || metrics.isEmpty()) {
             return;
         }
 
         Long experimentId = experiment.getId();
-
-        MlExperiment managedExperiment = mlExperimentRepository.findById(experimentId)
-                .orElseThrow(() -> new RuntimeException(
-                        "Experiment not found while saving metrics: " + experimentId
-                ));
-
         Map<String, Double> normalizedMetrics = normalizeMetricsMap(metrics);
-
-        // Bulk delete is executed in its own repository transaction. It avoids leaving
-        // stale managed metric entities in the persistence context.
-        metricRepository.deleteAllByExperimentIdBulk(experimentId);
 
         if (normalizedMetrics.isEmpty()) {
             return;
         }
 
-        List<MlExperimentMetric> metricsToSave = new ArrayList<>();
-
+        /*
+         * IMPORTANT:
+         * Ne plus supprimer puis recréer les lignes de métriques.
+         *
+         * Les anciennes implémentations faisaient :
+         *   DELETE -> clear persistence context -> INSERT
+         *
+         * Quand plusieurs phases de synchronisation traitaient le même run,
+         * Hibernate conservait parfois une ancienne entité et levait :
+         * ObjectOptimisticLockingFailureException.
+         *
+         * L'UPSERT natif est atomique et idempotent grâce à la contrainte unique
+         * (experiment_id, metric_name).
+         */
         for (Map.Entry<String, Double> entry : normalizedMetrics.entrySet()) {
-            if (entry.getKey() == null || entry.getKey().isBlank() || entry.getValue() == null) {
+            String metricName = normalizeMetricKey(entry.getKey());
+            Double metricValue = entry.getValue();
+
+            if (metricName.isBlank() || metricValue == null) {
                 continue;
             }
 
-            MlExperimentMetric metric = new MlExperimentMetric();
-            metric.setExperiment(managedExperiment);
-            metric.setMetricName(entry.getKey());
-            metric.setMetricValue(entry.getValue());
-            metric.setDirection(getDirectionFromMetric(entry.getKey()));
-            metric.setProductionVersion(managedExperiment.getProductionVersion());
-            metric.setProduction(Boolean.TRUE.equals(managedExperiment.getProduction()));
-            metric.setGlobalScore(managedExperiment.getGlobalScore());
-
-            metricsToSave.add(metric);
+            metricRepository.upsertMetric(
+                    experimentId,
+                    metricName,
+                    metricValue,
+                    getDirectionFromMetric(metricName),
+                    experiment.getProductionVersion(),
+                    Boolean.TRUE.equals(experiment.getProduction()),
+                    experiment.getGlobalScore()
+            );
         }
 
-        if (!metricsToSave.isEmpty()) {
-            metricRepository.saveAllAndFlush(metricsToSave);
-        }
+        metricRepository.flush();
     }
 
     private boolean isDisplayablePerformanceMetric(String metricName) {
@@ -3713,29 +3692,27 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
 
 
     private void updateMetricRowsGlobalScore(MlExperiment experiment) {
-    if (experiment == null || experiment.getId() == null) {
-        return;
-    }
-
-    List<MlExperimentMetric> metrics = metricRepository.findByExperimentId(experiment.getId());
-
-    if (metrics == null || metrics.isEmpty()) {
-        return;
-    }
-
-    for (MlExperimentMetric metric : metrics) {
-        if (metric == null) {
-            continue;
+        if (experiment == null || experiment.getId() == null) {
+            return;
         }
 
-        metric.setGlobalScore(experiment.getGlobalScore());
-        metric.setProductionVersion(experiment.getProductionVersion());
-        metric.setProduction(Boolean.TRUE.equals(experiment.getProduction()));
-    }
+        /*
+         * Bulk updates only: no stale MlExperimentMetric entity is loaded into
+         * the persistence context, therefore no optimistic-lock conflict.
+         */
+        metricRepository.updateGlobalScoreByExperimentId(
+                experiment.getId(),
+                experiment.getGlobalScore()
+        );
 
-    metricRepository.saveAll(metrics);
-    metricRepository.flush();
-}
+        metricRepository.updateProductionStateByExperimentId(
+                experiment.getId(),
+                Boolean.TRUE.equals(experiment.getProduction()),
+                experiment.getProductionVersion()
+        );
+
+        metricRepository.flush();
+    }
 
     private MlExperiment findBestExperimentByMetricPriority(MlProject project, String registeredModelName) {
     List<MlExperiment> experiments =
@@ -4358,17 +4335,42 @@ private String defaultPrimaryMetricForProject(MlProject project) {
         return fileName.substring(lastDotIndex);
     }
 
+    /**
+     * Construit une réponse sans accéder à des proxys Hibernate détachés.
+     * L'expérience est systématiquement rechargée avec project/modelFile/datasetFile.
+     */
     private MlExperimentResponse mapToResponse(MlExperiment experiment) {
-        UploadedProjectFile datasetFile = experiment.getDatasetFile();
-        UploadedProjectFile modelFile = experiment.getModelFile();
+        if (experiment == null) {
+            throw new IllegalArgumentException("experiment is required");
+        }
+
+        MlExperiment loaded = experiment;
+
+        if (experiment.getId() != null) {
+            loaded = mlExperimentRepository
+                    .findByIdWithFiles(experiment.getId())
+                    .orElse(experiment);
+        }
+
+        MlProject project = loaded.getProject();
+
+        if (project == null || project.getId() == null) {
+            throw new IllegalStateException(
+                    "Experiment has no initialized project. experimentId="
+                            + loaded.getId()
+            );
+        }
+
+        UploadedProjectFile datasetFile = loaded.getDatasetFile();
+        UploadedProjectFile modelFile = loaded.getModelFile();
 
         MlExperimentResponse response = new MlExperimentResponse(
-                experiment.getId(),
-                experiment.getExperimentName(),
-                experiment.getStatus() != null ? experiment.getStatus().name() : "-",
+                loaded.getId(),
+                loaded.getExperimentName(),
+                loaded.getStatus() != null ? loaded.getStatus().name() : "-",
 
-                experiment.getProject().getId(),
-                experiment.getProject().getName(),
+                project.getId(),
+                project.getName(),
 
                 datasetFile != null ? datasetFile.getId() : null,
                 datasetFile != null ? datasetFile.getOriginalFileName() : null,
@@ -4376,61 +4378,62 @@ private String defaultPrimaryMetricForProject(MlProject project) {
                 modelFile != null ? modelFile.getId() : null,
                 modelFile != null ? modelFile.getOriginalFileName() : null,
 
-                experiment.getModelType(),
-                experiment.getModelName(),
-                experiment.getPrimaryMetric(),
-                experiment.getDirection(),
+                loaded.getModelType(),
+                loaded.getModelName(),
+                loaded.getPrimaryMetric(),
+                loaded.getDirection(),
 
-                experiment.getKubeflowRunId(),
-                experiment.getKubeflowRunName(),
-                experiment.getKubeflowStatus(),
+                loaded.getKubeflowRunId(),
+                loaded.getKubeflowRunName(),
+                loaded.getKubeflowStatus(),
 
-                experiment.getMlflowExperimentName(),
-                experiment.getMlflowExperimentId(),
-                experiment.getMlflowRunId(),
+                loaded.getMlflowExperimentName(),
+                loaded.getMlflowExperimentId(),
+                loaded.getMlflowRunId(),
 
-                experiment.getRegisteredModelName(),
-                experiment.getModelVersion(),
-                experiment.getLatestVersion(),
-                experiment.getProductionVersion(),
+                loaded.getRegisteredModelName(),
+                loaded.getModelVersion(),
+                loaded.getLatestVersion(),
+                loaded.getProductionVersion(),
 
-                experiment.getProduction(),
-                experiment.getGlobalScore(),
+                loaded.getProduction(),
+                loaded.getGlobalScore(),
 
-                experiment.getPrimaryMetricValue(),
-                getMetricsMap(experiment),
+                loaded.getPrimaryMetricValue(),
+                getMetricsMap(loaded),
 
-                experiment.getMessage(),
-                experiment.getErrorMessage(),
+                loaded.getMessage(),
+                loaded.getErrorMessage(),
 
-                toUtcIsoString(experiment.getCreatedAt()),
-                toUtcIsoString(experiment.getUpdatedAt())
+                toUtcIsoString(loaded.getCreatedAt()),
+                toUtcIsoString(loaded.getUpdatedAt())
         );
 
-        response.setStartedAt(toUtcIsoString(experiment.getStartedAt()));
-        response.setFinishedAt(toUtcIsoString(experiment.getFinishedAt()));
-        response.setCreatedAt(toUtcIsoString(experiment.getCreatedAt()));
-        response.setUpdatedAt(toUtcIsoString(experiment.getUpdatedAt()));
+        response.setStartedAt(toUtcIsoString(loaded.getStartedAt()));
+        response.setFinishedAt(toUtcIsoString(loaded.getFinishedAt()));
+        response.setCreatedAt(toUtcIsoString(loaded.getCreatedAt()));
+        response.setUpdatedAt(toUtcIsoString(loaded.getUpdatedAt()));
 
-        response.setDetectedAlgorithms(experiment.getDetectedAlgorithms());
-        response.setRuntimeMode(experiment.getRuntimeMode());
-        response.setCustomImageUri(experiment.getCustomImageUri());
-        response.setDockerfilePath(experiment.getDockerfilePath());
-        response.setRequirementsPath(experiment.getRequirementsPath());
-        response.setBuildStatus(experiment.getBuildStatus());
-        response.setBuildLogs(experiment.getBuildLogs());
-        response.setTrainingLogs(experiment.getTrainingLogs());
-        response.setFailurePhase(experiment.getFailurePhase());
-        response.setFailureReason(experiment.getFailureReason());
-        response.setFailureDetails(experiment.getFailureDetails());
-        response.setFailureSuggestion(experiment.getFailureSuggestion());
-        response.setFailureLogExcerpt(experiment.getFailureLogExcerpt());
-        response.setFailureSourceFile(experiment.getFailureSourceFile());
+        response.setDetectedAlgorithms(loaded.getDetectedAlgorithms());
+        response.setRuntimeMode(loaded.getRuntimeMode());
+        response.setCustomImageUri(loaded.getCustomImageUri());
+        response.setDockerfilePath(loaded.getDockerfilePath());
+        response.setRequirementsPath(loaded.getRequirementsPath());
+        response.setBuildStatus(loaded.getBuildStatus());
+        response.setBuildLogs(loaded.getBuildLogs());
+        response.setTrainingLogs(loaded.getTrainingLogs());
+        response.setFailurePhase(loaded.getFailurePhase());
+        response.setFailureReason(loaded.getFailureReason());
+        response.setFailureDetails(loaded.getFailureDetails());
+        response.setFailureSuggestion(loaded.getFailureSuggestion());
+        response.setFailureLogExcerpt(loaded.getFailureLogExcerpt());
+        response.setFailureSourceFile(loaded.getFailureSourceFile());
 
         return response;
     }
 
     private void syncAlgorithmMetadataFromRunTags(
+
             MlExperiment experiment,
             MlflowTrackingClientService.MlflowRunDetails runDetails
     ) {
@@ -4886,763 +4889,622 @@ private LocalDateTime firstNonNullDate(LocalDateTime... values) {
 }
 
 private void syncSingleProjectAutomatically(MlProject project) {
-    if (project == null || project.getId() == null) {
-        return;
-    }
-
-    System.out.println("[AUTO_SYNC] Start project id=" + project.getId()
-            + ", name=" + project.getName());
-
-    /*
-     * 1) Synchroniser les expériences déjà créées en MySQL.
-     */
-    syncExistingProjectExperiments(project, "auto-before-mlflow-import");
-
-    /*
-     * 2) Importer les runs MLflow manquants.
-     */
-    importMissingMlflowRunsIntoMysql(project);
-
-    /*
-     * 3) Fusionner les doublons Kubeflow-only / MLflow-only.
-     */
-    mergeDuplicateMlflowKubeflowRows(project);
-
-    /*
-     * 4) Resynchroniser après import et fusion.
-     */
-    syncExistingProjectExperiments(project, "auto-after-mlflow-import");
-
-    List<MlExperiment> refreshedExperiments =
-            mlExperimentRepository.findByProjectOrderByCreatedAtDesc(project);
-
-    List<String> registeredNames = refreshedExperiments == null
-            ? new ArrayList<>()
-            : refreshedExperiments.stream()
-                    .map(MlExperiment::getRegisteredModelName)
-                    .filter(name -> name != null && !name.isBlank())
-                    .distinct()
-                    .toList();
-
-    for (String registeredName : registeredNames) {
-        try {
-            /*
-             * 5) Recalculer les scores globaux.
-             */
-            recalculateGlobalScoresForProject(project, registeredName);
-
-            /*
-             * 6) Synchroniser les flags production depuis MLflow.
-             */
-            refreshProductionVersionFlagsForProject(project, registeredName);
-
-            /*
-             * 7) Auto-promotion + auto-déploiement si activé.
-             */
-            if (isAutoPromoteEnabled(project)) {
-                autoModelLifecycleService.evaluateAndAutoPromoteAndDeploy(
-                        project,
-                        registeredName
-                );
-
-                /*
-                 * Recalcul final pour rafraîchir les métriques et flags production.
-                 */
-                recalculateGlobalScoresForProject(project, registeredName);
-            }
-
-        } catch (Exception e) {
-            System.out.println("[AUTO_SYNC] Auto lifecycle failed for model=" + registeredName);
-            System.out.println("[AUTO_SYNC] Reason: " + e.getMessage());
-            e.printStackTrace();
+        if (project == null || project.getId() == null) {
+            return;
         }
+
+        System.out.println("[AUTO_SYNC] Start project id=" + project.getId()
+                + ", name=" + project.getName());
+
+        /*
+         * Une seule passe de synchronisation des lignes existantes.
+         * On ne resynchronise plus immédiatement les mêmes expériences dans
+         * auto-after-mlflow-import et auto-after-production-promotion.
+         */
+        syncExistingProjectExperiments(project, "auto-sync-existing");
+
+        /*
+         * L'import remplit déjà le statut, les métriques et la version du run.
+         */
+        importMissingMlflowRunsIntoMysql(project);
+        mergeDuplicateMlflowKubeflowRows(project);
+
+        List<MlExperiment> refreshedExperiments =
+                mlExperimentRepository.findByProjectOrderByCreatedAtDesc(project);
+
+        List<String> registeredNames = refreshedExperiments == null
+                ? new ArrayList<>()
+                : refreshedExperiments.stream()
+                        .map(MlExperiment::getRegisteredModelName)
+                        .filter(name -> name != null && !name.isBlank())
+                        .distinct()
+                        .toList();
+
+        for (String registeredName : registeredNames) {
+            try {
+                recalculateGlobalScoresForProject(project, registeredName);
+                refreshProductionVersionFlagsForProject(project, registeredName);
+
+                if (isAutoPromoteEnabled(project)) {
+                    autoModelLifecycleService.evaluateAndAutoPromoteAndDeploy(
+                            project,
+                            registeredName
+                    );
+
+                    /*
+                     * Après promotion, rafraîchir uniquement les champs liés au
+                     * score et à Production. Ne pas retraiter tout le run.
+                     */
+                    refreshProductionVersionFlagsForProject(project, registeredName);
+                    recalculateGlobalScoresForProject(project, registeredName);
+                }
+
+                enforceProductionConsistencyForModel(registeredName);
+
+            } catch (Exception e) {
+                System.out.println("[AUTO_SYNC] Auto lifecycle failed for model=" + registeredName);
+                System.out.println("[AUTO_SYNC] Reason: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+
+        mergeDuplicateMlflowKubeflowRows(project);
+        deleteUselessOrphanExperimentRows(project);
+
+        System.out.println("[AUTO_SYNC] Finished project id=" + project.getId()
+                + ", name=" + project.getName());
     }
+
 
     /*
-     * 8) Dernière sync pour rafraîchir model_version, production_version, is_production.
+     * Helpers temporels manquants dans la version précédente du service.
+     * Toutes les dates internes sont calculées en UTC.
      */
-    syncExistingProjectExperiments(project, "auto-after-production-promotion");
-
-    /*
-     * 9) Dernière fusion au cas où une ligne MLflow-only vient d'être créée.
-     */
-    mergeDuplicateMlflowKubeflowRows(project);
-
-    /*
-     * 10) Appliquer la règle globale définitive :
-     * pas de métrique + pas de score => pas de version, pas de Production, pas de déploiement.
-     */
-    enforceProductionConsistencyForAllModels();
-
-    /*
-     * 11) Nettoyer les lignes RUNNING/CREATED inutiles :
-     * - sans MLflow
-     * - sans Kubeflow
-     * - sans training job
-     * - sans version
-     */
-    deleteUselessOrphanExperimentRows(project);
-
-    System.out.println("[AUTO_SYNC] Finished project id=" + project.getId()
-            + ", name=" + project.getName());
-}
-    
-
-
-private LocalDateTime utcNow() {
-    return LocalDateTime.now(ZoneOffset.UTC);
-}
-
-private String toUtcIsoString(LocalDateTime value) {
-    if (value == null) {
-        return null;
+    private LocalDateTime utcNow() {
+        return LocalDateTime.now(ZoneOffset.UTC);
     }
 
-    return value
-            .atOffset(ZoneOffset.UTC)
-            .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
-}
+    private String toUtcIsoString(LocalDateTime value) {
+        if (value == null) {
+            return null;
+        }
 
-private void markExperimentStarted(MlExperiment experiment) {
-    if (experiment == null) {
-        return;
+        return value
+                .atOffset(ZoneOffset.UTC)
+                .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
     }
 
-    if (experiment.getStartedAt() == null) {
-        experiment.setStartedAt(utcNow());
-    }
+    private void markExperimentStarted(MlExperiment experiment) {
+        if (experiment == null) {
+            return;
+        }
 
-    experiment.setFinishedAt(null);
-}
-
-private void applyExecutionTimestampsForStatus(MlExperiment experiment, ExperimentStatus status) {
-    if (experiment == null || status == null) {
-        return;
-    }
-
-    if (status == ExperimentStatus.RUNNING) {
         if (experiment.getStartedAt() == null) {
             experiment.setStartedAt(utcNow());
         }
 
         experiment.setFinishedAt(null);
-        return;
     }
 
-    if (status == ExperimentStatus.COMPLETED
-            || status == ExperimentStatus.FAILED
-            || status == ExperimentStatus.CANCELLED) {
+    private void applyExecutionTimestampsForStatus(
+            MlExperiment experiment,
+            ExperimentStatus status
+    ) {
+        if (experiment == null || status == null) {
+            return;
+        }
 
-        if (experiment.getStartedAt() == null) {
-            experiment.setStartedAt(
-                    experiment.getCreatedAt() != null
-                            ? experiment.getCreatedAt()
-                            : utcNow()
+        if (status == ExperimentStatus.CREATED) {
+            return;
+        }
+
+        if (status == ExperimentStatus.RUNNING) {
+            markExperimentStarted(experiment);
+            return;
+        }
+
+        if (status == ExperimentStatus.COMPLETED
+                || status == ExperimentStatus.FAILED
+                || status == ExperimentStatus.CANCELLED) {
+
+            if (experiment.getStartedAt() == null) {
+                experiment.setStartedAt(
+                        experiment.getCreatedAt() != null
+                                ? experiment.getCreatedAt()
+                                : utcNow()
+                );
+            }
+
+            if (experiment.getFinishedAt() == null) {
+                experiment.setFinishedAt(utcNow());
+            }
+        }
+    }
+
+    /**
+     * Lance un nouveau run à partir des fichiers d'une expérience existante.
+     *
+     * La transaction reste ouverte pendant tout le chargement et la création
+     * de la nouvelle ligne. Cela évite les LazyInitializationException sur
+     * MlProject, modelFile et datasetFile.
+     *
+     * STANDARD_RUNTIME : lancement par Kubeflow.
+     * CUSTOM_DOCKERFILE avec image : Job Kubernetes direct.
+     * CUSTOM_DOCKERFILE avec Dockerfile : ligne CREATED, puis prise en charge
+     * par CustomDockerRunWatcher pour Kaniko et le Job d'entraînement.
+     */
+    @Transactional
+    public MlExperimentResponse retrainFromExistingExperiment(
+            Long projectId,
+            Long sourceExperimentId
+    ) {
+        if (projectId == null) {
+            throw new IllegalArgumentException(
+                    "projectId is required for scheduled retraining."
             );
         }
 
-        if (experiment.getFinishedAt() == null) {
-            experiment.setFinishedAt(utcNow());
+        if (sourceExperimentId == null) {
+            throw new IllegalArgumentException(
+                    "sourceExperimentId is required for scheduled retraining."
+            );
         }
-    }
-}
 
-public MlExperimentResponse retrainFromExistingExperiment(
-        Long projectId,
-        Long sourceExperimentId
-) {
-    if (projectId == null) {
-        throw new RuntimeException("projectId is required for scheduled retraining.");
-    }
+        MlExperiment sourceExperiment = mlExperimentRepository
+                .findByIdWithFiles(sourceExperimentId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Source experiment with project/files not found: "
+                                + sourceExperimentId
+                ));
 
-    if (sourceExperimentId == null) {
-        throw new RuntimeException("sourceExperimentId is required for scheduled retraining.");
-    }
+        MlProject project = sourceExperiment.getProject();
 
-    /*
-     * IMPORTANT:
-     * The retraining workflow runs outside a long Hibernate session.
-     * Load project + modelFile + datasetFile eagerly in one query so that
-     * UploadedProjectFile proxies remain usable after the repository call.
-     */
-    MlExperiment sourceExperiment = mlExperimentRepository
-            .findByIdWithFiles(sourceExperimentId)
-            .orElseThrow(() -> new RuntimeException(
-                    "Source experiment with project/files not found: "
+        if (project == null || project.getId() == null) {
+            throw new IllegalStateException(
+                    "Source experiment has no initialized project. sourceExperimentId="
                             + sourceExperimentId
-            ));
+            );
+        }
 
-    MlProject project = sourceExperiment.getProject();
+        if (!projectId.equals(project.getId())) {
+            throw new IllegalArgumentException(
+                    "Source experiment does not belong to projectId="
+                            + projectId
+                            + ". sourceProjectId="
+                            + project.getId()
+            );
+        }
 
-    if (project == null || project.getId() == null) {
-        throw new RuntimeException("Source experiment has no project.");
-    }
+        UploadedProjectFile sourceModelFile = sourceExperiment.getModelFile();
+        UploadedProjectFile sourceDatasetFile = sourceExperiment.getDatasetFile();
 
-    if (!project.getId().equals(projectId)) {
-        throw new RuntimeException(
-                "Source experiment does not belong to projectId=" + projectId
-                        + ". sourceProjectId=" + project.getId()
-        );
-    }
+        if (sourceModelFile == null
+                || !hasText(sourceModelFile.getFilePath())) {
+            throw new IllegalStateException(
+                    "Production source has no model/script file. sourceExperimentId="
+                            + sourceExperimentId
+            );
+        }
 
-    UploadedProjectFile sourceModelFile = sourceExperiment.getModelFile();
+        if (sourceDatasetFile == null
+                || !hasText(sourceDatasetFile.getFilePath())) {
+            throw new IllegalStateException(
+                    "Production source has no dataset file. sourceExperimentId="
+                            + sourceExperimentId
+            );
+        }
 
-    if (sourceModelFile == null
-            || sourceModelFile.getFilePath() == null
-            || sourceModelFile.getFilePath().isBlank()) {
-        throw new RuntimeException(
-                "Source experiment has no model/script file. Cannot schedule retraining."
-        );
-    }
-
-    UploadedProjectFile sourceDatasetFile = sourceExperiment.getDatasetFile();
-
-    if (sourceDatasetFile == null
-            || sourceDatasetFile.getFilePath() == null
-            || sourceDatasetFile.getFilePath().isBlank()) {
-        throw new RuntimeException(
-                "Source experiment has no dataset file. Cannot schedule retraining."
-        );
-    }
-
-    String effectiveRuntimeMode = defaultValue(
-            sourceExperiment.getRuntimeMode(),
-            getProjectRuntimeMode(project)
-    );
-
-    if (effectiveRuntimeMode == null || effectiveRuntimeMode.isBlank()) {
-        effectiveRuntimeMode = "STANDARD_RUNTIME";
-    }
-
-    effectiveRuntimeMode = effectiveRuntimeMode.trim().toUpperCase(Locale.ROOT);
-
-    String registeredModelName = defaultValue(
-            sourceExperiment.getRegisteredModelName(),
-            buildRegisteredModelName(project)
-    );
-
-    String mlflowExperimentName = isCustomDockerfileMode(effectiveRuntimeMode)
-            ? registeredModelName
-            : buildMlflowExperimentName(project);
-
-    String primaryMetric = firstNotBlank(
-            sourceExperiment.getPrimaryMetric(),
-            project.getPrimaryMetric1(),
-            defaultPrimaryMetricForProject(project)
-    );
-
-    if (primaryMetric == null || primaryMetric.isBlank()) {
-        primaryMetric = defaultPrimaryMetricForProject(project);
-    }
-
-    primaryMetric = normalizeMetricKey(primaryMetric);
-
-    String direction = defaultValue(
-            sourceExperiment.getDirection(),
-            getDirectionFromMetric(primaryMetric)
-    );
-
-    String projectType = normalizeProjectType(project.getProjectType());
-
-    String cleanModelName = defaultValue(
-            sourceExperiment.getModelName(),
-            registeredModelName
-    );
-
-    String cleanTargetColumn = defaultValue(
-            sourceExperiment.getTargetColumn(),
-            project.getTargetColumn()
-    );
-
-    String newRunName = buildUniqueRunName(
-            "scheduled_retraining_" + project.getName()
-    );
-
-    MlExperiment newExperiment = new MlExperiment();
-    newExperiment.setExperimentName(newRunName);
-    newExperiment.setProject(project);
-    newExperiment.setDatasetFile(sourceDatasetFile);
-    newExperiment.setModelFile(sourceModelFile);
-
-    newExperiment.setModelType(defaultValue(sourceExperiment.getModelType(), "CUSTOM"));
-    newExperiment.setModelName(cleanModelName);
-    newExperiment.setRegisteredModelName(registeredModelName);
-    newExperiment.setMlflowExperimentName(mlflowExperimentName);
-
-    newExperiment.setPrimaryMetric(primaryMetric);
-    newExperiment.setDirection(direction);
-    newExperiment.setTargetColumn(cleanTargetColumn);
-
-    newExperiment.setProduction(false);
-    newExperiment.setRuntimeMode(effectiveRuntimeMode);
-
-    newExperiment.setCustomImageUri(sourceExperiment.getCustomImageUri());
-    newExperiment.setDockerfilePath(sourceExperiment.getDockerfilePath());
-    newExperiment.setRequirementsPath(sourceExperiment.getRequirementsPath());
-
-    newExperiment.setDetectedAlgorithms(sourceExperiment.getDetectedAlgorithms());
-    newExperiment.setUsedAlgorithms(sourceExperiment.getUsedAlgorithms());
-
-    newExperiment.setMlflowRunId(null);
-    newExperiment.setMlflowExperimentId(null);
-    newExperiment.setKubeflowRunId(null);
-    newExperiment.setKubeflowRunName(null);
-    newExperiment.setKubeflowStatus(null);
-    newExperiment.setTrainingJobName(null);
-    newExperiment.setBuildJobName(null);
-
-    newExperiment.setModelVersion(null);
-    newExperiment.setLatestVersion(null);
-    newExperiment.setProductionVersion(null);
-    newExperiment.setGlobalScore(null);
-    newExperiment.setPrimaryMetricValue(null);
-    newExperiment.setErrorMessage(null);
-
-    System.out.println("[AUTO_RETRAINING] Creating new scheduled experiment from sourceExperimentId="
-            + sourceExperimentId
-            + ", projectId="
-            + projectId
-            + ", runtimeMode="
-            + effectiveRuntimeMode
-            + ", registeredModelName="
-            + registeredModelName
-            + ", runName="
-            + newRunName);
-
-    if (isCustomDockerfileMode(effectiveRuntimeMode)) {
-        return launchScheduledCustomDockerRetraining(
-                project,
-                newExperiment
-        );
-    }
-
-    return launchScheduledStandardRuntimeRetraining(
-            project,
-            newExperiment,
-            cleanModelName,
-            registeredModelName,
-            newRunName,
-            cleanTargetColumn,
-            primaryMetric,
-            direction,
-            projectType,
-            effectiveRuntimeMode,
-            sourceModelFile,
-            sourceDatasetFile
-    );
-}
-
-private MlExperimentResponse launchScheduledCustomDockerRetraining(
-        MlProject project,
-        MlExperiment newExperiment
-) {
-    String cleanCustomImageUri = newExperiment.getCustomImageUri();
-
-    if (cleanCustomImageUri != null && cleanCustomImageUri.isBlank()) {
-        cleanCustomImageUri = null;
-        newExperiment.setCustomImageUri(null);
-    }
-
-    /*
-     * Si l'image Production existe, on la réutilise.
-     * Il n'y a donc volontairement aucun Job Kaniko mlops-build-*.
-     * Seul le Job d'entraînement mlops-custom-* est créé.
-     */
-    if (cleanCustomImageUri != null) {
-        newExperiment.setStatus(ExperimentStatus.RUNNING);
-        markExperimentStarted(newExperiment);
-        newExperiment.setBuildStatus("CUSTOM_IMAGE_JOB_STARTING");
-        newExperiment.setBuildLogs(
-                "Production image reused: " + cleanCustomImageUri
-        );
-        newExperiment.setMessage(
-                "Scheduled retraining uses the existing Production image."
+        String runtimeMode = firstNotBlank(
+                sourceExperiment.getRuntimeMode(),
+                getProjectRuntimeMode(project),
+                "STANDARD_RUNTIME"
         );
 
-        MlExperiment savedExperiment =
-                mlExperimentRepository.saveAndFlush(newExperiment);
+        runtimeMode = runtimeMode.trim().toUpperCase(Locale.ROOT);
 
-        String jobName;
+        if (!runtimeMode.equals("STANDARD_RUNTIME")
+                && !runtimeMode.equals("CUSTOM_DOCKERFILE")) {
+            throw new IllegalStateException(
+                    "Unsupported runtime mode for retraining: " + runtimeMode
+            );
+        }
+
+        boolean customDockerMode = isCustomDockerfileMode(runtimeMode);
+
+        String registeredModelName = defaultValue(
+                sourceExperiment.getRegisteredModelName(),
+                buildRegisteredModelName(project)
+        );
+
+        String modelName = defaultValue(
+                sourceExperiment.getModelName(),
+                registeredModelName
+        );
+
+        String primaryMetric = normalizeMetricKey(
+                firstNotBlank(
+                        sourceExperiment.getPrimaryMetric(),
+                        project.getPrimaryMetric1(),
+                        defaultPrimaryMetricForProject(project)
+                )
+        );
+
+        if (!hasText(primaryMetric)) {
+            primaryMetric = defaultPrimaryMetricForProject(project);
+        }
+
+        String direction = getDirectionFromMetric(primaryMetric);
+        String projectType = normalizeProjectType(project.getProjectType());
+
+        String newRunName = buildUniqueRunName(
+                "scheduled_retraining_" + buildMlflowExperimentName(project)
+        );
+
+        MlExperiment retraining = new MlExperiment();
+        retraining.setProject(project);
+        retraining.setExperimentName(newRunName);
+        retraining.setModelType(defaultValue(sourceExperiment.getModelType(), "CUSTOM"));
+        retraining.setModelName(modelName);
+        retraining.setRegisteredModelName(registeredModelName);
+        retraining.setMlflowExperimentName(
+                customDockerMode
+                        ? registeredModelName
+                        : buildMlflowExperimentName(project)
+        );
+        retraining.setPrimaryMetric(primaryMetric);
+        retraining.setDirection(direction);
+        retraining.setRuntimeMode(runtimeMode);
+        retraining.setTargetColumn(sourceExperiment.getTargetColumn());
+        retraining.setModelFile(sourceModelFile);
+        retraining.setDatasetFile(sourceDatasetFile);
+        retraining.setCustomImageUri(sourceExperiment.getCustomImageUri());
+        retraining.setDockerfilePath(sourceExperiment.getDockerfilePath());
+        retraining.setRequirementsPath(sourceExperiment.getRequirementsPath());
+
+        retraining.setProduction(false);
+        retraining.setModelVersion(null);
+        retraining.setLatestVersion(null);
+        retraining.setProductionVersion(null);
+        retraining.setGlobalScore(null);
+        retraining.setPrimaryMetricValue(null);
+        retraining.setMlflowRunId(null);
+        retraining.setKubeflowRunId(null);
+        retraining.setKubeflowRunName(null);
+        retraining.setKubeflowStatus(null);
+        retraining.setErrorMessage(null);
+
+        if (customDockerMode) {
+            String customImageUri = sourceExperiment.getCustomImageUri();
+
+            /* Image déjà construite : lancer directement un Job Kubernetes. */
+            if (hasText(customImageUri)) {
+                retraining.setStatus(ExperimentStatus.RUNNING);
+                markExperimentStarted(retraining);
+                retraining.setBuildStatus("CUSTOM_IMAGE_JOB_STARTING");
+                retraining.setBuildLogs(
+                        "Launching Kubernetes Job with existing image: "
+                                + customImageUri
+                );
+                retraining.setMessage(
+                        "Scheduled CUSTOM_DOCKERFILE retraining created from Production source "
+                                + sourceExperimentId
+                                + ". Launching custom image Job."
+                );
+
+                MlExperiment savedExperiment =
+                        mlExperimentRepository.saveAndFlush(retraining);
+
+                try {
+                    String jobName = kubernetesJobService
+                            .launchCustomImageTrainingJob(
+                                    project,
+                                    savedExperiment,
+                                    customImageUri
+                            );
+
+                    savedExperiment.setKubeflowRunName(jobName);
+                    savedExperiment.setTrainingJobName(jobName);
+                    savedExperiment.setKubeflowStatus("RUNNING");
+                    savedExperiment.setBuildStatus("CUSTOM_IMAGE_JOB_RUNNING");
+                    savedExperiment.setBuildLogs(
+                            "Kubernetes Job launched successfully: " + jobName
+                    );
+                    savedExperiment.setMessage(
+                            "Custom image retraining Job launched. "
+                                    + "Waiting for MLflow synchronization."
+                    );
+
+                    MlExperiment updated = mlExperimentRepository
+                            .saveAndFlush(savedExperiment);
+
+                    triggerImmediateProjectSync(projectId);
+
+                    return mapToResponse(
+                            reloadExperimentForResponse(updated.getId())
+                    );
+
+                } catch (Exception error) {
+                    savedExperiment.setStatus(ExperimentStatus.FAILED);
+                    applyExecutionTimestampsForStatus(
+                            savedExperiment,
+                            ExperimentStatus.FAILED
+                    );
+                    savedExperiment.setBuildStatus("CUSTOM_IMAGE_JOB_FAILED");
+                    savedExperiment.setBuildLogs(
+                            limitForDatabase(error.getMessage(), 10000)
+                    );
+                    savedExperiment.setErrorMessage(
+                            limitForDatabase(error.getMessage(), 2000)
+                    );
+                    savedExperiment.setMessage(
+                            "Scheduled retraining could not launch the custom image Job."
+                    );
+
+                    MlExperiment failed = mlExperimentRepository
+                            .saveAndFlush(savedExperiment);
+
+                    notifyExperimentStatusChangedIfNeeded(
+                            ExperimentStatus.RUNNING,
+                            failed
+                    );
+
+                    return mapToResponse(
+                            reloadExperimentForResponse(failed.getId())
+                    );
+                }
+            }
+
+            /* Dockerfile personnalisé : le watcher doit construire l'image avec Kaniko. */
+            if (!hasText(sourceExperiment.getDockerfilePath())) {
+                throw new IllegalStateException(
+                        "CUSTOM_DOCKERFILE Production source has neither "
+                                + "customImageUri nor Dockerfile path. sourceExperimentId="
+                                + sourceExperimentId
+                );
+            }
+
+            retraining.setStatus(ExperimentStatus.CREATED);
+            retraining.setBuildStatus("WAITING_FOR_IMAGE_BUILD");
+            retraining.setBuildLogs(
+                    "Waiting for CustomDockerRunWatcher to build "
+                            + "the retraining image with Kaniko."
+            );
+            retraining.setMessage(
+                    "Scheduled CUSTOM_DOCKERFILE retraining created from Production source "
+                            + sourceExperimentId
+                            + ". Waiting for Kaniko image build."
+            );
+
+            MlExperiment savedExperiment = mlExperimentRepository
+                    .saveAndFlush(retraining);
+
+            triggerImmediateProjectSync(projectId);
+
+            return mapToResponse(
+                    reloadExperimentForResponse(savedExperiment.getId())
+            );
+        }
+
+        /* STANDARD_RUNTIME : lancement par Kubeflow. */
+        retraining.setStatus(ExperimentStatus.RUNNING);
+        markExperimentStarted(retraining);
+        retraining.setBuildStatus(null);
+        retraining.setBuildLogs(null);
+        retraining.setMessage(
+                "Scheduled STANDARD_RUNTIME retraining created from Production source "
+                        + sourceExperimentId
+                        + ". Launching Kubeflow pipeline."
+        );
+
+        MlExperiment savedExperiment = mlExperimentRepository
+                .saveAndFlush(retraining);
 
         try {
-            jobName = kubernetesJobService.launchCustomImageTrainingJob(
-                    project,
-                    savedExperiment,
-                    cleanCustomImageUri
+            PipelineGatewayResponse gatewayResponse =
+                    pipelineClientService.launchCustomModelPipeline(
+                            savedExperiment.getId(),
+                            project.getId(),
+                            project.getName(),
+                            modelName,
+                            registeredModelName,
+                            newRunName,
+                            sourceExperiment.getTargetColumn(),
+                            primaryMetric,
+                            direction,
+                            projectType,
+                            runtimeMode,
+                            sourceModelFile,
+                            sourceDatasetFile
+                    );
+
+            savedExperiment.setKubeflowRunId(gatewayResponse.getKubeflowRunId());
+            savedExperiment.setKubeflowRunName(
+                    defaultValue(gatewayResponse.getKubeflowRunName(), newRunName)
             );
-        } catch (Exception launchError) {
+            savedExperiment.setRegisteredModelName(registeredModelName);
+
+            if (hasText(gatewayResponse.getMlflowRunId())
+                    && !isMlflowRunAlreadyLinkedToAnotherExperiment(
+                            gatewayResponse.getMlflowRunId(),
+                            savedExperiment.getId()
+                    )) {
+                savedExperiment.setMlflowRunId(gatewayResponse.getMlflowRunId());
+            }
+
+            ExperimentStatus gatewayStatus =
+                    detectStatusFromGatewayResponse(gatewayResponse);
+
+            ExperimentStatus finalStatus =
+                    gatewayStatus == ExperimentStatus.FAILED
+                            ? ExperimentStatus.FAILED
+                            : ExperimentStatus.RUNNING;
+
+            savedExperiment.setStatus(finalStatus);
+            applyExecutionTimestampsForStatus(savedExperiment, finalStatus);
+
+            if (gatewayStatus == ExperimentStatus.FAILED) {
+                savedExperiment.setErrorMessage(
+                        limitForDatabase(gatewayResponse.getMessage(), 2000)
+                );
+                savedExperiment.setMessage(
+                        "Scheduled retraining pipeline launch failed: "
+                                + safeText(gatewayResponse.getMessage())
+                );
+            } else {
+                savedExperiment.setErrorMessage(null);
+                savedExperiment.setMessage(
+                        hasText(gatewayResponse.getMessage())
+                                ? "Scheduled retraining launched. "
+                                + gatewayResponse.getMessage()
+                                : "Scheduled retraining launched. "
+                                + "Waiting for MLflow synchronization."
+                );
+            }
+
+            MlExperiment updatedExperiment = mlExperimentRepository
+                    .saveAndFlush(savedExperiment);
+
+            triggerImmediateProjectSync(projectId);
+
+            return mapToResponse(
+                    reloadExperimentForResponse(updatedExperiment.getId())
+            );
+
+        } catch (Exception error) {
             savedExperiment.setStatus(ExperimentStatus.FAILED);
             applyExecutionTimestampsForStatus(
                     savedExperiment,
                     ExperimentStatus.FAILED
             );
-            savedExperiment.setBuildStatus("TRAINING_JOB_FAILED");
-            savedExperiment.setBuildLogs(launchError.getMessage());
-            savedExperiment.setErrorMessage(launchError.getMessage());
+            savedExperiment.setErrorMessage(
+                    limitForDatabase(error.getMessage(), 2000)
+            );
             savedExperiment.setMessage(
-                    "Kubernetes rejected the scheduled training Job."
+                    "Scheduled retraining could not launch the Kubeflow pipeline."
             );
 
-            MlExperiment failed =
-                    mlExperimentRepository.saveAndFlush(savedExperiment);
+            MlExperiment failedExperiment = mlExperimentRepository
+                    .saveAndFlush(savedExperiment);
 
             notifyExperimentStatusChangedIfNeeded(
                     ExperimentStatus.RUNNING,
-                    failed
+                    failedExperiment
             );
 
             return mapToResponse(
-                    reloadExperimentForResponse(failed.getId())
+                    reloadExperimentForResponse(failedExperiment.getId())
+            );
+        }
+    }
+
+    /**
+     * Point d'entrée appelé depuis AutoRetrainingService.
+     * Cette méthode doit être transactionnelle, car elle est appelée depuis
+     * un autre bean Spring et garde donc la session Hibernate ouverte.
+     */
+    @Transactional
+    public MlExperimentResponse retrainFromCurrentProductionExperiment(
+            Long projectId,
+            Long fallbackSourceExperimentId
+    ) {
+        if (projectId == null) {
+            throw new IllegalArgumentException(
+                    "projectId is required for scheduled retraining."
             );
         }
 
-        savedExperiment.setKubeflowRunName(jobName);
-        savedExperiment.setTrainingJobName(jobName);
-        savedExperiment.setKubeflowStatus("RUNNING");
-        savedExperiment.setBuildStatus("CUSTOM_IMAGE_JOB_RUNNING");
-        savedExperiment.setBuildLogs(
-                "Kubernetes training Job created: " + jobName
-        );
-        savedExperiment.setMessage(
-                "Scheduled retraining Job launched. "
-                        + "Waiting for MLflow synchronization."
-        );
-        savedExperiment.setErrorMessage(null);
+        MlExperiment productionSource = mlExperimentRepository
+                .findCurrentProductionExperimentForProject(projectId)
+                .flatMap(production ->
+                        mlExperimentRepository.findByIdWithFiles(production.getId())
+                )
+                .filter(source -> isValidProductionRetrainingSource(
+                        source,
+                        source.getProject() != null
+                                ? buildRegisteredModelName(source.getProject())
+                                : null
+                ))
+                .orElse(null);
 
-        MlExperiment updated =
-                mlExperimentRepository.saveAndFlush(savedExperiment);
+        if (productionSource != null && productionSource.getId() != null) {
+            return retrainFromExistingExperiment(
+                    projectId,
+                    productionSource.getId()
+            );
+        }
 
-        triggerImmediateProjectSync(project.getId());
+        if (fallbackSourceExperimentId != null) {
+            MlExperiment fallback = mlExperimentRepository
+                    .findByIdWithFiles(fallbackSourceExperimentId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Fallback source experiment not found with files: "
+                                    + fallbackSourceExperimentId
+                    ));
 
-        System.out.println(
-                "[AUTO_RETRAINING] Production image reused. experimentId="
-                        + updated.getId()
-                        + ", jobName="
-                        + jobName
-                        + ", image="
-                        + cleanCustomImageUri
-        );
-
-        return mapToResponse(
-                reloadExperimentForResponse(updated.getId())
-        );
-    }
-
-    /*
-     * Sans image réutilisable, le watcher doit reconstruire l'image avec Kaniko.
-     */
-    if (newExperiment.getDockerfilePath() == null
-            || newExperiment.getDockerfilePath().isBlank()) {
-        throw new RuntimeException(
-                "No reusable custom image and no Dockerfile are available."
-        );
-    }
-
-    newExperiment.setStatus(ExperimentStatus.CREATED);
-    newExperiment.setBuildStatus("WAITING_FOR_IMAGE_BUILD");
-    newExperiment.setMessage(
-            "Waiting for CustomDockerRunWatcher/Kaniko image build."
-    );
-    newExperiment.setErrorMessage(null);
-
-    MlExperiment saved =
-            mlExperimentRepository.saveAndFlush(newExperiment);
-
-    return mapToResponse(
-            reloadExperimentForResponse(saved.getId())
-    );
-}
-
-private MlExperimentResponse launchScheduledStandardRuntimeRetraining(
-        MlProject project,
-        MlExperiment newExperiment,
-        String cleanModelName,
-        String registeredModelName,
-        String newRunName,
-        String cleanTargetColumn,
-        String primaryMetric,
-        String direction,
-        String projectType,
-        String effectiveRuntimeMode,
-        UploadedProjectFile sourceModelFile,
-        UploadedProjectFile sourceDatasetFile
-) {
-    newExperiment.setStatus(ExperimentStatus.RUNNING);
-    markExperimentStarted(newExperiment);
-    newExperiment.setBuildStatus(null);
-    newExperiment.setBuildLogs(null);
-    newExperiment.setMessage("Scheduled retraining: launching STANDARD_RUNTIME pipeline.");
-    newExperiment.setErrorMessage(null);
-
-    MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(newExperiment);
-
-    try {
-        PipelineGatewayResponse gatewayResponse =
-                pipelineClientService.launchCustomModelPipeline(
-                        savedExperiment.getId(),
-                        project.getId(),
-                        project.getName(),
-                        cleanModelName,
-                        registeredModelName,
-                        newRunName,
-                        cleanTargetColumn,
-                        primaryMetric,
-                        direction,
-                        projectType,
-                        effectiveRuntimeMode,
-                        sourceModelFile,
-                        sourceDatasetFile
+            if (fallback.getProject() == null
+                    || fallback.getProject().getId() == null
+                    || !projectId.equals(fallback.getProject().getId())) {
+                throw new IllegalArgumentException(
+                        "Fallback source does not belong to projectId="
+                                + projectId
                 );
-
-        savedExperiment.setKubeflowRunId(gatewayResponse.getKubeflowRunId());
-        savedExperiment.setKubeflowRunName(defaultValue(gatewayResponse.getKubeflowRunName(), newRunName));
-        savedExperiment.setMlflowExperimentName(buildMlflowExperimentName(project));
-        savedExperiment.setRegisteredModelName(registeredModelName);
-
-        if (gatewayResponse.getMlflowRunId() != null && !gatewayResponse.getMlflowRunId().isBlank()) {
-            if (!isMlflowRunAlreadyLinkedToAnotherExperiment(
-                    gatewayResponse.getMlflowRunId(),
-                    savedExperiment.getId()
-            )) {
-                savedExperiment.setMlflowRunId(gatewayResponse.getMlflowRunId());
             }
-        }
 
-        ExperimentStatus gatewayStatus = detectStatusFromGatewayResponse(gatewayResponse);
-
-        ExperimentStatus finalGatewayStatus =
-                gatewayStatus == ExperimentStatus.FAILED
-                        ? ExperimentStatus.FAILED
-                        : ExperimentStatus.RUNNING;
-
-        savedExperiment.setStatus(finalGatewayStatus);
-        applyExecutionTimestampsForStatus(savedExperiment, finalGatewayStatus);
-
-        if (gatewayStatus == ExperimentStatus.FAILED) {
-            savedExperiment.setErrorMessage(gatewayResponse.getMessage());
-            savedExperiment.setMessage(
-                    "Scheduled retraining Kubeflow pipeline launch failed: "
-                            + gatewayResponse.getMessage()
-            );
-        } else {
-            savedExperiment.setErrorMessage(null);
-            savedExperiment.setMessage(
-                    gatewayResponse.getMessage() != null && !gatewayResponse.getMessage().isBlank()
-                            ? "Scheduled retraining launched. " + gatewayResponse.getMessage()
-                            : "Scheduled retraining Kubeflow pipeline launched. Waiting for MLflow synchronization."
-            );
-        }
-
-        MlExperiment updatedExperiment = mlExperimentRepository.saveAndFlush(savedExperiment);
-
-        triggerImmediateProjectSync(project.getId());
-
-        return mapToResponse(updatedExperiment);
-
-    } catch (Exception e) {
-        savedExperiment.setStatus(ExperimentStatus.FAILED);
-        applyExecutionTimestampsForStatus(savedExperiment, ExperimentStatus.FAILED);
-        savedExperiment.setErrorMessage(e.getMessage());
-        savedExperiment.setMessage(
-                "Scheduled retraining failed to launch Kubeflow pipeline, "
-                        + "but the experiment remains saved in MySQL."
-        );
-
-        MlExperiment failedExperiment = mlExperimentRepository.saveAndFlush(savedExperiment);
-        notifyExperimentStatusChangedIfNeeded(ExperimentStatus.RUNNING, failedExperiment);
-
-        return mapToResponse(failedExperiment);
-    }
-}
-
-public MlExperimentResponse retrainFromCurrentProductionExperiment(
-        Long projectId,
-        Long fallbackSourceExperimentId
-) {
-    if (projectId == null) {
-        throw new RuntimeException("projectId is required for scheduled retraining.");
-    }
-
-    MlProject project = mlProjectRepository.findById(projectId)
-            .orElseThrow(() -> new RuntimeException(
-                    "Project not found for scheduled retraining: " + projectId
-            ));
-
-    MlExperiment productionExperiment =
-            findCurrentProductionExperimentForRetraining(project);
-
-    if (productionExperiment != null && productionExperiment.getId() != null) {
-        System.out.println("[AUTO_RETRAINING] Production source selected. projectId="
-                + projectId
-                + ", sourceExperimentId="
-                + productionExperiment.getId()
-                + ", model="
-                + productionExperiment.getRegisteredModelName()
-                + ", version="
-                + productionExperiment.getModelVersion());
-
-        return retrainFromExistingExperiment(
-                projectId,
-                productionExperiment.getId()
-        );
-    }
-
-    if (fallbackSourceExperimentId != null) {
-        MlExperiment fallback = mlExperimentRepository
-                .findByIdWithFiles(fallbackSourceExperimentId)
-                .orElseThrow(() -> new RuntimeException(
-                        "Fallback source experiment with project/files not found: "
+            if (!isValidProductionRetrainingSource(
+                    fallback,
+                    buildRegisteredModelName(fallback.getProject())
+            )) {
+                throw new IllegalStateException(
+                        "Fallback source is not a valid Production retraining source. "
+                                + "sourceExperimentId="
                                 + fallbackSourceExperimentId
-                ));
+                );
+            }
 
-        String expectedRegisteredModelName =
-                buildRegisteredModelName(project);
-
-        if (!isValidProductionRetrainingSource(
-                fallback,
-                expectedRegisteredModelName
-        )) {
-            throw new RuntimeException(
-                    "Fallback source experiment is not a valid Production "
-                            + "retraining source. projectId="
-                            + projectId
-                            + ", sourceExperimentId="
-                            + fallbackSourceExperimentId
+            return retrainFromExistingExperiment(
+                    projectId,
+                    fallbackSourceExperimentId
             );
         }
 
-        System.out.println(
-                "[AUTO_RETRAINING] No direct production row found. "
-                        + "Using validated fallback sourceExperimentId="
-                        + fallbackSourceExperimentId
-        );
-
-        return retrainFromExistingExperiment(
-                projectId,
-                fallbackSourceExperimentId
+        throw new IllegalStateException(
+                "No valid Production source and no fallback source were found "
+                        + "for projectId="
+                        + projectId
         );
     }
 
-    throw new RuntimeException(
-            "No production experiment found and no fallback sourceExperimentId configured for projectId="
-                    + projectId
-    );
-}
-
-private MlExperiment findCurrentProductionExperimentForRetraining(MlProject project) {
-    if (project == null || project.getId() == null) {
-        return null;
-    }
-
-    String expectedRegisteredModelName =
-            buildRegisteredModelName(project);
-
-    /*
-     * Load the production candidate and its files eagerly.
-     * This avoids LazyInitializationException on modelFile/datasetFile.
-     */
-    List<MlExperiment> candidates =
-            mlExperimentRepository
-                    .findProductionRetrainingSourcesWithFiles(
-                            project.getId(),
-                            expectedRegisteredModelName
-                    );
-
-    if (candidates == null || candidates.isEmpty()) {
-        return null;
-    }
-
-    for (MlExperiment candidate : candidates) {
-        if (isValidProductionRetrainingSource(
-                candidate,
-                expectedRegisteredModelName
-        )) {
-            return candidate;
+    private boolean isValidProductionRetrainingSource(
+            MlExperiment experiment,
+            String expectedRegistry
+    ) {
+        if (experiment == null
+                || experiment.getId() == null
+                || experiment.getStatus() != ExperimentStatus.COMPLETED
+                || !Boolean.TRUE.equals(experiment.getProduction())
+                || !hasText(experiment.getMlflowRunId())
+                || !hasText(experiment.getRegisteredModelName())
+                || !hasText(experiment.getModelVersion())
+                || !hasText(experiment.getProductionVersion())
+                || !experiment.getModelVersion().trim().equals(
+                        experiment.getProductionVersion().trim()
+                )
+                || experiment.getProject() == null
+                || experiment.getModelFile() == null
+                || experiment.getDatasetFile() == null) {
+            return false;
         }
+
+        return !hasText(expectedRegistry)
+                || sameRegistryName(
+                        experiment.getRegisteredModelName(),
+                        expectedRegistry
+                );
     }
 
-    return null;
-}
-
-private boolean isValidProductionRetrainingSource(
-        MlExperiment experiment,
-        String expectedRegisteredModelName
-) {
-    if (experiment == null || experiment.getId() == null) {
-        return false;
+    private String safeText(String value) {
+        return value == null ? "" : value;
     }
-
-    if (experiment.getStatus() != ExperimentStatus.COMPLETED) {
-        return false;
-    }
-
-    /*
-     * A retraining source must be a real platform production version.
-     * Runs without score/metric are not eligible, even if MLflow has a technical version.
-     */
-    if (!Boolean.TRUE.equals(experiment.getProduction())) {
-        return false;
-    }
-
-    if (experiment.getPrimaryMetricValue() == null || experiment.getGlobalScore() == null) {
-        return false;
-    }
-
-    if (experiment.getMlflowRunId() == null || experiment.getMlflowRunId().isBlank()) {
-        return false;
-    }
-
-    if (experiment.getModelVersion() == null || experiment.getModelVersion().isBlank()) {
-        return false;
-    }
-
-    if (experiment.getProductionVersion() == null || experiment.getProductionVersion().isBlank()) {
-        return false;
-    }
-
-    if (!experiment.getModelVersion().trim().equalsIgnoreCase(experiment.getProductionVersion().trim())) {
-        return false;
-    }
-
-    if (experiment.getModelFile() == null
-            || experiment.getModelFile().getFilePath() == null
-            || experiment.getModelFile().getFilePath().isBlank()) {
-        return false;
-    }
-
-    if (experiment.getDatasetFile() == null
-            || experiment.getDatasetFile().getFilePath() == null
-            || experiment.getDatasetFile().getFilePath().isBlank()) {
-        return false;
-    }
-
-    if (experiment.getRegisteredModelName() == null
-            || experiment.getRegisteredModelName().isBlank()) {
-        return false;
-    }
-
-    if (expectedRegisteredModelName != null
-            && !expectedRegisteredModelName.isBlank()
-            && !experiment.getRegisteredModelName().equalsIgnoreCase(expectedRegisteredModelName)) {
-        return false;
-    }
-
-    String runtimeMode = defaultValue(experiment.getRuntimeMode(), "STANDARD_RUNTIME").trim().toUpperCase(Locale.ROOT);
-
-    if (isCustomDockerfileMode(runtimeMode)) {
-        boolean hasDockerfile = experiment.getDockerfilePath() != null && !experiment.getDockerfilePath().isBlank();
-        boolean hasCustomImage = experiment.getCustomImageUri() != null && !experiment.getCustomImageUri().isBlank();
-        return hasDockerfile || hasCustomImage;
-    }
-
-    return true;
-}
-
-private void notifyTerminalExperimentIfNeeded(MlExperiment experiment) {
-    // Intentionnellement vide : les notifications sont émises uniquement
-    // au moment d'une vraie transition de statut via
-    // notifyExperimentStatusChangedIfNeeded(...).
-}
 
     public static class ScriptAnalysisResult {
         private String detectedModules;

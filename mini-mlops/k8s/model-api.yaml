@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: model-api
-          image: docker.io/salmaghrib2003/mini-mlops-runtime:latest
+          image: acrmlopssalmav2.azurecr.io/mini-mlops:metrics-auto-final-v4
           imagePullPolicy: Always
 
           command: ["uvicorn"]

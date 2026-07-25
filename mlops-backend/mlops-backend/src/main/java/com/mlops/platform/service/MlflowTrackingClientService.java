@@ -1055,15 +1055,12 @@ result.add(details);
             }
         }
 
-        boolean hasUsefulMetric =
-                metrics != null
-                        && metrics.entrySet().stream()
-                        .anyMatch(entry ->
-                                entry.getKey() != null
-                                        && entry.getValue() != null
-                                        && !entry.getKey().equalsIgnoreCase("return_code")
-                        );
-
+        /*
+         * A FINISHED run may legitimately have no business metric yet.
+         * Registry attachment and metric-based promotion are two separate concerns:
+         * - attach the technical MLflow version when a valid model exists;
+         * - promote only after primaryMetricValue/globalScore are available.
+         */
         boolean hasModelEvidence =
                 (details.getModelVersion() != null
                         && !details.getModelVersion().isBlank())
@@ -1078,7 +1075,7 @@ result.add(details);
                                 tags.get("registered_model_name")
                         ) != null);
 
-        return hasUsefulMetric && hasModelEvidence;
+        return hasModelEvidence;
     }
 
     public MlflowRunDetails findLatestRunByTag(
@@ -1868,10 +1865,12 @@ private ModelVersionInfo findModelVersionInfoByRegisteredModelGet(
     private void clearVersionStateOnlyForTerminalFailure(MlExperiment experiment) {
         if (isTerminalFailure(experiment)) {
             clearVersionStateForNonCompletedExperiment(experiment);
-        } else if (experiment != null) {
-            experiment.setProduction(false);
-            experiment.setProductionVersion(null);
         }
+        /*
+         * For CREATED/RUNNING/COMPLETED transient states, keep the last known
+         * registry and production information. A polling cycle must never erase
+         * valid state only because MLflow/Kubeflow are eventually consistent.
+         */
     }
 
     private void syncSingleModelVersionToDatabase(
