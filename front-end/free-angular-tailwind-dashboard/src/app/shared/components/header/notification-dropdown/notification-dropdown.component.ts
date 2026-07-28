@@ -1,7 +1,14 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import {
+  Component,
+  OnDestroy,
+  OnInit,
+} from '@angular/core';
 import { RouterModule } from '@angular/router';
-import { Subscription } from 'rxjs';
+import {
+  finalize,
+  Subscription,
+} from 'rxjs';
 
 import { DropdownComponent } from '../../ui/dropdown/dropdown.component';
 import { DropdownItemComponent } from '../../ui/dropdown/dropdown-item/dropdown-item.component';
@@ -22,33 +29,61 @@ import {
     DropdownItemComponent,
   ],
 })
-export class NotificationDropdownComponent implements OnInit, OnDestroy {
+export class NotificationDropdownComponent
+  implements OnInit, OnDestroy {
+
   isOpen = false;
 
   notifications: NotificationResponse[] = [];
   unreadCount = 0;
+
   loading = false;
-  autoMarkingAsRead = false;
+  markingAllAsRead = false;
 
-  private subscriptions = new Subscription();
+  private readonly subscriptions = new Subscription();
 
-  constructor(private notificationService: NotificationService) {}
+  constructor(
+    private readonly notificationService: NotificationService
+  ) {}
 
   ngOnInit(): void {
     this.loading = true;
 
     this.subscriptions.add(
-      this.notificationService.notifications$.subscribe(
-        (notifications: NotificationResponse[]) => {
-          this.notifications = notifications || [];
+      this.notificationService.notifications$.subscribe({
+        next: (
+          notifications: NotificationResponse[]
+        ): void => {
+          this.notifications = notifications ?? [];
           this.loading = false;
-        }
-      )
+        },
+
+        error: (error: unknown): void => {
+          console.error(
+            '[NOTIFICATIONS] Notifications stream error',
+            error
+          );
+
+          this.loading = false;
+        },
+      })
     );
 
     this.subscriptions.add(
-      this.notificationService.unreadCount$.subscribe((count: number) => {
-        this.unreadCount = count || 0;
+      this.notificationService.unreadCount$.subscribe({
+        next: (count: number): void => {
+          this.unreadCount = Math.max(
+            0,
+            Number(count ?? 0)
+          );
+        },
+
+        error: (error: unknown): void => {
+          console.error(
+            '[NOTIFICATIONS] Unread count stream error',
+            error
+          );
+        },
       })
     );
 
@@ -64,7 +99,11 @@ export class NotificationDropdownComponent implements OnInit, OnDestroy {
     this.isOpen = !this.isOpen;
 
     if (this.isOpen) {
-      this.loadAndAutoMarkAsRead();
+      /*
+       * On recharge seulement les notifications.
+       * L'ouverture du menu ne les marque pas comme lues.
+       */
+      this.notificationService.loadNotifications();
     }
   }
 
@@ -72,86 +111,94 @@ export class NotificationDropdownComponent implements OnInit, OnDestroy {
     this.isOpen = false;
   }
 
-  private loadAndAutoMarkAsRead(): void {
-    this.loading = true;
+  onCloseButtonClick(event: MouseEvent): void {
+    event.stopPropagation();
+    this.closeDropdown();
+  }
 
-    this.notificationService.getNotifications().subscribe({
-      next: (notifications: NotificationResponse[]) => {
-        const loadedNotifications = notifications || [];
-        this.notifications = loadedNotifications;
-        this.notificationService.setNotifications(loadedNotifications);
-        this.loading = false;
+  onMarkAllAsReadClick(event: MouseEvent): void {
+    event.stopPropagation();
+    this.markAllAsRead();
+  }
 
-        const hasUnread = loadedNotifications.some(
-          (notification: NotificationResponse) => !notification.read
-        );
+  markAllAsRead(): void {
+    if (
+      this.markingAllAsRead ||
+      this.unreadCount <= 0
+    ) {
+      return;
+    }
 
-        if (!hasUnread) {
-          this.notificationService.refreshUnreadCount();
-          return;
-        }
+    this.markingAllAsRead = true;
 
-        this.autoMarkingAsRead = true;
+    this.notificationService
+      .markAllAsRead()
+      .pipe(
+        finalize((): void => {
+          this.markingAllAsRead = false;
+        })
+      )
+      .subscribe({
+        next: (): void => {
+          /*
+           * Le service met déjà à jour :
+           * - la liste locale ;
+           * - l'état read ;
+           * - le compteur non lu.
+           */
+          console.log(
+            '[NOTIFICATIONS] All notifications marked as read'
+          );
+        },
 
-        const readNotifications = loadedNotifications.map(
-          (notification: NotificationResponse) => ({
-            ...notification,
-            read: true,
-          })
-        );
+        error: (error: unknown): void => {
+          console.error(
+            '[NOTIFICATIONS] Failed to mark all as read',
+            error
+          );
 
-        /*
-         * Mise à jour immédiate côté interface :
-         * dès que l’utilisateur ouvre l’onglet, les notifications deviennent lues visuellement.
-         */
-        this.notifications = readNotifications;
-        this.notificationService.setNotifications(readNotifications);
-        this.notificationService.setUnreadCount(0);
-
-        /*
-         * Mise à jour réelle côté backend.
-         */
-        this.notificationService.markAllAsRead().subscribe({
-          next: (): void => {
-            this.autoMarkingAsRead = false;
-            this.notificationService.reloadAfterReadChange();
-          },
-          error: (error: unknown): void => {
-            console.error('[NOTIFICATIONS] Failed to auto mark all as read', error);
-            this.autoMarkingAsRead = false;
-            this.notificationService.reloadAfterReadChange();
-          },
-        });
-      },
-      error: (error: unknown): void => {
-        console.error('[NOTIFICATIONS] Failed to load notifications', error);
-        this.loading = false;
-      },
-    });
+          /*
+           * Recharge l'état réel si le backend échoue.
+           */
+          this.notificationService.loadNotifications();
+        },
+      });
   }
 
   get unreadNotifications(): NotificationResponse[] {
-    return this.notifications.filter((item) => !item.read);
+    return this.notifications.filter(
+      (notification: NotificationResponse) =>
+        !notification.read
+    );
   }
 
   get readNotifications(): NotificationResponse[] {
-    return this.notifications.filter((item) => item.read);
+    return this.notifications.filter(
+      (notification: NotificationResponse) =>
+        notification.read
+    );
   }
 
   getIconLabel(type: string): string {
     switch (type) {
       case 'RUN_COMPLETED':
         return 'RC';
+
       case 'RUN_FAILED':
         return 'RF';
+
       case 'DEPLOYMENT_DEPLOYED':
         return 'DD';
+
       case 'DEPLOYMENT_FAILED':
         return 'DF';
+
       case 'DEPLOYMENT_OUT_OF_SYNC':
         return 'OS';
+
       case 'MONITORING_ALERT':
         return 'AL';
+
       default:
         return 'IN';
     }
@@ -161,18 +208,30 @@ export class NotificationDropdownComponent implements OnInit, OnDestroy {
     switch (type) {
       case 'RUN_COMPLETED':
       case 'DEPLOYMENT_DEPLOYED':
-        return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400';
+        return (
+          'bg-green-100 text-green-700 ' +
+          'dark:bg-green-900/30 dark:text-green-400'
+        );
 
       case 'RUN_FAILED':
       case 'DEPLOYMENT_FAILED':
-        return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400';
+        return (
+          'bg-red-100 text-red-700 ' +
+          'dark:bg-red-900/30 dark:text-red-400'
+        );
 
       case 'DEPLOYMENT_OUT_OF_SYNC':
       case 'MONITORING_ALERT':
-        return 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400';
+        return (
+          'bg-yellow-100 text-yellow-700 ' +
+          'dark:bg-yellow-900/30 dark:text-yellow-400'
+        );
 
       default:
-        return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400';
+        return (
+          'bg-blue-100 text-blue-700 ' +
+          'dark:bg-blue-900/30 dark:text-blue-400'
+        );
     }
   }
 
@@ -180,16 +239,22 @@ export class NotificationDropdownComponent implements OnInit, OnDestroy {
     switch (type) {
       case 'RUN_COMPLETED':
         return 'Run terminé';
+
       case 'RUN_FAILED':
         return 'Run échoué';
+
       case 'DEPLOYMENT_DEPLOYED':
         return 'Déploiement réussi';
+
       case 'DEPLOYMENT_FAILED':
         return 'Déploiement échoué';
+
       case 'DEPLOYMENT_OUT_OF_SYNC':
         return 'Déploiement désynchronisé';
+
       case 'MONITORING_ALERT':
         return 'Alerte monitoring';
+
       default:
         return 'Notification';
     }
@@ -199,22 +264,22 @@ export class NotificationDropdownComponent implements OnInit, OnDestroy {
     switch (targetType) {
       case 'EXPERIMENT':
         return 'Run';
+
       case 'DEPLOYMENT':
         return 'Déploiement';
+
       case 'MONITORING':
         return 'Monitoring';
+
       case 'PROJECT':
         return 'Projet';
+
       default:
         return 'Système';
     }
   }
 
   formatDate(value: string): string {
-    if (!value) {
-      return '';
-    }
-
     const date = this.parseBackendDate(value);
 
     if (!date) {
@@ -222,54 +287,59 @@ export class NotificationDropdownComponent implements OnInit, OnDestroy {
     }
 
     const now = new Date();
-    let diffMs = now.getTime() - date.getTime();
 
-    /*
-     * Sécurité : si l’heure backend est légèrement dans le futur
-     * à cause d’un décalage serveur/client, on affiche À l’instant.
-     */
-    if (diffMs < 0) {
-      diffMs = 0;
+    let differenceMs =
+      now.getTime() - date.getTime();
+
+    if (differenceMs < 0) {
+      differenceMs = 0;
     }
 
-    const diffMinutes = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMinutes / 60);
-    const diffDays = Math.floor(diffHours / 24);
+    const differenceMinutes =
+      Math.floor(differenceMs / 60_000);
 
-    if (diffMinutes < 1) {
+    const differenceHours =
+      Math.floor(differenceMinutes / 60);
+
+    const differenceDays =
+      Math.floor(differenceHours / 24);
+
+    if (differenceMinutes < 1) {
       return 'À l’instant';
     }
 
-    if (diffMinutes < 60) {
-      return `${diffMinutes} min`;
+    if (differenceMinutes < 60) {
+      return `${differenceMinutes} min`;
     }
 
-    if (diffHours < 24) {
-      return `${diffHours} h`;
+    if (differenceHours < 24) {
+      return `${differenceHours} h`;
     }
 
-    return `${diffDays} j`;
+    return `${differenceDays} j`;
   }
 
-  private parseBackendDate(value: string | null | undefined): Date | null {
+  private parseBackendDate(
+    value: string | null | undefined
+  ): Date | null {
     if (!value) {
       return null;
     }
 
-    const clean = String(value).trim();
+    const cleanValue = String(value).trim();
 
-    if (!clean) {
+    if (!cleanValue) {
       return null;
     }
 
-    /*
-     * Si le backend renvoie déjà Z ou +00:00, on garde tel quel.
-     * Si le backend renvoie un LocalDateTime sans timezone, on le considère UTC.
-     */
-    const hasTimezone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(clean);
-    const normalized = hasTimezone ? clean : `${clean}Z`;
+    const hasTimezone =
+      /([zZ]|[+-]\d{2}:?\d{2})$/.test(cleanValue);
 
-    const date = new Date(normalized);
+    const normalizedValue = hasTimezone
+      ? cleanValue
+      : `${cleanValue}Z`;
+
+    const date = new Date(normalizedValue);
 
     if (Number.isNaN(date.getTime())) {
       return null;

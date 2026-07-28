@@ -4,6 +4,11 @@ kind: Service
 metadata:
   name: mlops-backend-service
   namespace: mlops
+  labels:
+    app: mlops-backend
+    app.kubernetes.io/name: mlops-backend
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: mlops-platform
 
 spec:
   type: ClusterIP
@@ -15,4 +20,4 @@ spec:
     - name: http
       protocol: TCP
       port: 8081
-      targetPort: 8081
+      targetPort: http

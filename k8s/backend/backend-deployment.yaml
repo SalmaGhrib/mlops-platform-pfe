@@ -23,6 +23,11 @@ spec:
       labels:
         app: mlops-backend
 
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/actuator/prometheus"
+        prometheus.io/port: "8081"
+
     spec:
       serviceAccountName: mlops-backend-sa
       restartPolicy: Always
@@ -30,13 +35,22 @@ spec:
       containers:
         - name: mlops-backend
 
-          image: acrmlopssalmav2.azurecr.io/mlops-backend:retraining-final-fix-v1
+          image: acrmlopssalmav2.azurecr.io/mlops-backend:projects-notifications-final-v1
           imagePullPolicy: Always
 
           ports:
             - name: http
               containerPort: 8081
               protocol: TCP
+
+          env:
+            # URL utilisée par monitoring.prometheus.url
+            - name: MONITORING_PROMETHEUS_URL
+              value: "http://prometheus-k8s.monitoring.svc.cluster.local:9090"
+
+            # Conservée pour les autres services éventuels du backend
+            - name: PROMETHEUS_URL
+              value: "http://prometheus-k8s.monitoring.svc.cluster.local:9090"
 
           envFrom:
             - configMapRef:

@@ -5398,14 +5398,19 @@ private void syncSingleProjectAutomatically(MlProject project) {
     }
 
     /**
-     * Point d'entrée appelé depuis AutoRetrainingService.
-     * Cette méthode doit être transactionnelle, car elle est appelée depuis
-     * un autre bean Spring et garde donc la session Hibernate ouverte.
+     * Point d'entrée appelé par AutoRetrainingService.
+     *
+     * Règle importante :
+     * - la source déjà résolue dans retraining_config est utilisée en priorité ;
+     * - si elle n'est plus exploitable, la Production courante est recherchée ;
+     * - la validation repose sur le projet, le statut, le run MLflow, les versions
+     *   et les fichiers, pas sur le booléen isProduction qui peut être temporairement
+     *   modifié par le reconciler.
      */
     @Transactional
     public MlExperimentResponse retrainFromCurrentProductionExperiment(
             Long projectId,
-            Long fallbackSourceExperimentId
+            Long preferredSourceExperimentId
     ) {
         if (projectId == null) {
             throw new IllegalArgumentException(
@@ -5413,65 +5418,244 @@ private void syncSingleProjectAutomatically(MlProject project) {
             );
         }
 
-        MlExperiment productionSource = mlExperimentRepository
-                .findCurrentProductionExperimentForProject(projectId)
-                .flatMap(production ->
-                        mlExperimentRepository.findByIdWithFiles(production.getId())
-                )
-                .filter(source -> isValidProductionRetrainingSource(
-                        source,
-                        source.getProject() != null
-                                ? buildRegisteredModelName(source.getProject())
-                                : null
-                ))
-                .orElse(null);
-
-        if (productionSource != null && productionSource.getId() != null) {
-            return retrainFromExistingExperiment(
-                    projectId,
-                    productionSource.getId()
-            );
-        }
-
-        if (fallbackSourceExperimentId != null) {
-            MlExperiment fallback = mlExperimentRepository
-                    .findByIdWithFiles(fallbackSourceExperimentId)
+        if (preferredSourceExperimentId != null) {
+            MlExperiment preferredSource = mlExperimentRepository
+                    .findByIdWithFiles(preferredSourceExperimentId)
                     .orElseThrow(() -> new IllegalStateException(
-                            "Fallback source experiment not found with files: "
-                                    + fallbackSourceExperimentId
+                            "Preferred retraining source was not found with its files. "
+                                    + "sourceExperimentId="
+                                    + preferredSourceExperimentId
                     ));
 
-            if (fallback.getProject() == null
-                    || fallback.getProject().getId() == null
-                    || !projectId.equals(fallback.getProject().getId())) {
-                throw new IllegalArgumentException(
-                        "Fallback source does not belong to projectId="
-                                + projectId
-                );
-            }
+            validateRetrainingSourceOrThrow(
+                    preferredSource,
+                    projectId,
+                    "preferred"
+            );
 
-            if (!isValidProductionRetrainingSource(
-                    fallback,
-                    buildRegisteredModelName(fallback.getProject())
-            )) {
-                throw new IllegalStateException(
-                        "Fallback source is not a valid Production retraining source. "
-                                + "sourceExperimentId="
-                                + fallbackSourceExperimentId
-                );
-            }
+            System.out.println(
+                    "[RETRAINING_VALIDATION] Preferred source accepted. "
+                            + "projectId="
+                            + projectId
+                            + ", sourceExperimentId="
+                            + preferredSource.getId()
+                            + ", registeredModel="
+                            + preferredSource.getRegisteredModelName()
+                            + ", modelVersion="
+                            + preferredSource.getModelVersion()
+                            + ", productionVersion="
+                            + preferredSource.getProductionVersion()
+                            + ", runtimeMode="
+                            + preferredSource.getRuntimeMode()
+            );
 
             return retrainFromExistingExperiment(
                     projectId,
-                    fallbackSourceExperimentId
+                    preferredSource.getId()
             );
         }
 
-        throw new IllegalStateException(
-                "No valid Production source and no fallback source were found "
-                        + "for projectId="
-                        + projectId
+        MlExperiment currentProduction = mlExperimentRepository
+                .findCurrentProductionExperimentForProject(projectId)
+                .flatMap(production ->
+                        mlExperimentRepository.findByIdWithFiles(
+                                production.getId()
+                        )
+                )
+                .orElseThrow(() -> new IllegalStateException(
+                        "No current Production source was found for projectId="
+                                + projectId
+                ));
+
+        validateRetrainingSourceOrThrow(
+                currentProduction,
+                projectId,
+                "current-production"
         );
+
+        System.out.println(
+                "[RETRAINING_VALIDATION] Current Production source accepted. "
+                        + "projectId="
+                        + projectId
+                        + ", sourceExperimentId="
+                        + currentProduction.getId()
+                        + ", registeredModel="
+                        + currentProduction.getRegisteredModelName()
+                        + ", modelVersion="
+                        + currentProduction.getModelVersion()
+                        + ", productionVersion="
+                        + currentProduction.getProductionVersion()
+                        + ", runtimeMode="
+                        + currentProduction.getRuntimeMode()
+        );
+
+        return retrainFromExistingExperiment(
+                projectId,
+                currentProduction.getId()
+        );
+    }
+
+    private void validateRetrainingSourceOrThrow(
+            MlExperiment experiment,
+            Long expectedProjectId,
+            String sourceKind
+    ) {
+        if (experiment == null) {
+            throw new IllegalStateException(
+                    "Retraining source is null. sourceKind=" + sourceKind
+            );
+        }
+
+        if (experiment.getId() == null) {
+            throw new IllegalStateException(
+                    "Retraining source has no id. sourceKind=" + sourceKind
+            );
+        }
+
+        if (experiment.getProject() == null
+                || experiment.getProject().getId() == null) {
+            throw new IllegalStateException(
+                    "Retraining source has no initialized project. "
+                            + "sourceExperimentId="
+                            + experiment.getId()
+            );
+        }
+
+        if (!expectedProjectId.equals(
+                experiment.getProject().getId()
+        )) {
+            throw new IllegalStateException(
+                    "Retraining source belongs to another project. "
+                            + "sourceExperimentId="
+                            + experiment.getId()
+                            + ", expectedProjectId="
+                            + expectedProjectId
+                            + ", actualProjectId="
+                            + experiment.getProject().getId()
+            );
+        }
+
+        if (experiment.getStatus()
+                != ExperimentStatus.COMPLETED) {
+            throw new IllegalStateException(
+                    "Retraining source is not COMPLETED. "
+                            + "sourceExperimentId="
+                            + experiment.getId()
+                            + ", status="
+                            + experiment.getStatus()
+            );
+        }
+
+        if (!hasText(experiment.getMlflowRunId())) {
+            throw new IllegalStateException(
+                    "Retraining source has no MLflow Run ID. "
+                            + "sourceExperimentId="
+                            + experiment.getId()
+            );
+        }
+
+        if (!hasText(
+                experiment.getRegisteredModelName()
+        )) {
+            throw new IllegalStateException(
+                    "Retraining source has no registered model name. "
+                            + "sourceExperimentId="
+                            + experiment.getId()
+            );
+        }
+
+        if (!hasText(experiment.getModelVersion())) {
+            throw new IllegalStateException(
+                    "Retraining source has no modelVersion. "
+                            + "sourceExperimentId="
+                            + experiment.getId()
+            );
+        }
+
+        if (!hasText(
+                experiment.getProductionVersion()
+        )) {
+            throw new IllegalStateException(
+                    "Retraining source has no productionVersion. "
+                            + "sourceExperimentId="
+                            + experiment.getId()
+            );
+        }
+
+        String modelVersion =
+                experiment.getModelVersion().trim();
+
+        String productionVersion =
+                experiment.getProductionVersion().trim();
+
+        if (!modelVersion.equalsIgnoreCase(
+                productionVersion
+        )) {
+            throw new IllegalStateException(
+                    "Retraining source version is not the Production version. "
+                            + "sourceExperimentId="
+                            + experiment.getId()
+                            + ", modelVersion="
+                            + modelVersion
+                            + ", productionVersion="
+                            + productionVersion
+            );
+        }
+
+        UploadedProjectFile modelFile =
+                experiment.getModelFile();
+
+        if (modelFile == null
+                || !hasText(modelFile.getFilePath())) {
+            throw new IllegalStateException(
+                    "Retraining source has no usable model/script file. "
+                            + "sourceExperimentId="
+                            + experiment.getId()
+            );
+        }
+
+        UploadedProjectFile datasetFile =
+                experiment.getDatasetFile();
+
+        if (datasetFile == null
+                || !hasText(datasetFile.getFilePath())) {
+            throw new IllegalStateException(
+                    "Retraining source has no usable dataset file. "
+                            + "sourceExperimentId="
+                            + experiment.getId()
+            );
+        }
+
+        String runtimeMode = firstNotBlank(
+                experiment.getRuntimeMode(),
+                getProjectRuntimeMode(experiment.getProject()),
+                "STANDARD_RUNTIME"
+        );
+
+        runtimeMode = runtimeMode
+                .trim()
+                .toUpperCase(Locale.ROOT);
+
+        if (!runtimeMode.equals("STANDARD_RUNTIME")
+                && !runtimeMode.equals("CUSTOM_DOCKERFILE")) {
+            throw new IllegalStateException(
+                    "Unsupported retraining runtime mode. "
+                            + "sourceExperimentId="
+                            + experiment.getId()
+                            + ", runtimeMode="
+                            + runtimeMode
+            );
+        }
+
+        if (runtimeMode.equals("CUSTOM_DOCKERFILE")
+                && !hasText(experiment.getCustomImageUri())
+                && !hasText(experiment.getDockerfilePath())) {
+            throw new IllegalStateException(
+                    "CUSTOM_DOCKERFILE source has neither customImageUri "
+                            + "nor Dockerfile path. sourceExperimentId="
+                            + experiment.getId()
+            );
+        }
     }
 
     private boolean isValidProductionRetrainingSource(
@@ -5479,32 +5663,54 @@ private void syncSingleProjectAutomatically(MlProject project) {
             String expectedRegistry
     ) {
         if (experiment == null
-                || experiment.getId() == null
-                || experiment.getStatus() != ExperimentStatus.COMPLETED
-                || !Boolean.TRUE.equals(experiment.getProduction())
-                || !hasText(experiment.getMlflowRunId())
-                || !hasText(experiment.getRegisteredModelName())
-                || !hasText(experiment.getModelVersion())
-                || !hasText(experiment.getProductionVersion())
-                || !experiment.getModelVersion().trim().equals(
-                        experiment.getProductionVersion().trim()
-                )
                 || experiment.getProject() == null
-                || experiment.getModelFile() == null
-                || experiment.getDatasetFile() == null) {
+                || experiment.getProject().getId() == null) {
             return false;
         }
 
-        return !hasText(expectedRegistry)
-                || sameRegistryName(
-                        experiment.getRegisteredModelName(),
-                        expectedRegistry
+        try {
+            validateRetrainingSourceOrThrow(
+                    experiment,
+                    experiment.getProject().getId(),
+                    "compatibility-validation"
+            );
+
+            if (hasText(expectedRegistry)
+                    && !sameRegistryName(
+                            experiment.getRegisteredModelName(),
+                            expectedRegistry
+                    )) {
+                System.out.println(
+                        "[RETRAINING_VALIDATION] Registry name differs, "
+                                + "but the source remains valid. "
+                                + "sourceExperimentId="
+                                + experiment.getId()
+                                + ", actualRegistry="
+                                + experiment.getRegisteredModelName()
+                                + ", expectedRegistry="
+                                + expectedRegistry
                 );
+            }
+
+            return true;
+
+        } catch (RuntimeException validationError) {
+            System.out.println(
+                    "[RETRAINING_VALIDATION] Source rejected. "
+                            + "sourceExperimentId="
+                            + experiment.getId()
+                            + ", reason="
+                            + safeText(validationError.getMessage())
+            );
+
+            return false;
+        }
     }
 
     private String safeText(String value) {
         return value == null ? "" : value;
     }
+
 
     public static class ScriptAnalysisResult {
         private String detectedModules;

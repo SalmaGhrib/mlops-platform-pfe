@@ -40,7 +40,7 @@ public class RetrainingConfigService {
         this.sourceResolver = sourceResolver;
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     public RetrainingConfig saveOrUpdateProjectConfig(
             Long projectId,
             RetrainingConfigRequest request
@@ -48,7 +48,7 @@ public class RetrainingConfigService {
         return saveOrUpdateInternal(projectId, null, request, false);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     public RetrainingConfig saveOrUpdateConfig(
             Long projectId,
             Long sourceExperimentId,
@@ -146,28 +146,12 @@ public class RetrainingConfigService {
         RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
 
         /*
-         * Lorsque le réentraînement est activé, on rattache la configuration
-         * à l'expérience correspondant à la version Production courante.
+         * IMPORTANT :
+         * La résolution de la source Production n'est plus effectuée ici.
+         * Elle peut appeler plusieurs services et prolonger la transaction HTTP.
+         * Le scheduler / RetrainingSourcePersistenceService résoudra la source
+         * lorsqu'une version Production sera disponible.
          */
-        if (enabled) {
-            try {
-                Long resolvedSourceId = sourceResolver.resolveSourceExperimentId(projectId);
-                saved.setSourceExperimentId(resolvedSourceId);
-                saved = retrainingConfigRepository.saveAndFlush(saved);
-            } catch (IllegalStateException noProductionYet) {
-                /*
-                 * Un projet peut être configuré avant sa première version Production.
-                 * Le scheduler pourra résoudre la source après promotion.
-                 */
-                System.out.println(
-                        "[RETRAINING_CONFIG] Enabled without Production source yet. projectId="
-                                + projectId
-                                + ", reason="
-                                + noProductionYet.getMessage()
-                );
-            }
-        }
-
         notifyConfigChanged(project, saved, enabled ? "activé" : "désactivé");
 
         return saved;
@@ -184,7 +168,7 @@ public class RetrainingConfigService {
                 .orElse(null);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     public RetrainingConfig enableDefaultWeeklyRetraining(
             Long projectId,
             Long sourceExperimentId
@@ -202,7 +186,7 @@ public class RetrainingConfigService {
         return saveOrUpdateConfig(projectId, sourceExperimentId, request);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     public RetrainingConfig disableRetraining(Long projectId) {
         if (projectId == null) {
             throw new IllegalArgumentException("projectId is required");
@@ -244,7 +228,7 @@ public class RetrainingConfigService {
         return saved;
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     public RetrainingConfig forceRetrainingNow(Long projectId) {
         if (projectId == null) {
             throw new IllegalArgumentException("projectId is required");

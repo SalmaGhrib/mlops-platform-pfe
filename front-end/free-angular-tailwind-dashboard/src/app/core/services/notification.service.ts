@@ -1,6 +1,15 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { BehaviorSubject, Observable, forkJoin } from 'rxjs';
+
+import {
+  BehaviorSubject,
+  Observable,
+  forkJoin,
+  finalize,
+  shareReplay,
+  tap,
+} from 'rxjs';
+
 import { Client, IMessage } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
 
@@ -43,64 +52,181 @@ export class NotificationService {
   private stompClient: Client | null = null;
   private connectedUserId: number | null = null;
 
-  private notificationsSubject = new BehaviorSubject<NotificationResponse[]>([]);
-  notifications$ = this.notificationsSubject.asObservable();
+  private loadingNotifications = false;
 
-  private unreadCountSubject = new BehaviorSubject<number>(0);
-  unreadCount$ = this.unreadCountSubject.asObservable();
+  private markAllRequest$: Observable<void> | null = null;
 
-  constructor(private http: HttpClient) {}
+  private readonly notificationsSubject =
+    new BehaviorSubject<NotificationResponse[]>([]);
+
+  readonly notifications$ =
+    this.notificationsSubject.asObservable();
+
+  private readonly unreadCountSubject =
+    new BehaviorSubject<number>(0);
+
+  readonly unreadCount$ =
+    this.unreadCountSubject.asObservable();
+
+  constructor(private readonly http: HttpClient) {}
 
   loadNotifications(): void {
+    if (this.loadingNotifications) {
+      return;
+    }
+
+    this.loadingNotifications = true;
+
     forkJoin({
       notifications: this.getNotifications(),
       unreadCount: this.getUnreadCount(),
-    }).subscribe({
-      next: ({ notifications, unreadCount }) => {
-        this.notificationsSubject.next(this.sortNotifications(notifications || []));
-        this.unreadCountSubject.next(unreadCount || 0);
-      },
-      error: (error) => {
-        console.error('[NOTIFICATIONS] Failed to load notifications', error);
-      },
-    });
+    })
+      .pipe(
+        finalize(() => {
+          this.loadingNotifications = false;
+        })
+      )
+      .subscribe({
+        next: ({ notifications, unreadCount }) => {
+          this.notificationsSubject.next(
+            this.sortNotifications(notifications ?? [])
+          );
+
+          this.unreadCountSubject.next(
+            Number(unreadCount ?? 0)
+          );
+        },
+
+        error: (error) => {
+          console.error(
+            '[NOTIFICATIONS] Failed to load notifications',
+            error
+          );
+        },
+      });
   }
 
   getNotifications(): Observable<NotificationResponse[]> {
-    return this.http.get<NotificationResponse[]>(this.apiUrl, {
-      headers: this.getAuthHeaders(),
-    });
+    return this.http.get<NotificationResponse[]>(
+      this.apiUrl,
+      {
+        headers: this.getAuthHeaders(),
+      }
+    );
   }
 
   getUnreadCount(): Observable<number> {
-    return this.http.get<number>(`${this.apiUrl}/unread-count`, {
-      headers: this.getAuthHeaders(),
-    });
+    return this.http.get<number>(
+      `${this.apiUrl}/unread-count`,
+      {
+        headers: this.getAuthHeaders(),
+      }
+    );
   }
 
-  markAsRead(notificationId: number): Observable<void> {
-    return this.http.put<void>(
-      `${this.apiUrl}/${notificationId}/read`,
-      {},
-      { headers: this.getAuthHeaders() }
-    );
+  markAsRead(
+    notificationId: number
+  ): Observable<void> {
+    return this.http
+      .put<void>(
+        `${this.apiUrl}/${notificationId}/read`,
+        {},
+        {
+          headers: this.getAuthHeaders(),
+        }
+      )
+      .pipe(
+        tap(() => {
+          const current =
+            this.notificationsSubject.value;
+
+          const selected =
+            current.find(
+              (notification) =>
+                notification.id === notificationId
+            );
+
+          const updated =
+            current.map((notification) =>
+              notification.id === notificationId
+                ? {
+                    ...notification,
+                    read: true,
+                  }
+                : notification
+            );
+
+          this.notificationsSubject.next(updated);
+
+          if (selected && !selected.read) {
+            this.unreadCountSubject.next(
+              Math.max(
+                0,
+                this.unreadCountSubject.value - 1
+              )
+            );
+          }
+        })
+      );
   }
 
   markAllAsRead(): Observable<void> {
-    return this.http.put<void>(
-      `${this.apiUrl}/read-all`,
-      {},
-      { headers: this.getAuthHeaders() }
-    );
+    /*
+     * Si un appel est déjà en cours, on réutilise
+     * la même requête au lieu d'en envoyer une deuxième.
+     */
+    if (this.markAllRequest$) {
+      return this.markAllRequest$;
+    }
+
+    this.markAllRequest$ = this.http
+      .put<void>(
+        `${this.apiUrl}/read-all`,
+        {},
+        {
+          headers: this.getAuthHeaders(),
+        }
+      )
+      .pipe(
+        tap(() => {
+          const updated =
+            this.notificationsSubject.value.map(
+              (notification) => ({
+                ...notification,
+                read: true,
+              })
+            );
+
+          this.notificationsSubject.next(updated);
+          this.unreadCountSubject.next(0);
+        }),
+
+        finalize(() => {
+          this.markAllRequest$ = null;
+        }),
+
+        shareReplay({
+          bufferSize: 1,
+          refCount: false,
+        })
+      );
+
+    return this.markAllRequest$;
   }
 
   refreshUnreadCount(): void {
     this.getUnreadCount().subscribe({
       next: (count) => {
-        this.unreadCountSubject.next(count || 0);
+        this.unreadCountSubject.next(
+          Number(count ?? 0)
+        );
       },
+
       error: (error) => {
-        console.error('[NOTIFICATIONS] Failed to load unread count', error);
+        console.error(
+          '[NOTIFICATIONS] Failed to load unread count',
+          error
+        );
       },
     });
   }
@@ -109,12 +235,20 @@ export class NotificationService {
     this.loadNotifications();
   }
 
-  setNotifications(notifications: NotificationResponse[]): void {
-    this.notificationsSubject.next(this.sortNotifications(notifications || []));
+  setNotifications(
+    notifications: NotificationResponse[]
+  ): void {
+    this.notificationsSubject.next(
+      this.sortNotifications(
+        notifications ?? []
+      )
+    );
   }
 
   setUnreadCount(count: number): void {
-    this.unreadCountSubject.next(count || 0);
+    this.unreadCountSubject.next(
+      Math.max(0, Number(count ?? 0))
+    );
   }
 
   connectWebSocket(): void {
@@ -122,11 +256,24 @@ export class NotificationService {
     const userId = this.getUserIdFromToken();
 
     if (!token || !userId) {
-      console.warn('[NOTIFICATIONS] WebSocket skipped: missing token or userId');
+      console.warn(
+        '[NOTIFICATIONS] WebSocket skipped: missing token or userId'
+      );
+
       return;
     }
 
-    if (this.stompClient?.connected && this.connectedUserId === userId) {
+    if (
+      this.stompClient?.connected &&
+      this.connectedUserId === userId
+    ) {
+      return;
+    }
+
+    if (
+      this.stompClient?.active &&
+      this.connectedUserId === userId
+    ) {
       return;
     }
 
@@ -135,12 +282,18 @@ export class NotificationService {
     this.connectedUserId = userId;
 
     this.stompClient = new Client({
-      webSocketFactory: () => new SockJS(this.wsUrl),
+      webSocketFactory: () =>
+        new SockJS(this.wsUrl),
+
       reconnectDelay: 5000,
+
       debug: () => {},
 
       onConnect: () => {
-        console.log('[NOTIFICATIONS] WebSocket connected for userId=', userId);
+        console.log(
+          '[NOTIFICATIONS] WebSocket connected for userId=',
+          userId
+        );
 
         this.stompClient?.subscribe(
           `/topic/users/${userId}/notifications`,
@@ -153,11 +306,17 @@ export class NotificationService {
       },
 
       onStompError: (frame) => {
-        console.error('[NOTIFICATIONS] STOMP error', frame);
+        console.error(
+          '[NOTIFICATIONS] STOMP error',
+          frame
+        );
       },
 
       onWebSocketError: (error) => {
-        console.error('[NOTIFICATIONS] WebSocket error', error);
+        console.error(
+          '[NOTIFICATIONS] WebSocket error',
+          error
+        );
       },
     });
 
@@ -165,99 +324,156 @@ export class NotificationService {
   }
 
   disconnectWebSocket(): void {
-    if (this.stompClient) {
-      this.stompClient.deactivate();
-      this.stompClient = null;
+    const client = this.stompClient;
+
+    this.stompClient = null;
+    this.connectedUserId = null;
+
+    if (!client) {
+      return;
     }
 
-    this.connectedUserId = null;
+    void client.deactivate();
   }
 
   clearState(): void {
     this.notificationsSubject.next([]);
     this.unreadCountSubject.next(0);
+
+    this.loadingNotifications = false;
+    this.markAllRequest$ = null;
+
     this.disconnectWebSocket();
   }
 
-  private handleIncomingNotification(message: IMessage): void {
+  private handleIncomingNotification(
+    message: IMessage
+  ): void {
     try {
-      const notification = JSON.parse(message.body) as NotificationResponse;
-      const currentUserId = this.getUserIdFromToken();
+      const notification =
+        JSON.parse(message.body) as NotificationResponse;
+
+      const currentUserId =
+        this.getUserIdFromToken();
 
       if (
         !currentUserId ||
         !notification.recipientUserId ||
-        Number(notification.recipientUserId) !== Number(currentUserId)
+        Number(notification.recipientUserId) !==
+          Number(currentUserId)
       ) {
-        console.warn('[NOTIFICATIONS] Ignored notification for another user', {
-          recipientUserId: notification.recipientUserId,
-          currentUserId,
-        });
+        console.warn(
+          '[NOTIFICATIONS] Ignored notification for another user',
+          {
+            recipientUserId:
+              notification.recipientUserId,
+
+            currentUserId,
+          }
+        );
+
         return;
       }
 
-      const current = this.notificationsSubject.value || [];
-      const exists = current.some((item) => item.id === notification.id);
+      const current =
+        this.notificationsSubject.value ?? [];
 
-      const updated = exists
-        ? current.map((item) => (item.id === notification.id ? notification : item))
+      const existing =
+        current.find(
+          (item) => item.id === notification.id
+        );
+
+      const updated = existing
+        ? current.map((item) =>
+            item.id === notification.id
+              ? notification
+              : item
+          )
         : [notification, ...current];
 
-      this.notificationsSubject.next(this.sortNotifications(updated));
-      this.refreshUnreadCount();
+      this.notificationsSubject.next(
+        this.sortNotifications(updated)
+      );
 
+      if (!existing && !notification.read) {
+        this.unreadCountSubject.next(
+          this.unreadCountSubject.value + 1
+        );
+      }
     } catch (error) {
-      console.error('[NOTIFICATIONS] Invalid WebSocket notification', error);
+      console.error(
+        '[NOTIFICATIONS] Invalid WebSocket notification',
+        error
+      );
     }
   }
 
-  private sortNotifications(notifications: NotificationResponse[]): NotificationResponse[] {
+  private sortNotifications(
+    notifications: NotificationResponse[]
+  ): NotificationResponse[] {
     return [...notifications].sort((a, b) => {
-      const dateA = this.toTimestamp(a.createdAt);
-      const dateB = this.toTimestamp(b.createdAt);
+      const dateA =
+        this.toTimestamp(a.createdAt);
+
+      const dateB =
+        this.toTimestamp(b.createdAt);
+
       return dateB - dateA;
     });
   }
 
-  private toTimestamp(value: string | null | undefined): number {
-    const date = this.parseBackendDate(value);
+  private toTimestamp(
+    value: string | null | undefined
+  ): number {
+    const date =
+      this.parseBackendDate(value);
+
     return date ? date.getTime() : 0;
   }
 
-  private parseBackendDate(value: string | null | undefined): Date | null {
+  private parseBackendDate(
+    value: string | null | undefined
+  ): Date | null {
     if (!value) {
       return null;
     }
 
-    const clean = String(value).trim();
+    const clean =
+      String(value).trim();
 
     if (!clean) {
       return null;
     }
 
-    const hasTimezone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(clean);
-    const normalized = hasTimezone ? clean : `${clean}Z`;
+    const hasTimezone =
+      /([zZ]|[+-]\d{2}:?\d{2})$/.test(clean);
 
-    const date = new Date(normalized);
+    const normalized =
+      hasTimezone
+        ? clean
+        : `${clean}Z`;
 
-    if (Number.isNaN(date.getTime())) {
-      return null;
-    }
+    const date =
+      new Date(normalized);
 
-    return date;
+    return Number.isNaN(date.getTime())
+      ? null
+      : date;
   }
 
   private getAuthHeaders(): HttpHeaders {
     const token = this.getToken();
 
+    if (!token) {
+      return new HttpHeaders();
+    }
+
     return new HttpHeaders({
-      Authorization: token ? `Bearer ${token}` : '',
+      Authorization: `Bearer ${token}`,
     });
   }
 
   private getToken(): string | null {
-    // La session courante est prioritaire. Cela évite qu'un ancien token
-    // persistant d'un autre compte soit utilisé dans une deuxième session.
     return (
       sessionStorage.getItem('mlops_token') ||
       sessionStorage.getItem('token') ||
@@ -283,17 +499,35 @@ export class NotificationService {
       const normalizedPayload = payload
         .replace(/-/g, '+')
         .replace(/_/g, '/')
-        .padEnd(Math.ceil(payload.length / 4) * 4, '=');
-      const decodedPayload = JSON.parse(atob(normalizedPayload));
+        .padEnd(
+          Math.ceil(payload.length / 4) * 4,
+          '='
+        );
 
-      return (
-        decodedPayload.userId ||
-        decodedPayload.id ||
-        decodedPayload.subId ||
-        null
-      );
+      const decodedPayload =
+        JSON.parse(atob(normalizedPayload));
+
+      const rawUserId =
+        decodedPayload.userId ??
+        decodedPayload.id ??
+        decodedPayload.subId ??
+        null;
+
+      if (rawUserId === null) {
+        return null;
+      }
+
+      const userId = Number(rawUserId);
+
+      return Number.isFinite(userId)
+        ? userId
+        : null;
     } catch (error) {
-      console.error('[NOTIFICATIONS] Failed to decode token', error);
+      console.error(
+        '[NOTIFICATIONS] Failed to decode token',
+        error
+      );
+
       return null;
     }
   }

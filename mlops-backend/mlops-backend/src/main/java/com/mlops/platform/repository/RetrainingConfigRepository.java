@@ -6,197 +6,333 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface RetrainingConfigRepository extends JpaRepository<RetrainingConfig, Long> {
+public interface RetrainingConfigRepository
+        extends JpaRepository<RetrainingConfig, Long> {
 
-    Optional<RetrainingConfig> findByProjectId(Long projectId);
-
-    @Query("""
-            SELECT c
-            FROM RetrainingConfig c
-            WHERE c.enabled = true
-            ORDER BY c.id ASC
-            """)
-    List<RetrainingConfig> findEnabledConfigs();
-
-    @Modifying(clearAutomatically = true)
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    @Query("""
-            UPDATE RetrainingConfig c
-            SET c.sourceExperimentId = :sourceExperimentId,
-                c.updatedAt = :updatedAt
-            WHERE c.projectId = :projectId
-              AND (
-                    c.sourceExperimentId IS NULL
-                    OR c.sourceExperimentId <> :sourceExperimentId
-              )
-            """)
-    int synchronizeSourceExperiment(
-            @Param("projectId") Long projectId,
-            @Param("sourceExperimentId") Long sourceExperimentId,
-            @Param("updatedAt") LocalDateTime updatedAt
+    Optional<RetrainingConfig> findByProjectId(
+            Long projectId
     );
 
-    List<RetrainingConfig> findByEnabledTrueAndRunningFalseAndNextRetrainingAtIsNotNullAndNextRetrainingAtLessThanEqual(
+    /**
+     * Retourne uniquement la source actuellement enregistrée.
+     *
+     * Cette lecture permet d'éviter un UPDATE inutile lorsque le cache est
+     * déjà synchronisé avec la Production courante.
+     */
+    @Query("""
+        select c.sourceExperimentId
+        from RetrainingConfig c
+        where c.projectId = :projectId
+        """)
+    Optional<Long> findSourceExperimentIdByProjectId(
+            @Param("projectId") Long projectId
+    );
+
+    /**
+     * Configurations actives.
+     *
+     * Cette méthode est une lecture pure : elle ne doit provoquer aucune
+     * modification de sourceExperimentId.
+     */
+    @Query("""
+        select c
+        from RetrainingConfig c
+        where c.enabled = true
+        order by c.id asc
+        """)
+    List<RetrainingConfig> findEnabledConfigs();
+
+    /**
+     * Met à jour sourceExperimentId uniquement lorsque la valeur a
+     * réellement changé.
+     *
+     * La transaction est gérée par RetrainingSourcePersistenceService.
+     * Il ne faut donc pas placer REQUIRES_NEW ici.
+     */
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
+    @Query("""
+        update RetrainingConfig c
+           set c.sourceExperimentId = :sourceExperimentId,
+               c.updatedAt = :updatedAt
+         where c.projectId = :projectId
+           and (
+                c.sourceExperimentId is null
+                or c.sourceExperimentId <> :sourceExperimentId
+           )
+        """)
+    int updateSourceExperimentIfChanged(
+            @Param("projectId")
+            Long projectId,
+
+            @Param("sourceExperimentId")
+            Long sourceExperimentId,
+
+            @Param("updatedAt")
+            LocalDateTime updatedAt
+    );
+
+    /**
+     * Ancienne méthode Spring Data conservée si elle est encore utilisée
+     * ailleurs dans le projet.
+     *
+     * Pour le scheduler principal, utiliser findDueConfigs().
+     */
+    List<RetrainingConfig>
+    findByEnabledTrueAndRunningFalseAndNextRetrainingAtIsNotNullAndNextRetrainingAtLessThanEqual(
             LocalDateTime now
     );
 
+    /**
+     * Configurations réclamables par le scheduler.
+     *
+     * Une configuration est due lorsque :
+     * - une demande manuelle existe ;
+     * - ou nextRetrainingAt est atteint.
+     *
+     * La stratégie seule ne rend jamais une configuration due.
+     */
     @Query("""
-            SELECT c
-            FROM RetrainingConfig c
-            WHERE c.enabled = true
-              AND c.running = false
-              AND (
-                    c.manualTriggerRequested = true
-                    OR (
-                        c.nextRetrainingAt IS NOT NULL
-                        AND c.nextRetrainingAt <= :now
-                    )
-              )
-            ORDER BY
-                CASE WHEN c.manualTriggerRequested = true THEN 0 ELSE 1 END,
-                c.nextRetrainingAt ASC,
-                c.id ASC
-            """)
-    List<RetrainingConfig> findDueConfigs(@Param("now") LocalDateTime now);
+        select c
+        from RetrainingConfig c
+        where c.enabled = true
+          and c.running = false
+          and (
+                c.manualTriggerRequested = true
+                or (
+                    c.nextRetrainingAt is not null
+                    and c.nextRetrainingAt <= :now
+                )
+          )
+        order by
+            case
+                when c.manualTriggerRequested = true then 0
+                else 1
+            end,
+            c.nextRetrainingAt asc,
+            c.id asc
+        """)
+    List<RetrainingConfig> findDueConfigs(
+            @Param("now") LocalDateTime now
+    );
 
+    /**
+     * Configurations actives qui ne sont pas actuellement réclamées.
+     *
+     * Cette méthode est utile pour la réparation périodique, mais le service
+     * de réparation doit éviter toute écriture lorsque la source est déjà
+     * correcte.
+     */
     @Query("""
-            SELECT c
-            FROM RetrainingConfig c
-            WHERE c.enabled = true
-              AND c.running = false
-            ORDER BY c.updatedAt ASC, c.id ASC
-            """)
+        select c
+        from RetrainingConfig c
+        where c.enabled = true
+          and c.running = false
+        order by c.updatedAt asc, c.id asc
+        """)
     List<RetrainingConfig> findEnabledNotRunningConfigs();
 
-    @Modifying(clearAutomatically = true)
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    @Query("""
-            UPDATE RetrainingConfig c
-            SET c.running = true,
-                c.updatedAt = :now
-            WHERE c.id = :id
-              AND c.enabled = true
-              AND c.running = false
-              AND (
-                    c.manualTriggerRequested = true
-                    OR (
-                        c.nextRetrainingAt IS NOT NULL
-                        AND c.nextRetrainingAt <= :now
-                    )
-              )
-            """)
-    int claimDueConfig(
-            @Param("id") Long id,
-            @Param("now") LocalDateTime now
-    );
-
-    @Modifying(clearAutomatically = true)
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    @Query("""
-            UPDATE RetrainingConfig c
-            SET c.running = false,
-                c.manualTriggerRequested = false,
-                c.lastRetrainingAt = :lastRetrainingAt,
-                c.nextRetrainingAt = :nextRetrainingAt,
-                c.lastMonitoringCheckAt = :updatedAt,
-                c.updatedAt = :updatedAt
-            WHERE c.id = :id
-              AND c.running = true
-            """)
-    int releaseAfterSuccess(
-            @Param("id") Long id,
-            @Param("lastRetrainingAt") LocalDateTime lastRetrainingAt,
-            @Param("nextRetrainingAt") LocalDateTime nextRetrainingAt,
-            @Param("updatedAt") LocalDateTime updatedAt
-    );
-
-    @Modifying(clearAutomatically = true)
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    @Query("""
-            UPDATE RetrainingConfig c
-            SET c.running = false,
-                c.manualTriggerRequested = false,
-                c.nextRetrainingAt = :nextRetrainingAt,
-                c.lastMonitoringCheckAt = :updatedAt,
-                c.updatedAt = :updatedAt
-            WHERE c.id = :id
-              AND c.running = true
-            """)
-    int releaseAfterFailure(
-            @Param("id") Long id,
-            @Param("nextRetrainingAt") LocalDateTime nextRetrainingAt,
-            @Param("updatedAt") LocalDateTime updatedAt
-    );
-
-    @Modifying(clearAutomatically = true)
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    @Query("""
-            UPDATE RetrainingConfig c
-            SET c.running = false,
-                c.manualTriggerRequested = false,
-                c.nextRetrainingAt = :nextRetrainingAt,
-                c.lastDecisionReason = :decisionReason,
-                c.lastMonitoringCheckAt = :updatedAt,
-                c.updatedAt = :updatedAt
-            WHERE c.id = :id
-              AND c.running = true
-            """)
-    int releaseAfterSkipped(
-            @Param("id") Long id,
-            @Param("nextRetrainingAt") LocalDateTime nextRetrainingAt,
-            @Param("decisionReason") String decisionReason,
-            @Param("updatedAt") LocalDateTime updatedAt
-    );
-
-    /*
-     * Demande intelligente atomique.
+    /**
+     * Claim atomique.
      *
-     * manualTriggerRequested=true est le signal durable principal.
-     * nextRetrainingAt placé dans le passé reste un signal complémentaire.
-     * Ainsi, une légère différence d'horloge ou un cycle concurrent ne peut
-     * pas faire disparaître silencieusement la demande.
+     * Deux pods ou deux threads ne peuvent pas réclamer la même configuration.
+     * La transaction courte est gérée par le scheduler/service appelant.
      */
-    @Modifying(clearAutomatically = true)
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
     @Query("""
-            UPDATE RetrainingConfig c
-            SET c.manualTriggerRequested = true,
-                c.nextRetrainingAt = :nextRetrainingAt,
-                c.lastTriggerReason = :triggerReason,
-                c.lastDecisionReason = :decisionReason,
-                c.updatedAt = :updatedAt
-            WHERE c.id = :id
-              AND c.enabled = true
-              AND c.running = false
-            """)
-    int requestSmartRetraining(
-            @Param("id") Long id,
-            @Param("nextRetrainingAt") LocalDateTime nextRetrainingAt,
-            @Param("triggerReason") String triggerReason,
-            @Param("decisionReason") String decisionReason,
-            @Param("updatedAt") LocalDateTime updatedAt
+        update RetrainingConfig c
+           set c.running = true,
+               c.updatedAt = :now
+         where c.id = :id
+           and c.enabled = true
+           and c.running = false
+           and (
+                c.manualTriggerRequested = true
+                or (
+                    c.nextRetrainingAt is not null
+                    and c.nextRetrainingAt <= :now
+                )
+           )
+        """)
+    int claimDueConfig(
+            @Param("id")
+            Long id,
+
+            @Param("now")
+            LocalDateTime now
     );
 
-    @Modifying(clearAutomatically = true)
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    /**
+     * Libération après création réussie d'un nouveau run.
+     */
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
     @Query("""
-            UPDATE RetrainingConfig c
-            SET c.running = false,
-                c.updatedAt = :now
-            WHERE c.running = true
-              AND c.updatedAt IS NOT NULL
-              AND c.updatedAt < :cutoff
-            """)
+        update RetrainingConfig c
+           set c.running = false,
+               c.manualTriggerRequested = false,
+               c.lastRetrainingAt = :lastRetrainingAt,
+               c.nextRetrainingAt = :nextRetrainingAt,
+               c.lastMonitoringCheckAt = :updatedAt,
+               c.lastTriggerReason = 'SUCCESS',
+               c.updatedAt = :updatedAt
+         where c.id = :id
+           and c.running = true
+        """)
+    int releaseAfterSuccess(
+            @Param("id")
+            Long id,
+
+            @Param("lastRetrainingAt")
+            LocalDateTime lastRetrainingAt,
+
+            @Param("nextRetrainingAt")
+            LocalDateTime nextRetrainingAt,
+
+            @Param("updatedAt")
+            LocalDateTime updatedAt
+    );
+
+    /**
+     * Libération après échec du lancement.
+     */
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
+    @Query("""
+        update RetrainingConfig c
+           set c.running = false,
+               c.manualTriggerRequested = false,
+               c.nextRetrainingAt = :nextRetrainingAt,
+               c.lastMonitoringCheckAt = :updatedAt,
+               c.lastTriggerReason = 'FAILED',
+               c.updatedAt = :updatedAt
+         where c.id = :id
+           and c.running = true
+        """)
+    int releaseAfterFailure(
+            @Param("id")
+            Long id,
+
+            @Param("nextRetrainingAt")
+            LocalDateTime nextRetrainingAt,
+
+            @Param("updatedAt")
+            LocalDateTime updatedAt
+    );
+
+    /**
+     * Libération lorsqu'aucun signal ne justifie un réentraînement.
+     */
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
+    @Query("""
+        update RetrainingConfig c
+           set c.running = false,
+               c.manualTriggerRequested = false,
+               c.nextRetrainingAt = :nextRetrainingAt,
+               c.lastDecisionReason = :decisionReason,
+               c.lastMonitoringCheckAt = :updatedAt,
+               c.lastTriggerReason = 'SKIPPED',
+               c.updatedAt = :updatedAt
+         where c.id = :id
+           and c.running = true
+        """)
+    int releaseAfterSkipped(
+            @Param("id")
+            Long id,
+
+            @Param("nextRetrainingAt")
+            LocalDateTime nextRetrainingAt,
+
+            @Param("decisionReason")
+            String decisionReason,
+
+            @Param("updatedAt")
+            LocalDateTime updatedAt
+    );
+
+    /**
+     * Demande manuelle ou intelligente atomique.
+     *
+     * La condition running=false empêche de demander un second lancement
+     * pendant qu'un premier traitement est encore actif.
+     */
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
+    @Query("""
+        update RetrainingConfig c
+           set c.manualTriggerRequested = true,
+               c.nextRetrainingAt = :nextRetrainingAt,
+               c.lastTriggerReason = :triggerReason,
+               c.lastDecisionReason = :decisionReason,
+               c.updatedAt = :updatedAt
+         where c.id = :id
+           and c.enabled = true
+           and c.running = false
+           and c.manualTriggerRequested = false
+        """)
+    int requestSmartRetraining(
+            @Param("id")
+            Long id,
+
+            @Param("nextRetrainingAt")
+            LocalDateTime nextRetrainingAt,
+
+            @Param("triggerReason")
+            String triggerReason,
+
+            @Param("decisionReason")
+            String decisionReason,
+
+            @Param("updatedAt")
+            LocalDateTime updatedAt
+    );
+
+    /**
+     * Répare les configurations bloquées.
+     *
+     * On ne modifie que les lignes réellement anciennes.
+     */
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
+    @Query("""
+        update RetrainingConfig c
+           set c.running = false,
+               c.manualTriggerRequested = false,
+               c.lastTriggerReason = 'STUCK_RESET',
+               c.lastDecisionReason =
+                   'Le verrou de réentraînement a été réinitialisé automatiquement.',
+               c.updatedAt = :now
+         where c.running = true
+           and c.updatedAt is not null
+           and c.updatedAt < :cutoff
+        """)
     int resetStuckRunningConfigs(
-            @Param("cutoff") LocalDateTime cutoff,
-            @Param("now") LocalDateTime now
+            @Param("cutoff")
+            LocalDateTime cutoff,
+
+            @Param("now")
+            LocalDateTime now
     );
 }

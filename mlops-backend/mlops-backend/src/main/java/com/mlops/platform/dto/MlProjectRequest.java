@@ -12,44 +12,13 @@ public class MlProjectRequest {
     @Size(max = 2000, message = "Description must not exceed 2000 characters")
     private String description;
 
-    /**
-     * Type de données :
-     * - TABULAR
-     * - IMAGE
-     * - TEXT
-     */
     private String dataType;
-
-    /**
-     * Type de tâche :
-     * - classification
-     * - regression
-     * - sentiment_analysis
-     * - translation
-     * - qa
-     * - llm_finetuning
-     * - custom
-     */
-   
-
     private String runtimeMode;
-
-    /**
-     * Ancien champ gardé pour compatibilité :
-     * - regression
-     * - classification
-     */
     private String projectType;
 
     @Size(max = 255, message = "Target column must not exceed 255 characters")
     private String targetColumn;
 
-    /**
-     * Ordre de priorité des métriques.
-     * primaryMetric1 = priorité 1
-     * primaryMetric2 = priorité 2
-     * primaryMetric3 = priorité 3
-     */
     @Size(max = 100, message = "Primary metric 1 must not exceed 100 characters")
     private String primaryMetric1;
 
@@ -60,7 +29,6 @@ public class MlProjectRequest {
     private String primaryMetric3;
 
     private Boolean autoPromoteBestModel;
-
     private RetrainingConfigRequest retrainingConfig;
 
     public String getName() {
@@ -86,8 +54,6 @@ public class MlProjectRequest {
     public void setDataType(String dataType) {
         this.dataType = cleanUpper(dataType);
     }
-
-    
 
     public String getRuntimeMode() {
         return runtimeMode;
@@ -154,36 +120,22 @@ public class MlProjectRequest {
     }
 
     private String cleanText(String value) {
-        if (value == null) {
-            return null;
-        }
-
-        return value.trim();
+        return value == null ? null : value.trim();
     }
 
     private String cleanNullableText(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-
-        return value.trim();
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private String cleanLower(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-
-        return value.trim().toLowerCase();
+        return value == null || value.isBlank()
+                ? null
+                : value.trim().toLowerCase();
     }
 
     private String cleanUpper(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-
-        return value.trim().toUpperCase();
+        return value == null || value.isBlank()
+                ? null
+                : value.trim().toUpperCase();
     }
-
-    
 }

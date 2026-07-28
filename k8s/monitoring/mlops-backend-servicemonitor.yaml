@@ -1,18 +1,27 @@
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
+
 metadata:
-  name: mlops-backend-servicemonitor
+  name: mlops-backend
   namespace: monitoring
   labels:
-    release: kube-prometheus-stack
+    app: mlops-backend
+    app.kubernetes.io/name: mlops-backend
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: mlops-platform
+
 spec:
   namespaceSelector:
     matchNames:
       - mlops
+
   selector:
     matchLabels:
       app: mlops-backend
+
   endpoints:
     - port: http
       path: /actuator/prometheus
+      scheme: http
       interval: 15s
+      scrapeTimeout: 10s
