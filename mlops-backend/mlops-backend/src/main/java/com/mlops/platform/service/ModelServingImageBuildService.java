@@ -29,7 +29,7 @@ public class ModelServingImageBuildService {
      * Cette version empêche définitivement les images dédiées de repartir avec
      * un ancien main.py qui demande --config ou qui charge mal MLflow.
      */
-    private static final String SAFE_SERVING_TEMPLATE_VERSION = "2026-07-15-adaptive-image-text-tabular-v6";
+    private static final String SAFE_SERVING_TEMPLATE_VERSION = "2026-07-30-resilient-image-metadata-v7";
 
     private static final String SAFE_DOCKERFILE_TEMPLATE = """
 FROM python:3.10-slim
@@ -90,7 +90,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
                 "Generic prediction API for MLflow production models. "
                 "Supports MLflow PyFunc, pickle/joblib bundles and TorchScript/PyTorch artifacts."
             ),
-            version="6.2.1-universal-prediction",
+            version="6.3.0-resilient-image-metadata",
         )
 
         loaded_models: Dict[str, Dict[str, Any]] = {}
@@ -510,11 +510,21 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
             try:
                 pyfunc_model = mlflow.pyfunc.load_model(model_uri)
 
+                try:
+                    local_dir = mlflow.artifacts.download_artifacts(model_uri)
+                    sidecar_metadata = load_sidecar_metadata(local_dir)
+                except Exception as metadata_exc:
+                    local_dir = None
+                    sidecar_metadata = {}
+                    print(f"[MODEL LOADER] Sidecar metadata preload failed: {metadata_exc}")
+
                 loaded = {
                     "type": "pyfunc",
                     "model": pyfunc_model,
+                    "metadata": sidecar_metadata,
                     "model_uri": model_uri,
                     "version_info": version_info,
+                    "local_dir": local_dir,
                     "loaded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
 
@@ -972,36 +982,315 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
             return pd.DataFrame([values], columns=columns)
 
 
-        def prepare_adaptive_image_input(loaded: Dict[str, Any], image: Image.Image) -> Tuple[str, pd.DataFrame, List[str]]:
-            if loaded.get("type") == "torch":
-                rgb = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
-                return "image_raw_tensor", pd.DataFrame([{"image": rgb.tolist()}]), ["image"]
+        def _coerce_positive_int(value: Any) -> Optional[int]:
+            if isinstance(value, (list, tuple)) and value:
+                value = value[0]
+            try:
+                parsed = int(value)
+                return parsed if parsed > 0 else None
+            except (TypeError, ValueError):
+                return None
 
+
+        def _resolve_image_metadata(
+            model: Any,
+            metadata: Dict[str, Any],
+        ) -> Dict[str, Any]:
+            '''
+            Normalise les métadonnées image sans inventer de valeurs silencieusement.
+            Les métadonnées MLflow sont prioritaires; les attributs du wrapper servent
+            uniquement de secours.
+            '''
+            normalized = dict(metadata or {})
+
+            embedded = getattr(model, "metadata", None)
+            if isinstance(embedded, dict):
+                normalized = _deep_merge_dict(embedded, normalized)
+
+            preprocessing = normalized.get("preprocessing")
+            if not isinstance(preprocessing, dict):
+                preprocessing = {}
+
+            image_size_value = (
+                normalized.get("image_size")
+                or preprocessing.get("image_size")
+                or preprocessing.get("resize")
+                or getattr(model, "image_size", None)
+            )
+
+            if isinstance(image_size_value, (list, tuple)):
+                if len(image_size_value) >= 2:
+                    height = _coerce_positive_int(image_size_value[0])
+                    width = _coerce_positive_int(image_size_value[1])
+                elif len(image_size_value) == 1:
+                    height = width = _coerce_positive_int(image_size_value[0])
+                else:
+                    height = width = None
+            else:
+                height = width = _coerce_positive_int(image_size_value)
+
+            resize_value = preprocessing.get("resize") or (
+                [height, width] if height and width else None
+            )
+            if isinstance(resize_value, (int, float, str)):
+                side = _coerce_positive_int(resize_value)
+                resize_value = [side, side] if side else None
+
+            if isinstance(resize_value, (list, tuple)) and len(resize_value) >= 2:
+                resize_h = _coerce_positive_int(resize_value[0])
+                resize_w = _coerce_positive_int(resize_value[1])
+            else:
+                resize_h = resize_w = None
+
+            if not (resize_h and resize_w):
+                resize_h, resize_w = height, width
+
+            class_names = (
+                normalized.get("class_names")
+                or normalized.get("classes")
+                or normalized.get("labels")
+                or getattr(model, "labels", None)
+                or []
+            )
+            if not isinstance(class_names, (list, tuple)):
+                class_names = []
+
+            framework = normalize_text(
+                normalized.get("framework")
+                or preprocessing.get("framework")
+                or type(model).__name__
+            ).lower()
+
+            model_type = normalize_text(normalized.get("model_type")).lower()
+            data_type = normalize_text(normalized.get("data_type")).lower()
+
+            is_tensor_image = (
+                data_type in {"image", "images", "vision"}
+                or model_type in {"image_classification", "image-classification"}
+                or framework in {"pytorch", "torch", "tensorflow", "keras"}
+                or "torch" in type(model).__name__.lower()
+            )
+
+            if not is_tensor_image:
+                return normalized
+
+            if not (resize_h and resize_w):
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "message": "Image model metadata is incomplete: resize/image_size is missing.",
+                        "metadata_keys": list(normalized.keys()),
+                        "model_type": type(model).__name__,
+                    },
+                )
+
+            layout = normalize_text(
+                preprocessing.get("layout")
+                or normalized.get("layout")
+                or "NCHW"
+            ).upper()
+
+            color_mode = normalize_text(
+                preprocessing.get("color_mode")
+                or normalized.get("color_mode")
+                or "RGB"
+            ).upper()
+
+            normalize_cfg = preprocessing.get("normalize")
+            if not isinstance(normalize_cfg, dict):
+                normalize_cfg = {}
+
+            mean = normalize_cfg.get("mean")
+            std = normalize_cfg.get("std")
+
+            normalized["framework"] = normalized.get("framework") or (
+                "pytorch" if "torch" in framework else framework
+            )
+            normalized["data_type"] = normalized.get("data_type") or "image"
+            normalized["model_type"] = normalized.get("model_type") or "image_classification"
+            normalized["image_size"] = normalized.get("image_size") or [resize_h, resize_w]
+            normalized["input_shape"] = normalized.get("input_shape") or [3, resize_h, resize_w]
+            normalized["class_names"] = [str(item) for item in class_names]
+            normalized["preprocessing"] = {
+                **preprocessing,
+                "type": preprocessing.get("type") or "image",
+                "resize": [resize_h, resize_w],
+                "color_mode": color_mode,
+                "layout": layout,
+                "dtype": preprocessing.get("dtype") or "float32",
+                "rescale": preprocessing.get("rescale") or "0_1",
+            }
+
+            if mean is not None or std is not None:
+                normalized["preprocessing"]["normalize"] = {
+                    "mean": mean if mean is not None else [0.0, 0.0, 0.0],
+                    "std": std if std is not None else [1.0, 1.0, 1.0],
+                }
+
+            return normalized
+
+
+        def _expand_channel_stats(values: Any, channels: int, default: float) -> np.ndarray:
+            if values is None:
+                return np.full((channels,), default, dtype=np.float32)
+
+            arr = np.asarray(values, dtype=np.float32).reshape(-1)
+            if arr.size == 1:
+                arr = np.repeat(arr, channels)
+
+            if arr.size != channels:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "message": "Invalid normalization metadata.",
+                        "expected_channels": channels,
+                        "received_values": arr.tolist(),
+                    },
+                )
+
+            return arr
+
+
+        def image_to_tensor_array(
+            image: Image.Image,
+            metadata: Dict[str, Any],
+        ) -> np.ndarray:
+            preprocessing = metadata.get("preprocessing") or {}
+            resize = preprocessing.get("resize") or metadata.get("image_size")
+
+            if not isinstance(resize, (list, tuple)) or len(resize) < 2:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Image resize metadata is missing or invalid."
+                )
+
+            height = _coerce_positive_int(resize[0])
+            width = _coerce_positive_int(resize[1])
+            if not height or not width:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid resize dimensions: {resize}"
+                )
+
+            color_mode = normalize_text(preprocessing.get("color_mode") or "RGB").upper()
+            pil_mode = "L" if color_mode in {"L", "GRAY", "GREYSCALE", "GRAYSCALE"} else "RGB"
+
+            prepared = image.convert(pil_mode).resize(
+                (width, height),
+                Image.Resampling.BILINEAR,
+            )
+            array = np.asarray(prepared, dtype=np.float32)
+
+            if array.ndim == 2:
+                array = array[..., np.newaxis]
+
+            rescale = normalize_text(preprocessing.get("rescale") or "0_1").lower()
+            if rescale in {"0_1", "0-1", "1/255", "divide_255", "true"} or array.max() > 1.0:
+                array = array / 255.0
+
+            normalize_cfg = preprocessing.get("normalize")
+            if isinstance(normalize_cfg, dict):
+                channels = int(array.shape[-1])
+                mean = _expand_channel_stats(normalize_cfg.get("mean"), channels, 0.0)
+                std = _expand_channel_stats(normalize_cfg.get("std"), channels, 1.0)
+
+                if np.any(std == 0):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Normalization std cannot contain zero."
+                    )
+
+                array = (
+                    array - mean.reshape(1, 1, channels)
+                ) / std.reshape(1, 1, channels)
+
+            layout = normalize_text(preprocessing.get("layout") or "NCHW").upper()
+            if layout in {"NCHW", "CHW"}:
+                array = np.transpose(array, (2, 0, 1))
+            elif layout not in {"NHWC", "HWC"}:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unsupported image tensor layout: {layout}"
+                )
+
+            # Always add a batch dimension.
+            array = np.expand_dims(array, axis=0).astype(np.float32)
+
+            print(
+                "[IMAGE PREPROCESSING] Tensor prepared. "
+                f"shape={array.shape}, dtype={array.dtype}, "
+                f"layout={layout}, resize={[height, width]}"
+            )
+            return array
+
+
+        def prepare_adaptive_image_input(
+            loaded: Dict[str, Any],
+            image: Image.Image,
+        ) -> Tuple[str, Any, List[str]]:
             model, metadata = _underlying_model_and_metadata(loaded)
-            feature_names = _expected_feature_names(model, metadata)
-            feature_count = _expected_feature_count(model, metadata, feature_names)
+            metadata = _resolve_image_metadata(model, metadata)
+            loaded["metadata"] = metadata
 
-            preprocessing = metadata.get("preprocessing") if isinstance(metadata.get("preprocessing"), dict) else {}
+            preprocessing = (
+                metadata.get("preprocessing")
+                if isinstance(metadata.get("preprocessing"), dict)
+                else {}
+            )
             preprocessing_type = normalize_text(
                 preprocessing.get("type")
                 or metadata.get("preprocessing_type")
                 or metadata.get("image_preprocessing")
             ).lower()
 
+            framework = normalize_text(metadata.get("framework")).lower()
+            data_type = normalize_text(metadata.get("data_type")).lower()
+            model_type = normalize_text(metadata.get("model_type")).lower()
+
+            # Generic tensor image path for MLflow PyFunc/PyTorch/TensorFlow wrappers.
+            if (
+                preprocessing_type in {"image", "tensor", "image_tensor", "cnn"}
+                or data_type in {"image", "images", "vision"}
+                or model_type in {"image_classification", "image-classification"}
+                or framework in {"pytorch", "torch", "tensorflow", "keras"}
+                or "torch" in type(model).__name__.lower()
+            ):
+                tensor_array = image_to_tensor_array(image, metadata)
+                return "image_tensor_metadata", tensor_array, ["image"]
+
+            # Existing tabular-image paths are preserved.
+            feature_names = _expected_feature_names(model, metadata)
+            feature_count = _expected_feature_count(model, metadata, feature_names)
             feature_set = set(feature_names)
-            if preprocessing_type in {"rgb_statistics", "rgb_stats", "color_rgb_statistics"} or set(RGB_STATS_14_COLUMNS).issubset(feature_set) or feature_count == 14:
+
+            if (
+                preprocessing_type in {"rgb_statistics", "rgb_stats", "color_rgb_statistics"}
+                or set(RGB_STATS_14_COLUMNS).issubset(feature_set)
+                or feature_count == 14
+            ):
                 frame = extract_rgb_statistics_14(image)
                 if feature_names and set(feature_names) == set(frame.columns):
                     frame = frame[feature_names]
                 return "image_rgb_statistics_14", frame, list(frame.columns)
 
-            if preprocessing_type in {"color_statistics", "rgb_hsv_statistics", "color_stats_11"} or set(COLOR_STATS_11_COLUMNS).issubset(feature_set) or feature_count == 11:
+            if (
+                preprocessing_type in {"color_statistics", "rgb_hsv_statistics", "color_stats_11"}
+                or set(COLOR_STATS_11_COLUMNS).issubset(feature_set)
+                or feature_count == 11
+            ):
                 frame = extract_color_statistics_11(image)
                 if feature_names and set(feature_names) == set(frame.columns):
                     frame = frame[feature_names]
                 return "image_color_statistics_11", frame, list(frame.columns)
 
-            if preprocessing_type in {"flattened_pixels", "pixels", "mnist"} or (feature_count is not None and feature_count > 0 and int(round(feature_count ** 0.5)) ** 2 == feature_count):
+            if (
+                preprocessing_type in {"flattened_pixels", "pixels", "mnist"}
+                or (
+                    feature_count is not None
+                    and feature_count > 0
+                    and int(round(feature_count ** 0.5)) ** 2 == feature_count
+                )
+            ):
                 count = feature_count or 784
                 frame = image_to_flat_pixels(image, count, feature_names)
                 return f"image_flattened_pixels_{count}", frame, list(frame.columns)
@@ -1014,13 +1303,13 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
                     "expected_feature_count": feature_count,
                     "expected_feature_names": feature_names,
                     "metadata_keys": list(metadata.keys()),
+                    "metadata": metadata,
                     "hint": (
-                        "Store preprocessing metadata with the model (preprocessing.type and feature names), "
-                        "or package preprocessing and estimator together in a Pipeline/MLflow PyFunc model."
+                        "Store image_size, data_type=image, class_names and preprocessing "
+                        "with the MLflow model."
                     ),
                 },
             )
-
         # ============================================================
         # PREDICTION
         # ============================================================
@@ -1084,7 +1373,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
             )
 
 
-        def make_predictions(loaded: Dict[str, Any], model_input: pd.DataFrame):
+        def make_predictions(loaded: Dict[str, Any], model_input: Any):
             model_type = loaded.get("type")
             model = loaded.get("model")
 
@@ -1098,6 +1387,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
             # Cas MLflow pyfunc
             # ------------------------------------------------------------
             if model_type == "pyfunc":
+                raw_model_fallback_error = None
                 try:
                     predictions = model.predict(model_input)
                     return normalize_prediction_output(predictions)
@@ -1212,6 +1502,57 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
             )
 
 
+
+        def decode_image_classification_predictions(
+            predictions: Any,
+            metadata: Dict[str, Any],
+        ) -> Tuple[Any, Optional[Dict[str, Any]]]:
+            class_names = metadata.get("class_names") if isinstance(metadata, dict) else None
+            if not isinstance(class_names, list) or not class_names:
+                return predictions, None
+
+            values = np.asarray(predictions)
+            if values.size == 0:
+                return predictions, None
+
+            confidence: Optional[float] = None
+
+            if values.ndim >= 2 and values.shape[-1] == len(class_names):
+                logits = values.reshape(-1, values.shape[-1])[0].astype(np.float64)
+                shifted = logits - np.max(logits)
+                probabilities = np.exp(shifted)
+                probability_sum = probabilities.sum()
+                if probability_sum > 0:
+                    probabilities = probabilities / probability_sum
+                class_index = int(np.argmax(probabilities))
+                confidence = float(probabilities[class_index])
+            elif values.ndim == 1 and values.size == len(class_names):
+                logits = values.astype(np.float64)
+                shifted = logits - np.max(logits)
+                probabilities = np.exp(shifted)
+                probability_sum = probabilities.sum()
+                if probability_sum > 0:
+                    probabilities = probabilities / probability_sum
+                class_index = int(np.argmax(probabilities))
+                confidence = float(probabilities[class_index])
+            else:
+                try:
+                    class_index = int(values.reshape(-1)[0])
+                except (TypeError, ValueError, IndexError):
+                    return predictions, None
+
+            if class_index < 0 or class_index >= len(class_names):
+                return predictions, None
+
+            label = str(class_names[class_index])
+            detail: Dict[str, Any] = {
+                "class_index": class_index,
+                "class_name": label,
+            }
+            if confidence is not None:
+                detail["confidence"] = confidence
+
+            return [label], detail
         # ============================================================
         # ROUTES
         # ============================================================
@@ -1336,6 +1677,10 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
                     image,
                 )
                 predictions = make_predictions(loaded, model_input)
+                predictions, classification = decode_image_classification_predictions(
+                    predictions,
+                    loaded.get("metadata") or {},
+                )
 
                 return {
                     "status": "success",
@@ -1350,6 +1695,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
                     "original_image_size": list(image.size),
                     "input_columns": input_columns,
                     "predictions": predictions,
+                    "classification": classification,
                 }
 
             except HTTPException:

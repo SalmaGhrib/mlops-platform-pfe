@@ -1,45 +1,124 @@
 package com.mlops.platform.service;
 
 import com.mlops.platform.repository.NotificationRepository;
+
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * Supprime progressivement les anciennes notifications.
+ *
+ * Le bean n'existe que si :
+ *
+ * app.notifications.cleanup.enabled=true
+ */
 @Service
+@ConditionalOnProperty(
+        name = "app.notifications.cleanup.enabled",
+        havingValue = "true",
+        matchIfMissing = true
+)
 public class NotificationCleanupScheduler {
+
+    private static final int BATCH_SIZE = 100;
+    private static final int MAX_ROWS_PER_CYCLE = 1000;
 
     private final NotificationRepository notificationRepository;
 
-    public NotificationCleanupScheduler(NotificationRepository notificationRepository) {
+    private final AtomicBoolean cleanupRunning =
+            new AtomicBoolean(false);
+
+    public NotificationCleanupScheduler(
+            NotificationRepository notificationRepository
+    ) {
         this.notificationRepository = notificationRepository;
     }
 
-    /*
-     * Supprime automatiquement les notifications âgées de plus de 24h.
-     * Exécution toutes les heures.
-     */
     @Scheduled(
-        fixedDelayString = "${app.notifications.cleanup.delay-ms:900000}",
-        initialDelayString = "${app.notifications.cleanup.initial-delay-ms:15000}"
-)
+            initialDelayString =
+                    "${app.notifications.cleanup.initial-delay-ms:60000}",
+            fixedDelayString =
+                    "${app.notifications.cleanup.delay-ms:900000}"
+    )
     @SchedulerLock(
-        name = "notificationCleanupScheduler",
-        lockAtMostFor = "10m",
-        lockAtLeastFor = "1m"
-)
-    @Transactional
+            name = "notificationCleanupScheduler",
+            lockAtMostFor = "PT2M",
+            lockAtLeastFor = "PT1S"
+    )
+    @Transactional(
+            propagation = Propagation.REQUIRES_NEW,
+            timeout = 10
+    )
     public void deleteOldNotifications() {
-        LocalDateTime limit = LocalDateTime.now(Clock.systemUTC()).minusHours(24);
+        if (!cleanupRunning.compareAndSet(false, true)) {
+            System.out.println(
+                    "[NOTIFICATION_CLEANUP] "
+                            + "Previous local cycle still running. Skipped."
+            );
+            return;
+        }
 
         try {
-            notificationRepository.deleteByCreatedAtBefore(limit);
+            LocalDateTime limit =
+                    LocalDateTime.now(Clock.systemUTC())
+                            .minusHours(24);
 
-            System.out.println("[NOTIFICATION_CLEANUP] Old notifications deleted before " + limit);
-        } catch (Exception e) {
-            System.out.println("[NOTIFICATION_CLEANUP] Failed to delete old notifications: " + e.getMessage());
+            int totalDeleted = 0;
+            int deletedRows;
+
+            do {
+                deletedRows =
+                        notificationRepository
+                                .deleteOldNotificationsBatch(
+                                        limit,
+                                        BATCH_SIZE
+                                );
+
+                totalDeleted += deletedRows;
+
+            } while (
+                    deletedRows == BATCH_SIZE
+                            && totalDeleted < MAX_ROWS_PER_CYCLE
+            );
+
+            System.out.println(
+                    "[NOTIFICATION_CLEANUP] Completed. deletedRows="
+                            + totalDeleted
+                            + ", before="
+                            + limit
+            );
+
+        } catch (Exception error) {
+            System.err.println(
+                    "[NOTIFICATION_CLEANUP] Failed. type="
+                            + error.getClass().getSimpleName()
+                            + ", reason="
+                            + safeMessage(error.getMessage())
+            );
+
+        } finally {
+            cleanupRunning.set(false);
         }
+    }
+
+    private String safeMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return "Unknown error";
+        }
+
+        return message
+                .replace("\n", " ")
+                .replace("\r", " ")
+                .replace("\u0000", "")
+                .trim();
     }
 }

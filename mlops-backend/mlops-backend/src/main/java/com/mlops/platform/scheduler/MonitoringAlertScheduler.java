@@ -8,9 +8,13 @@ import com.mlops.platform.repository.MlExperimentRepository.FailedRunsByProjectP
 import com.mlops.platform.service.MonitoringRetrainingTriggerService;
 import com.mlops.platform.service.MonitoringService;
 import com.mlops.platform.service.NotificationService;
+
 import jakarta.annotation.PostConstruct;
+
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -20,6 +24,11 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Component
+@ConditionalOnProperty(
+        name = "app.monitoring.alerts.enabled",
+        havingValue = "true",
+        matchIfMissing = true
+)
 public class MonitoringAlertScheduler {
 
     private final MonitoringService monitoringService;

@@ -45,8 +45,19 @@ public interface NotificationRepository
             String title
     );
 
-    void deleteByCreatedAtBefore(
-            LocalDateTime dateTime
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(
+        value = """
+            delete from notifications
+             where created_at < :cutoff
+             order by id
+             limit :batchSize
+        """,
+        nativeQuery = true
+    )
+    int deleteOldNotificationsBatch(
+            @Param("cutoff") LocalDateTime cutoff,
+            @Param("batchSize") int batchSize
     );
 
     /**
@@ -62,9 +73,11 @@ public interface NotificationRepository
            set notification.read = true
          where notification.user.id = :userId
            and notification.read = false
+           and notification.createdAt >= :cutoff
     """)
-    int markAllAsReadByUserId(
-            @Param("userId") Long userId
+    int markRecentAsReadByUserId(
+            @Param("userId") Long userId,
+            @Param("cutoff") LocalDateTime cutoff
     );
 
     /**

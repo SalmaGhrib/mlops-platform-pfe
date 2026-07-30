@@ -38,7 +38,7 @@ export class NotificationDropdownComponent
   unreadCount = 0;
 
   loading = false;
-  markingAllAsRead = false;
+  autoMarkingAsRead = false;
 
   private readonly subscriptions = new Subscription();
 
@@ -99,11 +99,7 @@ export class NotificationDropdownComponent
     this.isOpen = !this.isOpen;
 
     if (this.isOpen) {
-      /*
-       * On recharge seulement les notifications.
-       * L'ouverture du menu ne les marque pas comme lues.
-       */
-      this.notificationService.loadNotifications();
+      this.loadAndAutoMarkAsRead();
     }
   }
 
@@ -116,53 +112,58 @@ export class NotificationDropdownComponent
     this.closeDropdown();
   }
 
-  onMarkAllAsReadClick(event: MouseEvent): void {
-    event.stopPropagation();
-    this.markAllAsRead();
-  }
-
-  markAllAsRead(): void {
-    if (
-      this.markingAllAsRead ||
-      this.unreadCount <= 0
-    ) {
+  private loadAndAutoMarkAsRead(): void {
+    if (this.autoMarkingAsRead) {
       return;
     }
 
-    this.markingAllAsRead = true;
+    this.loading = true;
 
-    this.notificationService
-      .markAllAsRead()
-      .pipe(
-        finalize((): void => {
-          this.markingAllAsRead = false;
-        })
-      )
-      .subscribe({
-        next: (): void => {
-          /*
-           * Le service met déjà à jour :
-           * - la liste locale ;
-           * - l'état read ;
-           * - le compteur non lu.
-           */
-          console.log(
-            '[NOTIFICATIONS] All notifications marked as read'
-          );
-        },
+    this.notificationService.getNotifications().subscribe({
+      next: (notifications: NotificationResponse[]): void => {
+        const loadedNotifications = notifications ?? [];
 
-        error: (error: unknown): void => {
-          console.error(
-            '[NOTIFICATIONS] Failed to mark all as read',
-            error
-          );
+        this.notifications = loadedNotifications;
+        this.notificationService.setNotifications(loadedNotifications);
+        this.loading = false;
 
-          /*
-           * Recharge l'état réel si le backend échoue.
-           */
-          this.notificationService.loadNotifications();
-        },
-      });
+        const hasUnread = loadedNotifications.some(
+          (notification: NotificationResponse) => !notification.read
+        );
+
+        if (!hasUnread) {
+          this.notificationService.setUnreadCount(0);
+          return;
+        }
+
+        this.autoMarkingAsRead = true;
+
+        this.notificationService
+          .markAllAsRead()
+          .pipe(
+            finalize((): void => {
+              this.autoMarkingAsRead = false;
+            })
+          )
+          .subscribe({
+            error: (error: unknown): void => {
+              console.error(
+                '[NOTIFICATIONS] Failed to auto mark all as read',
+                error
+              );
+              this.notificationService.loadNotifications();
+            },
+          });
+      },
+
+      error: (error: unknown): void => {
+        console.error(
+          '[NOTIFICATIONS] Failed to load notifications',
+          error
+        );
+        this.loading = false;
+      },
+    });
   }
 
   get unreadNotifications(): NotificationResponse[] {

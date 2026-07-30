@@ -35,7 +35,7 @@ spec:
       containers:
         - name: mlops-backend
 
-          image: acrmlopssalmav2.azurecr.io/mlops-backend:projects-notifications-final-v1
+          image: acrmlopssalmav2.azurecr.io/mlops-backend:imageserve
           imagePullPolicy: Always
 
           ports:

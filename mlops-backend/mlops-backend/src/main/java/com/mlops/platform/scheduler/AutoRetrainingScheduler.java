@@ -3,8 +3,12 @@ package com.mlops.platform.scheduler;
 import com.mlops.platform.entity.RetrainingConfig;
 import com.mlops.platform.repository.RetrainingConfigRepository;
 import com.mlops.platform.service.AutoRetrainingService;
+
 import jakarta.annotation.PostConstruct;
+
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -16,33 +20,56 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * Scheduler de réentraînement.
+ *
+ * Le bean n'est créé que si :
+ *
+ * app.retraining.scheduler.enabled=true
+ */
 @Component
+@ConditionalOnProperty(
+        name = "app.retraining.scheduler.enabled",
+        havingValue = "true",
+        matchIfMissing = true
+)
 public class AutoRetrainingScheduler {
-
-    private static final long STUCK_RUNNING_TIMEOUT_MINUTES = 30L;
 
     private final RetrainingConfigRepository retrainingConfigRepository;
     private final AutoRetrainingService autoRetrainingService;
     private final PlatformTransactionManager transactionManager;
 
-    private final AtomicBoolean schedulerRunning = new AtomicBoolean(false);
+    private final AtomicBoolean schedulerRunning =
+            new AtomicBoolean(false);
 
     public AutoRetrainingScheduler(
             RetrainingConfigRepository retrainingConfigRepository,
             AutoRetrainingService autoRetrainingService,
             PlatformTransactionManager transactionManager
     ) {
-        this.retrainingConfigRepository = retrainingConfigRepository;
-        this.autoRetrainingService = autoRetrainingService;
-        this.transactionManager = transactionManager;
+        this.retrainingConfigRepository =
+                retrainingConfigRepository;
+
+        this.autoRetrainingService =
+                autoRetrainingService;
+
+        this.transactionManager =
+                transactionManager;
     }
 
     @PostConstruct
     public void init() {
-        System.out.println("[AUTO_RETRAINING] Scheduler loaded");
+        System.out.println(
+                "[AUTO_RETRAINING] Scheduler loaded."
+        );
     }
 
-    @Scheduled(fixedDelayString = "${app.retraining.scheduler.delay-ms:60000}")
+    @Scheduled(
+            initialDelayString =
+                    "${app.retraining.scheduler.initial-delay-ms:30000}",
+            fixedDelayString =
+                    "${app.retraining.scheduler.delay-ms:30000}"
+    )
     @SchedulerLock(
             name = "autoRetrainingScheduler",
             lockAtMostFor = "PT10M",
@@ -51,41 +78,60 @@ public class AutoRetrainingScheduler {
     public void checkScheduledRetraining() {
         if (!schedulerRunning.compareAndSet(false, true)) {
             System.out.println(
-                    "[AUTO_RETRAINING] Previous local scheduler cycle still running. Skipped."
+                    "[AUTO_RETRAINING] "
+                            + "Previous local cycle still running. Skipped."
             );
             return;
         }
 
         try {
             LocalDateTime now = utcNow();
+
+            long stuckTimeoutMinutes =
+                    resolveStuckTimeoutMinutes();
+
             LocalDateTime stuckCutoff =
-                    now.minusMinutes(STUCK_RUNNING_TIMEOUT_MINUTES);
+                    now.minusMinutes(stuckTimeoutMinutes);
 
             System.out.println(
-                    "[AUTO_RETRAINING] Checking configs at " + now
+                    "[AUTO_RETRAINING] Checking configs at "
+                            + now
             );
 
-            int resetCount = executeInNewTransaction(() ->
-                    retrainingConfigRepository.resetStuckRunningConfigs(
-                            stuckCutoff,
-                            now
-                    )
-            );
+            int resetCount =
+                    executeInNewTransaction(
+                            () ->
+                                    retrainingConfigRepository
+                                            .resetStuckRunningConfigs(
+                                                    stuckCutoff,
+                                                    now
+                                            )
+                    );
 
             if (resetCount > 0) {
                 System.out.println(
-                        "[AUTO_RETRAINING] Reset stuck running configs="
+                        "[AUTO_RETRAINING] Reset stuck configs="
                                 + resetCount
                 );
             }
 
             List<RetrainingConfig> dueConfigs =
-                    retrainingConfigRepository.findDueConfigs(now);
+                    retrainingConfigRepository
+                            .findDueConfigs(now);
+
+            int dueCount =
+                    dueConfigs == null
+                            ? 0
+                            : dueConfigs.size();
 
             System.out.println(
                     "[AUTO_RETRAINING] Found due configs="
-                            + dueConfigs.size()
+                            + dueCount
             );
+
+            if (dueConfigs == null || dueConfigs.isEmpty()) {
+                return;
+            }
 
             for (RetrainingConfig config : dueConfigs) {
                 processDueConfig(config);
@@ -93,19 +139,24 @@ public class AutoRetrainingScheduler {
 
         } catch (Exception schedulerError) {
             System.err.println(
-                    "[AUTO_RETRAINING] Scheduler cycle failed: "
-                            + schedulerError.getClass().getSimpleName()
-                            + ": "
-                            + safeMessage(schedulerError.getMessage())
+                    "[AUTO_RETRAINING] Scheduler cycle failed. type="
+                            + schedulerError
+                            .getClass()
+                            .getSimpleName()
+                            + ", reason="
+                            + safeMessage(
+                                    schedulerError.getMessage()
+                            )
             );
-            schedulerError.printStackTrace();
 
         } finally {
             schedulerRunning.set(false);
         }
     }
 
-    private void processDueConfig(RetrainingConfig config) {
+    private void processDueConfig(
+            RetrainingConfig config
+    ) {
         if (config == null || config.getId() == null) {
             return;
         }
@@ -115,12 +166,15 @@ public class AutoRetrainingScheduler {
         LocalDateTime claimTime = utcNow();
 
         try {
-            int claimed = executeInNewTransaction(() ->
-                    retrainingConfigRepository.claimDueConfig(
-                            configId,
-                            claimTime
-                    )
-            );
+            int claimed =
+                    executeInNewTransaction(
+                            () ->
+                                    retrainingConfigRepository
+                                            .claimDueConfig(
+                                                    configId,
+                                                    claimTime
+                                            )
+                    );
 
             System.out.println(
                     "[AUTO_RETRAINING] Claim configId="
@@ -135,12 +189,8 @@ public class AutoRetrainingScheduler {
                 return;
             }
 
-            /*
-             * IMPORTANT :
-             * Le scheduler a déjà fait le claim atomique.
-             * Le service appelé ici ne doit jamais refaire claimDueConfig().
-             */
-            autoRetrainingService.processClaimedConfig(configId);
+            autoRetrainingService
+                    .processClaimedConfig(configId);
 
         } catch (Exception processingError) {
             System.err.println(
@@ -149,34 +199,42 @@ public class AutoRetrainingScheduler {
                             + ", projectId="
                             + projectId
                             + ", reason="
-                            + safeMessage(processingError.getMessage())
+                            + safeMessage(
+                                    processingError.getMessage()
+                            )
             );
-            processingError.printStackTrace();
 
-            safelyReleaseClaimAfterUnexpectedFailure(configId);
+            safelyReleaseClaimAfterUnexpectedFailure(
+                    configId
+            );
         }
     }
 
-    private void safelyReleaseClaimAfterUnexpectedFailure(Long configId) {
+    private void safelyReleaseClaimAfterUnexpectedFailure(
+            Long configId
+    ) {
         if (configId == null) {
             return;
         }
 
         try {
             LocalDateTime now = utcNow();
-            LocalDateTime retryAt = now.plusMinutes(5);
+            LocalDateTime retryAt =
+                    now.plusMinutes(5);
 
-            int released = executeInNewTransaction(() ->
-                    retrainingConfigRepository.releaseAfterFailure(
-                            configId,
-                            retryAt,
-                            now
-                    )
-            );
+            int released =
+                    executeInNewTransaction(
+                            () ->
+                                    retrainingConfigRepository
+                                            .releaseAfterFailure(
+                                                    configId,
+                                                    retryAt,
+                                                    now
+                                            )
+                    );
 
             System.out.println(
-                    "[AUTO_RETRAINING] Claim released after unexpected failure. "
-                            + "configId="
+                    "[AUTO_RETRAINING] Claim released. configId="
                             + configId
                             + ", result="
                             + released
@@ -186,39 +244,58 @@ public class AutoRetrainingScheduler {
 
         } catch (Exception releaseError) {
             System.err.println(
-                    "[AUTO_RETRAINING] Could not release failed claim. "
+                    "[AUTO_RETRAINING] Could not release claim. "
                             + "configId="
                             + configId
                             + ", reason="
-                            + safeMessage(releaseError.getMessage())
+                            + safeMessage(
+                                    releaseError.getMessage()
+                            )
             );
         }
     }
 
-    private int executeInNewTransaction(IntTransactionCallback callback) {
+    private int executeInNewTransaction(
+            IntTransactionCallback callback
+    ) {
         TransactionTemplate template =
-                new TransactionTemplate(transactionManager);
+                new TransactionTemplate(
+                        transactionManager
+                );
 
         template.setPropagationBehavior(
-                TransactionDefinition.PROPAGATION_REQUIRES_NEW
+                TransactionDefinition
+                        .PROPAGATION_REQUIRES_NEW
         );
+
         template.setIsolationLevel(
-                TransactionDefinition.ISOLATION_READ_COMMITTED
+                TransactionDefinition
+                        .ISOLATION_READ_COMMITTED
         );
+
         template.setTimeout(10);
 
-        Integer result = template.execute(status -> callback.execute());
+        Integer result =
+                template.execute(
+                        status -> callback.execute()
+                );
 
         return result == null ? 0 : result;
     }
 
+    private long resolveStuckTimeoutMinutes() {
+        return 30L;
+    }
+
     private LocalDateTime utcNow() {
-        return LocalDateTime.now(Clock.systemUTC());
+        return LocalDateTime.now(
+                Clock.systemUTC()
+        );
     }
 
     private String safeMessage(String message) {
         if (message == null || message.isBlank()) {
-            return "Erreur inconnue";
+            return "Unknown error";
         }
 
         return message

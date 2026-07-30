@@ -4,6 +4,11 @@ kind: Deployment
 metadata:
   name: mysql
   namespace: mlops
+  labels:
+    app: mysql
+    app.kubernetes.io/name: mysql
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: mlops-platform
 
 spec:
   replicas: 1
@@ -19,9 +24,12 @@ spec:
     metadata:
       labels:
         app: mysql
+        app.kubernetes.io/name: mysql
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: mlops-platform
 
     spec:
-      terminationGracePeriodSeconds: 60
+      terminationGracePeriodSeconds: 90
 
       containers:
         - name: mysql
@@ -50,7 +58,33 @@ spec:
             - --default-authentication-plugin=mysql_native_password
             - --character-set-server=utf8mb4
             - --collation-server=utf8mb4_unicode_ci
-            - --max-connections=300
+
+            # Limite raisonnable pour éviter la saturation.
+            - --max-connections=100
+
+            # Réglages InnoDB adaptés à la limite mémoire de 2 GiB.
+            - --innodb-buffer-pool-size=768M
+            - --innodb-redo-log-capacity=256M
+            - --innodb-log-buffer-size=64M
+
+            # Réduit les COMMIT très lents sur le stockage Azure.
+            - --innodb-flush-log-at-trx-commit=2
+            - --sync-binlog=0
+
+            # Timeouts réseau.
+            - --connect-timeout=20
+            - --net-read-timeout=120
+            - --net-write-timeout=120
+
+            # Nettoyage des connexions inactives.
+            - --wait-timeout=600
+            - --interactive-timeout=600
+
+            # Évite les attentes de verrous trop longues.
+            - --innodb-lock-wait-timeout=30
+
+            # Évite les résolutions DNS inutiles des clients MySQL.
+            - --skip-name-resolve
 
           resources:
             requests:
@@ -80,6 +114,7 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 6
+            successThreshold: 1
 
           livenessProbe:
             exec:
@@ -92,12 +127,18 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 5
 
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - mysqladmin shutdown -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" || true
+
           volumeMounts:
             - name: mysql-storage
               mountPath: /var/lib/mysql
 
-            # Ce montage déclenche la synchronisation Key Vault
-            # vers le secret Kubernetes mysql-secret.
             - name: keyvault-secrets
               mountPath: /mnt/secrets-store
               readOnly: true

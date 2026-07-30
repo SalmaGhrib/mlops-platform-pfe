@@ -512,7 +512,7 @@ public class NotificationService {
          */
     }
 
-    @Transactional(timeout = 10)
+    @Transactional(timeout = 5)
     public int markAllAsRead(
             User user
     ) {
@@ -522,10 +522,16 @@ public class NotificationService {
             );
         }
 
+        LocalDateTime cutoff =
+                LocalDateTime
+                        .now(Clock.systemUTC())
+                        .minusHours(24);
+
         int updatedRows =
                 notificationRepository
-                        .markAllAsReadByUserId(
-                                user.getId()
+                        .markRecentAsReadByUserId(
+                                user.getId(),
+                                cutoff
                         );
 
         System.out.println(

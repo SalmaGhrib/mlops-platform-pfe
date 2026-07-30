@@ -104,20 +104,12 @@
           {{ notifications.length }} au total
         </span>
       </div>
-
-      <button
-        type="button"
-        *ngIf="unreadCount > 0"
-        [disabled]="markingAllAsRead"
-        class="shrink-0 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500/10 dark:text-blue-400 dark:hover:bg-blue-500/20"
-        (click)="onMarkAllAsReadClick($event)"
+      <span
+        *ngIf="autoMarkingAsRead"
+        class="shrink-0 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-400"
       >
-        {{
-          markingAllAsRead
-            ? 'Mise à jour...'
-            : 'Tout marquer comme lu'
-        }}
-      </button>
+        Marquage en cours...
+      </span>
     </div>
 
     <div

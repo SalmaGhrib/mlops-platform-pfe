@@ -44,6 +44,28 @@ SUPPORTED_MODEL_EXTENSIONS = {
     ".torchscript",
 }
 
+
+SUPPORTED_COMPANION_FILENAMES = {
+    "model_metadata.json": "metadata_path",
+    "metadata.json": "metadata_path",
+    "class_names.json": "classes_path",
+    "classes.json": "classes_path",
+    "labels.json": "classes_path",
+    "metrics.json": "metrics_path",
+    "training_history.json": "history_path",
+    "history.json": "history_path",
+}
+
+SUPPORTED_COMPANION_EXTENSIONS = {
+    ".json",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".csv",
+    ".npy",
+    ".npz",
+}
+
 METRIC_REGEX = re.compile(
     r"(?<![A-Za-z0-9_])"
     r"(?P<key>"
@@ -110,97 +132,347 @@ class UserMlflowModelCandidate:
 
 
 class TorchPyFuncWrapper(mlflow.pyfunc.PythonModel):
+    """
+    Wrapper PyTorch générique.
+
+    Il sait charger :
+    - un module TorchScript sauvegardé avec torch.jit.save ;
+    - un modèle PyTorch complet sauvegardé avec torch.save ;
+    - un checkpoint state_dict accompagné du fichier source d'entraînement.
+
+    Les métadonnées de prétraitement sont exposées dans ``self.metadata`` afin
+    que le serveur de serving puisse déterminer le format d'entrée image.
+    """
+
     def _load_source_module(self, source_path: Optional[str]):
         if not source_path:
             return None
-        spec = importlib.util.spec_from_file_location("platform_user_model_module", source_path)
+
+        spec = importlib.util.spec_from_file_location(
+            "platform_user_model_module",
+            source_path,
+        )
+
         if spec is None or spec.loader is None:
             return None
+
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
 
-    def _rebuild_checkpoint(self, checkpoint: Dict[str, Any], source_path: Optional[str]):
+    def _load_json_file(self, path_value: Optional[str]) -> Dict[str, Any]:
+        if not path_value:
+            return {}
+
+        path = Path(path_value)
+
+        if not path.exists() or not path.is_file():
+            return {}
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception as exc:
+            print(
+                "[PLATFORM_MODEL] Could not read PyTorch metadata "
+                f"from {path}: {exc}"
+            )
+            return {}
+
+    def _load_class_names(self, path_value: Optional[str]) -> List[str]:
+        if not path_value:
+            return []
+
+        path = Path(path_value)
+
+        if not path.exists() or not path.is_file():
+            return []
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+            if isinstance(payload, list):
+                return [str(item) for item in payload]
+
+            if isinstance(payload, dict):
+                values = (
+                    payload.get("class_names")
+                    or payload.get("classes")
+                    or payload.get("labels")
+                    or []
+                )
+                if isinstance(values, list):
+                    return [str(item) for item in values]
+        except Exception as exc:
+            print(
+                "[PLATFORM_MODEL] Could not read class names "
+                f"from {path}: {exc}"
+            )
+
+        return []
+
+    def _rebuild_checkpoint(
+        self,
+        checkpoint: Dict[str, Any],
+        source_path: Optional[str],
+    ):
         import torch
+
         module = self._load_source_module(source_path)
+
         if module is None:
-            raise RuntimeError("PyTorch checkpoint requires the training source file to rebuild the model class.")
-        class_name = checkpoint.get("architecture") or checkpoint.get("class_name") or checkpoint.get("model_class")
+            raise RuntimeError(
+                "PyTorch checkpoint requires the training source file "
+                "to rebuild the model class."
+            )
+
+        class_name = (
+            checkpoint.get("architecture")
+            or checkpoint.get("class_name")
+            or checkpoint.get("model_class")
+            or checkpoint.get("model_type")
+        )
+
         if not class_name or not hasattr(module, str(class_name)):
-            raise RuntimeError(f"Model class {class_name!r} was not found in the training source.")
+            raise RuntimeError(
+                f"Model class {class_name!r} was not found "
+                "in the training source."
+            )
+
         model_class = getattr(module, str(class_name))
         constructor_args = checkpoint.get("constructor_args") or {}
-        number_of_classes = checkpoint.get("number_of_classes") or checkpoint.get("num_classes")
+        number_of_classes = (
+            checkpoint.get("number_of_classes")
+            or checkpoint.get("num_classes")
+        )
+
         attempts = []
+
         if isinstance(constructor_args, dict):
             attempts.append(((), constructor_args))
+
         if number_of_classes is not None:
-            attempts.extend([
-                ((int(number_of_classes),), {}),
-                ((), {"number_of_classes": int(number_of_classes)}),
-                ((), {"num_classes": int(number_of_classes)}),
-                ((), {"n_classes": int(number_of_classes)}),
-            ])
+            attempts.extend(
+                [
+                    ((int(number_of_classes),), {}),
+                    ((), {"number_of_classes": int(number_of_classes)}),
+                    ((), {"num_classes": int(number_of_classes)}),
+                    ((), {"n_classes": int(number_of_classes)}),
+                ]
+            )
+
         attempts.append(((), {}))
+
         last_error = None
         model = None
+
         for args, kwargs in attempts:
             try:
                 model = model_class(*args, **kwargs)
                 break
             except Exception as exc:
                 last_error = exc
+
         if model is None:
-            raise RuntimeError(f"Could not instantiate {class_name}: {last_error}")
-        state = checkpoint.get("model_state_dict") or checkpoint.get("state_dict")
+            raise RuntimeError(
+                f"Could not instantiate {class_name}: {last_error}"
+            )
+
+        state = (
+            checkpoint.get("model_state_dict")
+            or checkpoint.get("state_dict")
+        )
+
         if state is None:
-            raise RuntimeError("Checkpoint dictionary does not contain model_state_dict/state_dict.")
+            raise RuntimeError(
+                "Checkpoint dictionary does not contain "
+                "model_state_dict/state_dict."
+            )
+
         model.load_state_dict(state)
+
         self.image_size = checkpoint.get("image_size")
-        self.labels = checkpoint.get("labels") or []
+        self.labels = (
+            checkpoint.get("labels")
+            or checkpoint.get("class_names")
+            or []
+        )
+
+        # Le checkpoint constitue une dernière source de vérité. Cela permet
+        # de servir correctement les anciens modèles même si le fichier
+        # model_metadata.json n'a pas été attaché à leur version MLflow.
+        if not isinstance(getattr(self, "metadata", None), dict):
+            self.metadata = {}
+
+        if self.image_size and not self.metadata.get("image_size"):
+            self.metadata["image_size"] = self.image_size
+
+        if self.labels and not self.metadata.get("class_names"):
+            self.metadata["class_names"] = list(self.labels)
+
+        if self.image_size and not self.metadata.get("input_shape"):
+            try:
+                size = int(self.image_size)
+                self.metadata["input_shape"] = [3, size, size]
+            except (TypeError, ValueError):
+                pass
+
+        if self.image_size and not self.metadata.get("preprocessing"):
+            try:
+                size = int(self.image_size)
+                self.metadata["preprocessing"] = {
+                    "type": "image",
+                    "resize": [size, size],
+                    "color_mode": "RGB",
+                    "layout": "NCHW",
+                    "dtype": "float32",
+                    "rescale": "0_1",
+                    "normalize": {
+                        "mean": [0.5, 0.5, 0.5],
+                        "std": [0.5, 0.5, 0.5],
+                    },
+                }
+            except (TypeError, ValueError):
+                pass
+
         return model
 
     def load_context(self, context):
         try:
             import torch
         except ImportError as exc:
-            raise RuntimeError("PyTorch is required to load .pt/.pth models") from exc
-        loaded = torch.load(context.artifacts["model_path"], map_location="cpu")
-        if isinstance(loaded, dict):
-            loaded = self._rebuild_checkpoint(loaded, context.artifacts.get("source_file"))
+            raise RuntimeError(
+                "PyTorch is required to load .pt/.pth models"
+            ) from exc
+
+        artifacts = dict(context.artifacts or {})
+        model_path = artifacts["model_path"]
+
+        self.metadata = self._load_json_file(
+            artifacts.get("metadata_path")
+        )
+
+        # Fallback robuste : certaines versions MLflow conservent les métadonnées
+        # du modèle dans le champ Model.metadata, mais pas forcément dans
+        # context.artifacts si un ancien package a été enregistré.
+        if not self.metadata:
+            embedded_metadata = getattr(self, "embedded_metadata", None)
+            if isinstance(embedded_metadata, dict):
+                self.metadata = dict(embedded_metadata)
+
+        class_names = self._load_class_names(
+            artifacts.get("classes_path")
+        )
+
+        if class_names and not self.metadata.get("class_names"):
+            self.metadata["class_names"] = class_names
+
+        self.preprocessing = (
+            self.metadata.get("preprocessing")
+            if isinstance(self.metadata, dict)
+            else {}
+        ) or {}
+
+        self.image_size = (
+            self.metadata.get("image_size")
+            or self.preprocessing.get("image_size")
+            or self.preprocessing.get("resize")
+        )
+
+        self.labels = (
+            self.metadata.get("class_names")
+            or self.metadata.get("classes")
+            or self.metadata.get("labels")
+            or class_names
+            or []
+        )
+
+        # Priorité à TorchScript : torch.jit.load évite de dépendre de la
+        # classe Python d'entraînement lors du serving.
+        try:
+            loaded = torch.jit.load(model_path, map_location="cpu")
+            print(
+                "[PLATFORM_MODEL] TorchScript model loaded successfully: "
+                f"{model_path}"
+            )
+        except Exception:
+            loaded = torch.load(model_path, map_location="cpu")
+
+            if isinstance(loaded, dict):
+                loaded = self._rebuild_checkpoint(
+                    loaded,
+                    artifacts.get("source_file"),
+                )
+
         self.model = loaded
+
         if hasattr(self.model, "eval"):
             self.model.eval()
+
+        print(
+            "[PLATFORM_MODEL] PyTorch metadata loaded. "
+            f"metadata_keys={sorted(self.metadata.keys())}, "
+            f"labels_count={len(self.labels)}"
+        )
 
     def _prepare_input(self, model_input):
         if hasattr(model_input, "to_numpy"):
             return model_input.to_numpy()
+
         if isinstance(model_input, list):
             return model_input
+
         if hasattr(model_input, "values"):
             return model_input.values
+
         return model_input
+
+    def _resolve_image_size(self) -> Optional[int]:
+        value = getattr(self, "image_size", None)
+
+        if isinstance(value, (list, tuple)) and value:
+            value = value[0]
+
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
 
     def predict(self, context, model_input):
         import numpy as np
         import torch
+
         input_data = self._prepare_input(model_input)
+
         if not isinstance(input_data, torch.Tensor):
-            input_data = torch.tensor(np.asarray(input_data), dtype=torch.float32)
+            input_data = torch.tensor(
+                np.asarray(input_data),
+                dtype=torch.float32,
+            )
+
         if input_data.ndim == 1:
             input_data = input_data.unsqueeze(0)
-        image_size = getattr(self, "image_size", None)
+
+        image_size = self._resolve_image_size()
+
         if image_size and input_data.ndim == 2:
-            size = int(image_size[0] if isinstance(image_size, (list, tuple)) else image_size)
-            expected = 3 * size * size
+            expected = 3 * image_size * image_size
+
             if input_data.shape[1] == expected:
-                input_data = input_data.reshape(-1, 3, size, size)
+                input_data = input_data.reshape(
+                    -1,
+                    3,
+                    image_size,
+                    image_size,
+                )
+
         with torch.no_grad():
             output = self.model(input_data)
+
         if isinstance(output, torch.Tensor):
             return output.detach().cpu().numpy()
-        return output
 
+        return output
 
 def prepare_outputs_dir(workspace: Path) -> Path:
     outputs_dir = workspace / "outputs"
@@ -427,6 +699,183 @@ def _truthy_env(name: str, default: bool = True) -> bool:
         return default
     return str(raw).strip().lower() not in {"false", "0", "no", "off"}
 
+
+def get_data_type_from_platform() -> str:
+    value = _clean_env_value(
+        os.environ.get("DATA_TYPE")
+        or os.environ.get("ML_DATA_TYPE")
+        or os.environ.get("PROJECT_DATA_TYPE")
+        or os.environ.get("MODEL_DATA_TYPE")
+    ).lower().replace("-", "_").replace(" ", "_")
+
+    aliases = {
+        "images": "image",
+        "image_classification": "image",
+        "vision": "image",
+        "computer_vision": "image",
+        "text_nlp": "text",
+        "nlp": "text",
+        "tabular_data": "tabular",
+        "table": "tabular",
+    }
+    return aliases.get(value, value)
+
+
+def is_image_project() -> bool:
+    data_type = get_data_type_from_platform()
+    project_type = get_project_type_from_platform()
+
+    return (
+        data_type == "image"
+        or project_type == "image_classification"
+        or _truthy_env("PLATFORM_IMAGE_MODEL", False)
+    )
+
+
+def _read_json_dict(path: Path) -> Dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception as exc:
+        print(f"[PLATFORM_MODEL] Could not read JSON file {path}: {exc}")
+        return {}
+
+
+def _read_class_names_payload(path: Path) -> List[str]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    if isinstance(payload, list):
+        return [str(item) for item in payload]
+
+    if isinstance(payload, dict):
+        values = (
+            payload.get("class_names")
+            or payload.get("classes")
+            or payload.get("labels")
+            or []
+        )
+        if isinstance(values, list):
+            return [str(item) for item in values]
+
+    return []
+
+
+def ensure_model_metadata_artifact(
+    primary_model_path: Path,
+    companion_artifacts: Dict[str, str],
+    workspace: Path,
+) -> Dict[str, str]:
+    """
+    Garantit qu'un modèle image possède un fichier model_metadata.json exploitable.
+
+    La fonction privilégie toujours un fichier fourni par l'utilisateur. Si aucun
+    fichier n'existe, elle peut générer un manifeste minimal uniquement lorsque
+    suffisamment d'informations fiables sont disponibles dans les variables
+    d'environnement ou dans class_names.json.
+    """
+    companions = dict(companion_artifacts or {})
+    metadata_value = companions.get("metadata_path")
+
+    if metadata_value:
+        metadata_path = Path(metadata_value)
+        if metadata_path.exists() and metadata_path.is_file():
+            payload = _read_json_dict(metadata_path)
+            if payload:
+                print(
+                    "[PLATFORM_METADATA] Existing metadata retained: "
+                    f"{metadata_path}, keys={sorted(payload.keys())}"
+                )
+                return companions
+
+    if not is_image_project():
+        return companions
+
+    class_names: List[str] = []
+    classes_value = companions.get("classes_path")
+    if classes_value:
+        class_path = Path(classes_value)
+        if class_path.exists() and class_path.is_file():
+            class_names = _read_class_names_payload(class_path)
+
+    image_size_raw = _clean_env_value(
+        os.environ.get("IMAGE_SIZE")
+        or os.environ.get("MODEL_IMAGE_SIZE")
+        or os.environ.get("INPUT_IMAGE_SIZE")
+    )
+
+    image_size: Optional[int] = None
+    if image_size_raw:
+        try:
+            image_size = int(float(image_size_raw))
+        except (TypeError, ValueError):
+            image_size = None
+
+    mean_raw = _clean_env_value(os.environ.get("IMAGE_NORMALIZE_MEAN"))
+    std_raw = _clean_env_value(os.environ.get("IMAGE_NORMALIZE_STD"))
+
+    def parse_float_list(raw: str) -> List[float]:
+        if not raw:
+            return []
+        values: List[float] = []
+        for item in re.split(r"[,;\s]+", raw):
+            if not item:
+                continue
+            try:
+                values.append(float(item))
+            except ValueError:
+                return []
+        return values
+
+    mean = parse_float_list(mean_raw)
+    std = parse_float_list(std_raw)
+
+    # Ne jamais inventer silencieusement un prétraitement. Sans image_size,
+    # le serving ne peut pas garantir une prédiction correcte.
+    if image_size is None:
+        print(
+            "[PLATFORM_METADATA] Image metadata missing and IMAGE_SIZE is not "
+            "configured. A broken image model will not be registered."
+        )
+        return companions
+
+    metadata_dir = workspace / "outputs"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    generated_path = metadata_dir / "model_metadata.json"
+
+    payload: Dict[str, Any] = {
+        "schema_version": 1,
+        "model_format": primary_model_path.suffix.lower().lstrip("."),
+        "data_type": "image",
+        "image_size": image_size,
+        "input_shape": [3, image_size, image_size],
+        "class_names": class_names,
+        "preprocessing": {
+            "type": "image",
+            "resize": [image_size, image_size],
+            "color_mode": "RGB",
+        },
+    }
+
+    if len(mean) in {1, 3} and len(std) == len(mean):
+        payload["preprocessing"]["normalize"] = {
+            "mean": mean,
+            "std": std,
+        }
+
+    generated_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    companions["metadata_path"] = str(generated_path.resolve())
+
+    print(
+        "[PLATFORM_METADATA] Generated metadata artifact: "
+        f"{generated_path}, keys={sorted(payload.keys())}"
+    )
+    return companions
 
 def get_target_column_from_platform() -> str:
     """
@@ -1074,34 +1523,260 @@ def select_primary_model_artifact(model_artifacts: List[Path]) -> Optional[Path]
     return model_artifacts[0] if model_artifacts else None
 
 
+def _companion_artifact_score(path: Path, primary_model_path: Path) -> int:
+    score = 0
+    name = path.name.lower()
+    stem = path.stem.lower()
+
+    if path.parent == primary_model_path.parent:
+        score += 1000
+
+    if "outputs" in [part.lower() for part in path.parts]:
+        score += 500
+
+    if name == "model_metadata.json":
+        score += 5000
+    elif name in {"class_names.json", "classes.json", "labels.json"}:
+        score += 4000
+    elif name == "metrics.json":
+        score += 3000
+    elif name in {"training_history.json", "history.json"}:
+        score += 2000
+
+    if "metadata" in stem:
+        score += 1000
+    if "class" in stem or "label" in stem:
+        score += 800
+    if "preprocess" in stem:
+        score += 700
+    if "scaler" in stem:
+        score += 600
+    if "vectorizer" in stem or "tfidf" in stem:
+        score += 600
+    if "encoder" in stem:
+        score += 600
+
+    try:
+        score += int(path.stat().st_mtime)
+    except Exception:
+        pass
+
+    return score
+
+
+
 def find_companion_artifacts(
     primary_model_path: Path,
     model_artifacts: List[Path],
+    workspace: Optional[Path] = None,
 ) -> Dict[str, str]:
     """
-    Trouve les artefacts nécessaires à la prédiction :
-    scaler, preprocessor, vectorizer, encoder...
-    """
-    companions: Dict[str, str] = {}
+    Détecte de manière déterministe les artefacts nécessaires au serving.
 
-    for path in model_artifacts:
-        if path == primary_model_path:
+    Les noms exacts sont résolus avant toute recherche générique afin que
+    model_metadata.json ne soit jamais perdu au profit d'un fichier plus récent.
+    """
+    primary_model_path = primary_model_path.resolve()
+    companions: Dict[str, str] = {}
+    seen_files: set[str] = set()
+
+    roots: List[Path] = [
+        primary_model_path.parent,
+        primary_model_path.parent.parent,
+    ]
+
+    if workspace is not None:
+        workspace = workspace.resolve()
+        roots.extend(
+            [
+                workspace / "outputs",
+                workspace / "output",
+                workspace / "artifacts",
+                workspace / "artifact",
+                workspace / "model",
+                workspace / "models",
+                workspace,
+            ]
+        )
+
+    roots.extend(
+        [
+            Path("/opt/ml/model"),
+            Path("/app/outputs"),
+            Path("/app/output"),
+            Path("/app/artifacts"),
+            Path("/app/model"),
+            Path("/app/models"),
+        ]
+    )
+
+    unique_roots: List[Path] = []
+    seen_roots: set[str] = set()
+
+    for root in roots:
+        try:
+            resolved = root.expanduser().resolve()
+        except Exception:
+            resolved = root.expanduser().absolute()
+
+        key = str(resolved)
+        if key in seen_roots:
             continue
 
-        name = path.stem.lower()
+        seen_roots.add(key)
+        unique_roots.append(resolved)
 
-        if "scaler" in name and "scaler_path" not in companions:
+    # 1) Recherche déterministe des noms exacts, par ordre de priorité.
+    exact_names_by_key = {
+        "metadata_path": ["model_metadata.json", "metadata.json"],
+        "classes_path": ["class_names.json", "classes.json", "labels.json"],
+        "metrics_path": ["metrics.json"],
+        "history_path": ["training_history.json", "history.json"],
+    }
+
+    for artifact_key, names in exact_names_by_key.items():
+        found: Optional[Path] = None
+
+        for root in unique_roots:
+            if not root.exists() or not root.is_dir():
+                continue
+
+            for name in names:
+                direct = root / name
+                if direct.exists() and direct.is_file():
+                    found = direct.resolve()
+                    break
+
+                try:
+                    nested_matches = sorted(
+                        (
+                            path.resolve()
+                            for path in root.rglob(name)
+                            if path.is_file()
+                        ),
+                        key=lambda path: _companion_artifact_score(
+                            path,
+                            primary_model_path,
+                        ),
+                        reverse=True,
+                    )
+                except Exception as exc:
+                    print(
+                        "[PLATFORM_MODEL] Could not search exact companion "
+                        f"{name} under {root}: {exc}"
+                    )
+                    nested_matches = []
+
+                if nested_matches:
+                    found = nested_matches[0]
+                    break
+
+            if found is not None:
+                break
+
+        if found is not None:
+            companions[artifact_key] = str(found)
+            seen_files.add(str(found))
+            print(
+                "[PLATFORM_ARTIFACT] Exact companion found: "
+                f"{artifact_key}={found}"
+            )
+
+    # 2) Recherche générique des transformateurs et autres fichiers auxiliaires.
+    generic_candidates: List[Path] = []
+
+    def add_candidate(path: Path) -> None:
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = path.absolute()
+
+        key = str(resolved)
+        if (
+            key in seen_files
+            or resolved == primary_model_path
+            or not resolved.exists()
+            or not resolved.is_file()
+        ):
+            return
+
+        seen_files.add(key)
+        generic_candidates.append(resolved)
+
+    for path in model_artifacts:
+        add_candidate(path)
+
+    for root in unique_roots:
+        try:
+            if not root.exists() or not root.is_dir():
+                continue
+
+            for path in root.rglob("*"):
+                if not path.is_file():
+                    continue
+
+                suffix = path.suffix.lower()
+                stem = path.stem.lower()
+                name = path.name.lower()
+
+                if name in SUPPORTED_COMPANION_FILENAMES:
+                    add_candidate(path)
+                    continue
+
+                if (
+                    suffix in SUPPORTED_COMPANION_EXTENSIONS
+                    or suffix in {".pkl", ".joblib", ".pickle"}
+                ) and any(
+                    keyword in stem
+                    for keyword in AUXILIARY_ARTIFACT_KEYWORDS
+                ):
+                    add_candidate(path)
+
+        except Exception as exc:
+            print(
+                "[PLATFORM_MODEL] Could not scan companion root "
+                f"{root}: {exc}"
+            )
+
+    generic_candidates.sort(
+        key=lambda path: _companion_artifact_score(
+            path,
+            primary_model_path,
+        ),
+        reverse=True,
+    )
+
+    for path in generic_candidates:
+        name = path.name.lower()
+        stem = path.stem.lower()
+
+        fixed_key = SUPPORTED_COMPANION_FILENAMES.get(name)
+        if fixed_key and fixed_key not in companions:
+            companions[fixed_key] = str(path)
+            continue
+
+        if "scaler" in stem and "scaler_path" not in companions:
             companions["scaler_path"] = str(path)
-        elif ("preprocess" in name or "preprocessor" in name) and "preprocessor_path" not in companions:
+        elif (
+            "preprocess" in stem or "preprocessor" in stem
+        ) and "preprocessor_path" not in companions:
             companions["preprocessor_path"] = str(path)
-        elif ("vectorizer" in name or "tfidf" in name) and "vectorizer_path" not in companions:
+        elif (
+            "vectorizer" in stem or "tfidf" in stem
+        ) and "vectorizer_path" not in companions:
             companions["vectorizer_path"] = str(path)
-        elif ("encoder" in name or "label_encoder" in name) and "encoder_path" not in companions:
+        elif (
+            "encoder" in stem or "label_encoder" in stem
+        ) and "encoder_path" not in companions:
             companions["encoder_path"] = str(path)
+        elif "tokenizer" in stem and "tokenizer_path" not in companions:
+            companions["tokenizer_path"] = str(path)
 
+    print(
+        "[PLATFORM_MODEL] Companion artifacts discovered="
+        f"{json.dumps(companions, ensure_ascii=False, sort_keys=True)}"
+    )
     return companions
-
-
 
 def resolve_platform_registered_model_name(
     experiment_name: str,
@@ -2014,24 +2689,141 @@ def _find_training_source(model_path: Path) -> Optional[Path]:
     return None
 
 
-def try_log_pytorch_model(model_path: Path) -> Optional[str]:
+def _load_model_metadata_payload(
+    companion_artifacts: Optional[Dict[str, str]],
+) -> Dict[str, Any]:
+    companion_artifacts = companion_artifacts or {}
+    metadata_path = companion_artifacts.get("metadata_path")
+
+    if not metadata_path:
+        return {}
+
+    path = Path(metadata_path)
+
+    if not path.exists() or not path.is_file():
+        return {}
+
     try:
-        artifacts = {"model_path": str(model_path)}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception as exc:
+        print(
+            "[PLATFORM_MODEL] Could not parse model metadata "
+            f"{path}: {exc}"
+        )
+        return {}
+
+
+
+def try_log_pytorch_model(
+    model_path: Path,
+    companion_artifacts: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    companion_artifacts = dict(companion_artifacts or {})
+
+    try:
+        artifacts = {"model_path": str(model_path.resolve())}
+        artifacts.update(companion_artifacts)
+
         source_file = _find_training_source(model_path)
         if source_file:
             artifacts["source_file"] = str(source_file)
+
+        metadata_payload = _load_model_metadata_payload(
+            companion_artifacts
+        )
+
+        if is_image_project() and not metadata_payload:
+            raise RuntimeError(
+                "Image model metadata is missing. Expected a valid "
+                "model_metadata.json containing at least image_size and "
+                "preprocessing information."
+            )
+
+        if is_image_project():
+            preprocessing_payload = (
+                metadata_payload.get("preprocessing", {})
+                if isinstance(metadata_payload.get("preprocessing"), dict)
+                else {}
+            )
+            image_size = (
+                metadata_payload.get("image_size")
+                or preprocessing_payload.get("image_size")
+                or preprocessing_payload.get("resize")
+            )
+            class_names = (
+                metadata_payload.get("class_names")
+                or metadata_payload.get("classes")
+                or metadata_payload.get("labels")
+                or []
+            )
+
+            if not image_size:
+                raise RuntimeError(
+                    "Image model metadata does not contain image_size/resize."
+                )
+
+            if not preprocessing_payload:
+                raise RuntimeError(
+                    "Image model metadata does not contain preprocessing."
+                )
+
+            if not class_names:
+                raise RuntimeError(
+                    "Image model metadata does not contain class_names."
+                )
+
+        python_model = TorchPyFuncWrapper()
+        # Copie embarquée indépendante. Elle reste disponible après
+        # sérialisation/désérialisation même si un ancien backend MLflow ne
+        # restitue pas correctement l'artefact metadata_path.
+        python_model.embedded_metadata = dict(metadata_payload)
+        python_model.metadata = dict(metadata_payload)
+        python_model.preprocessing = (
+            metadata_payload.get("preprocessing", {})
+            if isinstance(metadata_payload, dict)
+            else {}
+        )
+
         mlflow.pyfunc.log_model(
             artifact_path="model",
-            python_model=TorchPyFuncWrapper(),
+            python_model=python_model,
             artifacts=artifacts,
-            pip_requirements=["mlflow", "torch", "numpy", "pandas"],
+            pip_requirements=[
+                "mlflow",
+                "torch",
+                "torchvision",
+                "numpy",
+                "pandas",
+                "pillow",
+            ],
+            metadata=metadata_payload or None,
         )
-        # Validate now, not only during deployment.
+
         model_uri = mlflow.get_artifact_uri("model")
-        mlflow.pyfunc.load_model(model_uri)
+        loaded_model = mlflow.pyfunc.load_model(model_uri)
+
+        unwrapped = loaded_model.unwrap_python_model()
+        loaded_metadata = getattr(unwrapped, "metadata", {}) or {}
+
+        print(
+            "[PLATFORM_MODEL] Logged PyTorch model metadata keys="
+            f"{sorted(loaded_metadata.keys())}"
+        )
+
+        if is_image_project() and not loaded_metadata:
+            raise RuntimeError(
+                "Post-log validation failed: the reloaded image model has "
+                "no preprocessing metadata."
+            )
+
         return model_uri
+
     except Exception as exc:
-        print(f"[PLATFORM_MODEL] pytorch pyfunc log/load failed for {model_path}: {exc}")
+        print(
+            "[PLATFORM_MODEL] pytorch pyfunc log/load failed for "
+            f"{model_path}: {exc}"
+        )
         return None
 
 
@@ -2040,31 +2832,80 @@ def log_model_artifact(
     companion_artifacts: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     extension = model_path.suffix.lower()
+    companions = dict(companion_artifacts or {})
+
     result: Dict[str, Any] = {
         "path": str(model_path),
         "extension": extension,
         "logged_model_uri": None,
         "artifact_only": False,
-        "companion_artifacts": companion_artifacts or {},
+        "companion_artifacts": companions,
     }
 
     if extension in {".pkl", ".joblib", ".pickle"}:
-        logged_uri = try_log_pickle_model(model_path, companion_artifacts)
+        logged_uri = try_log_pickle_model(model_path, companions)
         if logged_uri:
             result["logged_model_uri"] = logged_uri
             return result
 
-    if extension in {".pt", ".pth"}:
-        logged_uri = try_log_pytorch_model(model_path)
+    if extension in {".pt", ".pth", ".torchscript"}:
+        logged_uri = try_log_pytorch_model(
+            model_path,
+            companion_artifacts=companions,
+        )
         if logged_uri:
             result["logged_model_uri"] = logged_uri
             return result
 
-    mlflow.log_artifact(str(model_path), artifact_path="model_artifacts")
+    mlflow.log_artifact(
+        str(model_path),
+        artifact_path="model_artifacts",
+    )
     result["artifact_only"] = True
     return result
 
+def log_companion_artifacts(
+    companion_artifacts: Dict[str, str],
+) -> Dict[str, str]:
+    """
+    Journalise les fichiers compagnons dans une arborescence stable MLflow.
 
+    Le dictionnaire retourné contient les chemins MLflow stockés dans le
+    manifeste, et non les chemins locaux éphémères du pod.
+    """
+    logged: Dict[str, str] = {}
+
+    for key, path_value in (companion_artifacts or {}).items():
+        path = Path(path_value)
+
+        if not path.exists() or not path.is_file():
+            print(
+                "[PLATFORM_ARTIFACT] Companion artifact missing: "
+                f"{key}={path}"
+            )
+            continue
+
+        artifact_path = "platform_model/artifacts"
+
+        try:
+            mlflow.log_artifact(
+                str(path),
+                artifact_path=artifact_path,
+            )
+
+            logged[key] = f"{artifact_path}/{path.name}"
+
+            print(
+                "[PLATFORM_ARTIFACT] Companion artifact logged: "
+                f"{key} -> {logged[key]}"
+            )
+        except Exception as exc:
+            print(
+                "[PLATFORM_ARTIFACT] Could not log companion artifact "
+                f"{key}={path}: {exc}"
+            )
+
+    return logged
 
 
 def build_model_manifest(
@@ -2075,13 +2916,40 @@ def build_model_manifest(
 ) -> Dict[str, Any]:
     """Build a portable manifest used by serving and audit components."""
     def relative_or_absolute(path_value: str) -> str:
-        path = Path(path_value).resolve()
+        raw = str(path_value or "").strip()
+
+        if raw.startswith("platform_model/"):
+            return raw
+
+        path = Path(raw).resolve()
+
         try:
             return str(path.relative_to(workspace.resolve()))
         except Exception:
             return str(path)
 
-    return {
+    metadata_payload: Dict[str, Any] = {}
+
+    # Les chemins reçus ici peuvent être des chemins MLflow déjà journalisés.
+    # Pour enrichir le manifeste, on relit donc en priorité le fichier local
+    # découvert avant journalisation.
+    local_companions = find_companion_artifacts(
+        primary_model_path=primary_model_path,
+        model_artifacts=[primary_model_path],
+        workspace=workspace,
+    )
+    local_metadata_path = local_companions.get("metadata_path")
+
+    if local_metadata_path:
+        metadata_payload = _read_json_dict(Path(local_metadata_path))
+
+    preprocessing = (
+        metadata_payload.get("preprocessing", {})
+        if isinstance(metadata_payload.get("preprocessing"), dict)
+        else {}
+    )
+
+    manifest: Dict[str, Any] = {
         "schema_version": 1,
         "primary_model": relative_or_absolute(str(primary_model_path)),
         "primary_model_extension": primary_model_path.suffix.lower(),
@@ -2094,7 +2962,8 @@ def build_model_manifest(
             for key, value in (metrics or {}).items()
             if key is not None and value is not None
         },
-        "runtime_mode": _clean_env_value(os.environ.get("RUNTIME_MODE")) or "CUSTOM_DOCKERFILE",
+        "runtime_mode": _clean_env_value(os.environ.get("RUNTIME_MODE"))
+        or "CUSTOM_DOCKERFILE",
         "project_type": get_project_type_from_platform(),
         "target_column": get_target_column_from_platform(),
         "registered_model_name": _clean_env_value(
@@ -2103,6 +2972,26 @@ def build_model_manifest(
         "promotion_owner": "BACKEND",
         "validation_status": "PENDING",
     }
+
+    # Les champs sont dupliqués volontairement au niveau racine afin que le
+    # serveur de prédiction puisse les lire sans dépendre d'un chemin interne
+    # spécifique à MLflow.
+    for key in (
+        "framework",
+        "data_type",
+        "model_type",
+        "image_size",
+        "input_shape",
+        "class_names",
+    ):
+        value = metadata_payload.get(key)
+        if value not in (None, "", [], {}):
+            manifest[key] = value
+
+    if preprocessing:
+        manifest["preprocessing"] = preprocessing
+
+    return manifest
 
 def run_standard_runtime(
     script_path: Path,
@@ -2240,10 +3129,20 @@ def run_standard_runtime(
     # Elles complètent les métriques imprimées par le script, sans les écraser.
     pre_primary_model_path = select_primary_model_artifact(model_artifacts)
     pre_companion_artifacts = (
-        find_companion_artifacts(pre_primary_model_path, model_artifacts)
+        find_companion_artifacts(
+            pre_primary_model_path,
+            model_artifacts,
+            workspace=workspace,
+        )
         if pre_primary_model_path
         else {}
     )
+    if pre_primary_model_path:
+        pre_companion_artifacts = ensure_model_metadata_artifact(
+            primary_model_path=pre_primary_model_path,
+            companion_artifacts=pre_companion_artifacts,
+            workspace=workspace,
+        )
     auto_metrics = auto_evaluate_metrics_from_platform(
         workspace=workspace,
         dataset_path=dataset_path,
@@ -2434,10 +3333,21 @@ def run_standard_runtime(
 
             primary_model_path = select_primary_model_artifact(model_artifacts)
             companion_artifacts = (
-                find_companion_artifacts(primary_model_path, model_artifacts)
+                find_companion_artifacts(
+                    primary_model_path,
+                    model_artifacts,
+                    workspace=workspace,
+                )
                 if primary_model_path
                 else {}
             )
+
+            if primary_model_path:
+                companion_artifacts = ensure_model_metadata_artifact(
+                    primary_model_path=primary_model_path,
+                    companion_artifacts=companion_artifacts,
+                    workspace=workspace,
+                )
 
             artifact_results: List[Dict[str, Any]] = []
 
@@ -2451,9 +3361,20 @@ def run_standard_runtime(
                 )
                 artifact_results.append(artifact_result)
                 try:
-                    mlflow.log_artifact(str(primary_model_path), artifact_path="raw_model")
+                    mlflow.log_artifact(
+                        str(primary_model_path),
+                        artifact_path="raw_model",
+                    )
+
+                    logged_companion_artifacts = log_companion_artifacts(
+                        companion_artifacts
+                    )
+
                     manifest = build_model_manifest(
-                        primary_model_path, companion_artifacts, metrics, workspace
+                        primary_model_path,
+                        logged_companion_artifacts,
+                        metrics,
+                        workspace,
                     )
                     mlflow.log_text(
                         json.dumps(manifest, indent=2, ensure_ascii=False, default=str),

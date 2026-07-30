@@ -152,8 +152,6 @@ public class RetrainingConfigService {
          * Le scheduler / RetrainingSourcePersistenceService résoudra la source
          * lorsqu'une version Production sera disponible.
          */
-        notifyConfigChanged(project, saved, enabled ? "activé" : "désactivé");
-
         return saved;
     }
 
@@ -221,9 +219,6 @@ public class RetrainingConfigService {
 
         RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
 
-        if (project != null) {
-            notifyConfigChanged(project, saved, "désactivé");
-        }
 
         return saved;
     }
@@ -265,10 +260,6 @@ public class RetrainingConfigService {
 
         RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
 
-        MlProject project = mlProjectRepository.findById(projectId).orElse(null);
-        if (project != null) {
-            notifyConfigChanged(project, saved, "demandé maintenant");
-        }
 
         return saved;
     }

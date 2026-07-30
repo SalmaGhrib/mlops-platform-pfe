@@ -23,19 +23,13 @@ data:
 
   APP_FRONTEND_BASE_URL: "http://128.251.112.197"
 
-  APP_CORS_ALLOWED_ORIGINS: >-
-    http://128.251.112.197,
-    http://localhost:4200,
-    http://127.0.0.1:4200,
-    http://localhost:4202,
-    http://127.0.0.1:4202
+  APP_CORS_ALLOWED_ORIGINS: "http://128.251.112.197,http://localhost:4200,http://127.0.0.1:4200,http://localhost:4202,http://127.0.0.1:4202"
 
   # ============================================================
   # MySQL / JPA
   # ============================================================
 
-  SPRING_DATASOURCE_URL: >-
-    jdbc:mysql://mysql-service.mlops.svc.cluster.local:3306/mlops_platform?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+  SPRING_DATASOURCE_URL: "jdbc:mysql://mysql-service.mlops.svc.cluster.local:3306/mlops_platform?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&tcpKeepAlive=true&connectTimeout=10000&socketTimeout=120000"
 
   SPRING_DATASOURCE_USERNAME: "root"
 
@@ -43,12 +37,17 @@ data:
   SPRING_JPA_SHOW_SQL: "false"
   SPRING_JPA_OPEN_IN_VIEW: "true"
 
-  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
-  SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "2"
+  # ============================================================
+  # HikariCP
+  # ============================================================
+
+  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "5"
+  SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
   SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT: "30000"
   SPRING_DATASOURCE_HIKARI_VALIDATION_TIMEOUT: "5000"
   SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT: "300000"
-  SPRING_DATASOURCE_HIKARI_MAX_LIFETIME: "1200000"
+  SPRING_DATASOURCE_HIKARI_MAX_LIFETIME: "900000"
+  SPRING_DATASOURCE_HIKARI_KEEPALIVE_TIME: "30000"
   SPRING_DATASOURCE_HIKARI_LEAK_DETECTION_THRESHOLD: "60000"
 
   # ============================================================
@@ -56,7 +55,6 @@ data:
   # ============================================================
 
   APP_UPLOAD_DIR: "/app/uploads"
-
   APP_UPLOADS_PVC_ENABLED: "true"
   APP_UPLOADS_PVC_NAME: "backend-uploads-pvc"
   APP_UPLOADS_MOUNT_PATH: "/app/uploads"
@@ -65,14 +63,9 @@ data:
   # MLflow
   # ============================================================
 
-  APP_MLFLOW_TRACKING_URL: >-
-    http://mlflow-service.mlops.svc.cluster.local:5000
-
-  APP_MLFLOW_TRACKING_URI: >-
-    http://mlflow-service.mlops.svc.cluster.local:5000
-
-  MLFLOW_TRACKING_URI: >-
-    http://mlflow-service.mlops.svc.cluster.local:5000
+  APP_MLFLOW_TRACKING_URL: "http://mlflow-service.mlops.svc.cluster.local:5000"
+  APP_MLFLOW_TRACKING_URI: "http://mlflow-service.mlops.svc.cluster.local:5000"
+  MLFLOW_TRACKING_URI: "http://mlflow-service.mlops.svc.cluster.local:5000"
 
   APP_MLFLOW_PRODUCTION_ALIAS: "production"
 
@@ -86,20 +79,15 @@ data:
   APP_KUBERNETES_CUSTOM_JOB_TTL_SECONDS: "3600"
   APP_KUBERNETES_CUSTOM_JOB_BACKOFF_LIMIT: "0"
 
-  APP_KUBEFLOW_API_URL: >-
-    http://ml-pipeline.kubeflow.svc.cluster.local:8888
+  APP_KUBEFLOW_API_URL: "http://ml-pipeline.kubeflow.svc.cluster.local:8888"
 
-  APP_KUBEFLOW_PIPELINE_FILE: >-
-    /app/mini-mlops/kubeflow/compiled/custom_model_pipeline.yaml
+  APP_KUBEFLOW_PIPELINE_FILE: "/app/mini-mlops/kubeflow/compiled/custom_model_pipeline.yaml"
 
-  APP_PIPELINE_GATEWAY_URL: >-
-    http://pipeline-gateway-service.mlops.svc.cluster.local:8001/upload-and-run-custom-model
+  APP_PIPELINE_GATEWAY_URL: "http://pipeline-gateway-service.mlops.svc.cluster.local:8001/upload-and-run-custom-model"
 
-  APP_RUNTIME_ANALYSIS_API_URL: >-
-    http://pipeline-gateway-service.mlops.svc.cluster.local:8001/api/runtime/analyze-script
+  APP_RUNTIME_ANALYSIS_API_URL: "http://pipeline-gateway-service.mlops.svc.cluster.local:8001/api/runtime/analyze-script"
 
-  CUSTOM_PREDICT_API_URL: >-
-    http://pipeline-gateway-service.mlops.svc.cluster.local:8001
+  CUSTOM_PREDICT_API_URL: "http://pipeline-gateway-service.mlops.svc.cluster.local:8001"
 
   # ============================================================
   # Azure Container Registry
@@ -107,15 +95,13 @@ data:
 
   APP_DOCKER_REGISTRY: "acrmlopssalmav2.azurecr.io"
   APP_DOCKER_CUSTOM_IMAGE_PREFIX: "mlops-custom"
-
   APP_DOCKER_IMAGE_PULL_SECRET: ""
 
   # ============================================================
   # Runtime embarqué
   # ============================================================
 
-  APP_PLATFORM_RUNNER_PATH: >-
-    /app/mini-mlops/src/custom_models/platform_runner.py
+  APP_PLATFORM_RUNNER_PATH: "/app/mini-mlops/src/custom_models/platform_runner.py"
 
   APP_PLATFORM_RUNTIME_ROOT: "/app/mini-mlops"
 
@@ -137,8 +123,19 @@ data:
 
   APP_KANIKO_DOCKER_CONFIG_SECRET: "kaniko-docker-config"
 
-  APP_KANIKO_CACHE_REPO: >-
-    acrmlopssalmav2.azurecr.io/mlops-kaniko-cache
+  APP_KANIKO_CACHE_REPO: "acrmlopssalmav2.azurecr.io/mlops-kaniko-cache"
+
+  # ============================================================
+  # Scheduling global
+  # ============================================================
+  #
+  # TEMPORAIREMENT false pour vérifier que les blocages MySQL
+  # ne viennent plus de ShedLock ou des schedulers.
+  # ============================================================
+
+  APP_SCHEDULING_ENABLED: "true"
+
+  SPRING_TASK_SCHEDULING_POOL_SIZE: "4"
 
   # ============================================================
   # Custom Docker watcher
@@ -148,16 +145,14 @@ data:
 
   APP_CUSTOM_DOCKER_WATCHER_INITIAL_DELAY_MS: "10000"
 
-  APP_CUSTOM_DOCKER_WATCHER_DELAY_MS: "10000"
+  APP_CUSTOM_DOCKER_WATCHER_DELAY_MS: "15000"
 
   # ============================================================
   # Synchronisation automatique MLflow / MySQL
   # ============================================================
 
   APP_MLOPS_AUTO_SYNC_ENABLED: "true"
-
   APP_MLOPS_AUTO_SYNC_INITIAL_DELAY_MS: "30000"
-
   APP_MLOPS_AUTO_SYNC_DELAY_MS: "60000"
 
   # ============================================================
@@ -166,68 +161,61 @@ data:
 
   APP_MLOPS_AUTO_DEPLOY_ENABLED: "true"
 
+  # ============================================================
+  # Réconciliation Production
+  # ============================================================
+
   APP_MLOPS_PRODUCTION_RECONCILER_ENABLED: "true"
-
   APP_MLOPS_PRODUCTION_RECONCILER_INITIAL_DELAY_MS: "30000"
-
-  APP_MLOPS_PRODUCTION_RECONCILER_DELAY_MS: "60000"
+  APP_MLOPS_PRODUCTION_RECONCILER_DELAY_MS: "30000"
 
   # ============================================================
   # Nettoyage des déploiements
   # ============================================================
 
   APP_MLOPS_DEPLOYMENT_CLEANUP_ENABLED: "false"
-
   APP_MLOPS_DEPLOYMENT_CLEANUP_INITIAL_DELAY_MS: "300000"
-
   APP_MLOPS_DEPLOYMENT_CLEANUP_DELAY_MS: "600000"
-
   APP_MLOPS_DEPLOYMENT_CLEANUP_KEEP_HISTORY: "true"
-
   APP_MLOPS_DEPLOYMENT_CLEANUP_DELETE_FAILED_AFTER_HOURS: "1"
 
   # ============================================================
   # Réentraînement automatique
   # ============================================================
 
-  APP_RETRAINING_SCHEDULER_ENABLED: "true"
-
+  APP_RETRAINING_SCHEDULER_ENABLED: "false"
   APP_RETRAINING_SCHEDULER_INITIAL_DELAY_MS: "30000"
-
   APP_RETRAINING_SCHEDULER_DELAY_MS: "30000"
-
   APP_RETRAINING_SCHEDULER_STUCK_TIMEOUT_MINUTES: "30"
 
   # ============================================================
   # Monitoring intelligent
   # ============================================================
 
-  # Indispensable pour SMART_MONITORING_ONLY et FULL_SMART
-  APP_MONITORING_ALERTS_ENABLED: "true"
-
-  APP_MONITORING_ALERTS_INITIAL_DELAY_MS: "20000"
-
-  APP_MONITORING_ALERTS_DELAY_MS: "30000"
+  APP_MONITORING_ALERTS_ENABLED: "false"
+  APP_MONITORING_ALERTS_INITIAL_DELAY_MS: "30000"
+  APP_MONITORING_ALERTS_DELAY_MS: "60000"
 
   # ============================================================
   # Seuils du monitoring
   # ============================================================
 
   MONITORING_ALERT_FAILED_RUNS_THRESHOLD: "1"
-
   MONITORING_ALERT_FAILED_DEPLOYMENTS_THRESHOLD: "1"
-
   MONITORING_ALERT_UNAVAILABLE_MODELS_THRESHOLD: "1"
-
   MONITORING_ALERT_BACKEND_LATENCY_MS_THRESHOLD: "1000"
-
   MONITORING_ALERT_FAILED_RUNS_BY_PROJECT_THRESHOLD: "1"
-
-  # Valeur de test : recherche des échecs sur les dernières 24 heures
   MONITORING_ALERT_FAILED_RUNS_LOOKBACK_HOURS: "24"
 
-  # Pendant les tests : aucun cooldown
   MONITORING_RETRAINING_COOLDOWN_MINUTES: "60"
+
+  # ============================================================
+  # Nettoyage des notifications
+  # ============================================================
+
+  APP_NOTIFICATIONS_CLEANUP_ENABLED: "false"
+  APP_NOTIFICATIONS_CLEANUP_INITIAL_DELAY_MS: "60000"
+  APP_NOTIFICATIONS_CLEANUP_DELAY_MS: "900000"
 
   # ============================================================
   # Serving
@@ -235,28 +223,22 @@ data:
 
   APP_SERVING_DEDICATED_IMAGE_ENABLED: "true"
 
-  APP_DEPLOYMENT_DEFAULT_DOCKER_IMAGE: >-
-    acrmlopssalmav2.azurecr.io/mlops-model-server:v2
+  APP_DEPLOYMENT_DEFAULT_DOCKER_IMAGE: "acrmlopssalmav2.azurecr.io/mlops-model-server:v2"
 
   # ============================================================
   # Standardisation des artefacts
   # ============================================================
 
   APP_MODEL_STANDARDIZER_ENABLED: "true"
-
   APP_MODEL_STANDARDIZER_PYTHON_COMMAND: "python"
-
-  APP_MODEL_STANDARDIZER_SCRIPT_PATH: >-
-    /app/scripts/standardize_model_artifact.py
-
+  APP_MODEL_STANDARDIZER_SCRIPT_PATH: "/app/scripts/standardize_model_artifact.py"
   APP_MODEL_STANDARDIZER_TARGET_ARTIFACT_PATH: "standardized_model"
 
   # ============================================================
-  # Prometheus / Spring Boot Actuator
+  # Prometheus / Actuator
   # ============================================================
 
-  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: >-
-    health,info,prometheus,metrics
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,prometheus,metrics"
 
   MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: "always"
 
@@ -266,19 +248,9 @@ data:
 
   MANAGEMENT_METRICS_TAGS_APPLICATION: "mlops-backend"
 
-  MONITORING_PROMETHEUS_URL: >-
-    http://prometheus-k8s.monitoring.svc.cluster.local:9090
+  MONITORING_PROMETHEUS_URL: "http://prometheus-k8s.monitoring.svc.cluster.local:9090"
 
-  PROMETHEUS_URL: >-
-    http://prometheus-k8s.monitoring.svc.cluster.local:9090
-
-  # ============================================================
-  # Notifications
-  # ============================================================
-
-  APP_NOTIFICATIONS_CLEANUP_INITIAL_DELAY_MS: "15000"
-
-  APP_NOTIFICATIONS_CLEANUP_DELAY_MS: "900000"
+  PROMETHEUS_URL: "http://prometheus-k8s.monitoring.svc.cluster.local:9090"
 
   # ============================================================
   # Logs

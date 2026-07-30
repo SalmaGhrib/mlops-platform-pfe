@@ -6,15 +6,23 @@ import com.mlops.platform.entity.MlExperimentMetric;
 import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.repository.MlExperimentMetricRepository;
 import com.mlops.platform.repository.MlExperimentRepository;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
+
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
 
 @Service
+@ConditionalOnProperty(
+        name = "app.custom-docker.watcher.enabled",
+        havingValue = "true",
+        matchIfMissing = true
+)
 public class CustomDockerRunWatcher {
 
     private final MlExperimentRepository mlExperimentRepository;
@@ -25,6 +33,7 @@ public class CustomDockerRunWatcher {
     private final ModelArtifactResolver modelArtifactResolver;
     private final ModelArtifactStandardizerService modelArtifactStandardizerService;
     private final TrainingOutputAnalyzerService trainingOutputAnalyzerService;
+    private final CustomDockerPersistenceService customDockerPersistenceService;
 
     @Value("${app.custom-docker.watcher.enabled:true}")
     private boolean watcherEnabled;
@@ -40,7 +49,8 @@ public class CustomDockerRunWatcher {
             MlExperimentService mlExperimentService,
             ModelArtifactResolver modelArtifactResolver,
             ModelArtifactStandardizerService modelArtifactStandardizerService,
-            TrainingOutputAnalyzerService trainingOutputAnalyzerService
+            TrainingOutputAnalyzerService trainingOutputAnalyzerService,
+            CustomDockerPersistenceService customDockerPersistenceService
     ) {
         this.mlExperimentRepository = mlExperimentRepository;
         this.metricRepository = metricRepository;
@@ -50,6 +60,7 @@ public class CustomDockerRunWatcher {
         this.modelArtifactResolver = modelArtifactResolver;
         this.modelArtifactStandardizerService = modelArtifactStandardizerService;
         this.trainingOutputAnalyzerService = trainingOutputAnalyzerService;
+        this.customDockerPersistenceService = customDockerPersistenceService;
     }
 
     @Scheduled(
@@ -269,6 +280,10 @@ public class CustomDockerRunWatcher {
     }
 
     private void syncBuildJob(MlExperiment experiment) {
+        if (experiment == null || experiment.getId() == null) {
+            return;
+        }
+
         String buildJobName = experiment.getBuildJobName();
 
         if (!hasText(buildJobName)) {
@@ -276,17 +291,43 @@ public class CustomDockerRunWatcher {
             return;
         }
 
-        String status = kubernetesBuildService.getBuildJobStatus(buildJobName);
-        String logs = kubernetesBuildService.getBuildJobLogs(buildJobName);
-
-        experiment.setBuildLogs(logs);
+        // Appels Kubernetes hors transaction MySQL.
+        String status =
+                kubernetesBuildService.getBuildJobStatus(buildJobName);
+        String logs =
+                kubernetesBuildService.getBuildJobLogs(buildJobName);
 
         if ("COMPLETED".equalsIgnoreCase(status)) {
-            experiment.setBuildStatus("IMAGE_BUILD_COMPLETED");
-            experiment.setStatus(ExperimentStatus.RUNNING);
-            experiment.setMessage("Custom Docker image built successfully. Training job will be launched.");
-            experiment.setErrorMessage(null);
-            mlExperimentRepository.saveAndFlush(experiment);
+            try {
+                MlExperiment updatedExperiment =
+                        customDockerPersistenceService.markBuildCompleted(
+                                experiment.getId(),
+                                logs
+                        );
+
+                System.out.println(
+                        "[CUSTOM-DOCKER] Build synchronized successfully. "
+                                + "experimentId="
+                                + experiment.getId()
+                                + ", buildJobName="
+                                + buildJobName
+                );
+
+                // Lancement Kubernetes après le COMMIT réussi.
+                launchTrainingJob(updatedExperiment);
+
+            } catch (Exception exception) {
+                System.err.println(
+                        "[CUSTOM-DOCKER] Unable to persist completed build. "
+                                + "The experiment remains actionable. "
+                                + "experimentId="
+                                + experiment.getId()
+                                + ", reason="
+                                + safe(exception.getMessage())
+                );
+                exception.printStackTrace();
+            }
+
             return;
         }
 
@@ -306,77 +347,155 @@ public class CustomDockerRunWatcher {
             return;
         }
 
-        experiment.setStatus(ExperimentStatus.RUNNING);
-        experiment.setBuildStatus("IMAGE_BUILD_RUNNING");
-        experiment.setMessage("Custom Docker image build is still running. Status=" + status);
-        mlExperimentRepository.saveAndFlush(experiment);
+        try {
+            customDockerPersistenceService.updateExperiment(
+                    experiment.getId(),
+                    managedExperiment -> {
+                        if (isTerminalStatus(managedExperiment.getStatus())) {
+                            return;
+                        }
+
+                        managedExperiment.setBuildLogs(logs);
+                        managedExperiment.setStatus(ExperimentStatus.RUNNING);
+                        managedExperiment.setBuildStatus("IMAGE_BUILD_RUNNING");
+                        managedExperiment.setMessage(
+                                "Custom Docker image build is still running. Status="
+                                        + status
+                        );
+                    }
+            );
+
+        } catch (Exception exception) {
+            System.err.println(
+                    "[CUSTOM-DOCKER] Unable to persist running build status. "
+                            + "experimentId="
+                            + experiment.getId()
+                            + ", reason="
+                            + safe(exception.getMessage())
+            );
+        }
     }
 
     private void launchTrainingJob(MlExperiment experiment) {
-        MlProject project = experiment.getProject();
+        if (experiment == null || experiment.getId() == null) {
+            return;
+        }
+
+        MlExperiment freshExperiment =
+                mlExperimentRepository
+                        .findByIdWithFiles(experiment.getId())
+                        .orElse(null);
+
+        if (freshExperiment == null
+                || isTerminalStatus(freshExperiment.getStatus())) {
+            return;
+        }
+
+        MlProject project = freshExperiment.getProject();
 
         if (project == null || project.getId() == null) {
-            markFailed(experiment, "TRAINING", "Project is null. Cannot launch training job.");
+            markFailed(
+                    freshExperiment,
+                    "TRAINING",
+                    "Project is null. Cannot launch training job."
+            );
             return;
         }
 
-        if (!hasText(experiment.getCustomImageUri())) {
-            markFailed(experiment, "TRAINING", "Custom image URI is empty. Cannot launch training job.");
+        if (!hasText(freshExperiment.getCustomImageUri())) {
+            markFailed(
+                    freshExperiment,
+                    "TRAINING",
+                    "Custom image URI is empty. Cannot launch training job."
+            );
             return;
         }
 
-        if (hasText(experiment.getTrainingJobName())) {
-            experiment.setBuildStatus("CUSTOM_IMAGE_JOB_RUNNING");
-            experiment.setStatus(ExperimentStatus.RUNNING);
-            markDockerTrainingStartedIfNeeded(experiment);
-            experiment.setMessage("Training job already exists. Watching existing job: "
-                    + experiment.getTrainingJobName());
-            mlExperimentRepository.saveAndFlush(experiment);
+        if (hasText(freshExperiment.getTrainingJobName())) {
+            try {
+                customDockerPersistenceService.updateExperiment(
+                        freshExperiment.getId(),
+                        managedExperiment -> {
+                            managedExperiment.setBuildStatus(
+                                    "CUSTOM_IMAGE_JOB_RUNNING"
+                            );
+                            managedExperiment.setStatus(
+                                    ExperimentStatus.RUNNING
+                            );
+                            managedExperiment.setKubeflowStatus("RUNNING");
+                            managedExperiment.setMessage(
+                                    "Training job already exists. "
+                                            + "Watching existing job: "
+                                            + managedExperiment.getTrainingJobName()
+                            );
+                        }
+                );
+
+            } catch (Exception exception) {
+                System.err.println(
+                        "[CUSTOM-DOCKER] Unable to synchronize existing "
+                                + "training job. experimentId="
+                                + freshExperiment.getId()
+                                + ", reason="
+                                + safe(exception.getMessage())
+                );
+            }
+
             return;
         }
 
         try {
-            System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
-                    + " launching custom image training job with image=" + experiment.getCustomImageUri());
-
-            String jobName = kubernetesJobService.launchCustomImageTrainingJob(
-                    project,
-                    experiment,
-                    experiment.getCustomImageUri()
+            System.out.println(
+                    "[CUSTOM-DOCKER] Experiment id="
+                            + freshExperiment.getId()
+                            + " launching custom image training job with image="
+                            + freshExperiment.getCustomImageUri()
             );
 
-            experiment.setTrainingJobName(jobName);
-            experiment.setKubeflowRunName(jobName);
+            // Appel Kubernetes hors transaction.
+            String jobName =
+                    kubernetesJobService.launchCustomImageTrainingJob(
+                            project,
+                            freshExperiment,
+                            freshExperiment.getCustomImageUri()
+                    );
 
-            experiment.setKubeflowStatus("RUNNING");
-            experiment.setBuildStatus("CUSTOM_IMAGE_JOB_RUNNING");
-            experiment.setStatus(ExperimentStatus.RUNNING);
-            markDockerTrainingStartedIfNeeded(experiment);
-            experiment.setMessage("Custom Docker training job launched: " + jobName);
-            experiment.setErrorMessage(null);
+            customDockerPersistenceService.markTrainingStarted(
+                    freshExperiment.getId(),
+                    jobName
+            );
 
-            System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
-                    + " launched training job=" + jobName);
+            System.out.println(
+                    "[CUSTOM-DOCKER] Experiment id="
+                            + freshExperiment.getId()
+                            + " launched training job="
+                            + jobName
+            );
 
-            mlExperimentRepository.saveAndFlush(experiment);
+        } catch (Exception exception) {
+            String error = safe(exception.getMessage());
 
-        } catch (Exception e) {
-            String error = safe(e.getMessage());
-
-            if (isTransientPersistenceFailure(e)) {
-                System.out.println("[CUSTOM-DOCKER] Temporary persistence error while launching training. "
-                        + "The experiment remains actionable and will be retried. experimentId="
-                        + experiment.getId()
-                        + ", reason="
-                        + error);
+            if (isTransientPersistenceFailure(exception)) {
+                System.err.println(
+                        "[CUSTOM-DOCKER] Temporary persistence failure after "
+                                + "training job creation. experimentId="
+                                + freshExperiment.getId()
+                                + ", reason="
+                                + error
+                );
+                exception.printStackTrace();
                 return;
             }
 
-            System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
-                    + " failed to launch custom image training job: " + error);
+            System.err.println(
+                    "[CUSTOM-DOCKER] Experiment id="
+                            + freshExperiment.getId()
+                            + " failed to launch custom image training job: "
+                            + error
+            );
 
             markFailed(
-                    experiment,
+                    freshExperiment,
                     "TRAINING",
                     "Failed to launch custom Docker training job: " + error
             );
@@ -1279,14 +1398,29 @@ public class CustomDockerRunWatcher {
             String message = safe(current.getMessage()).toLowerCase();
 
             if (className.contains("LazyInitializationException")
+                    || className.contains("RecoverableDataAccessException")
+                    || className.contains("QueryTimeoutException")
+                    || className.contains("CommunicationsException")
+                    || className.contains("CJCommunicationsException")
+                    || className.contains("SocketTimeoutException")
+                    || className.contains("SQLTransient")
                     || className.contains("PessimisticLock")
                     || className.contains("OptimisticLock")
                     || className.contains("StaleObjectState")
                     || className.contains("CannotAcquireLock")
+                    || message.contains("communications link failure")
+                    || message.contains("unable to commit against jdbc connection")
+                    || message.contains("read timed out")
+                    || message.contains("socket timeout")
+                    || message.contains("connection marked as broken")
+                    || message.contains("connection is closed")
                     || message.contains("could not initialize proxy")
                     || message.contains("no session")
                     || message.contains("lock wait timeout")
-                    || message.contains("row was updated or deleted by another transaction")) {
+                    || message.contains("deadlock")
+                    || message.contains(
+                            "row was updated or deleted by another transaction"
+                    )) {
                 return true;
             }
 

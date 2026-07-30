@@ -104,9 +104,9 @@ export class MyProjectsComponent implements OnInit {
       retrainingFrequencyType: 'WEEK',
       retrainingFrequencyValue: 1,
       retrainingStrategy: 'SCHEDULED_ONLY',
-      failureMonitoringEnabled: true,
-      performanceMonitoringEnabled: true,
-      dataDriftMonitoringEnabled: true,
+      failureMonitoringEnabled: false,
+      performanceMonitoringEnabled: false,
+      dataDriftMonitoringEnabled: false,
       monitoringLookbackHours: 24,
       minPredictionsForMonitoring: 5,
       maxPredictionErrorRatePercent: 20,
@@ -162,8 +162,9 @@ export class MyProjectsComponent implements OnInit {
     }
 
     this.retrainingService.getConfig(projectId).subscribe({
-      next: (config) => {
-        this.retrainingConfigs[projectId] = config;
+      next: (config: RetrainingConfigResponse) => {
+        this.retrainingConfigs[projectId] =
+          this.normalizeRetrainingConfig(config);
       },
       error: () => {
         this.retrainingConfigs[projectId] = null;
@@ -205,9 +206,9 @@ export class MyProjectsComponent implements OnInit {
       retrainingFrequencyType: 'WEEK',
       retrainingFrequencyValue: 1,
       retrainingStrategy: 'SCHEDULED_ONLY',
-      failureMonitoringEnabled: true,
-      performanceMonitoringEnabled: true,
-      dataDriftMonitoringEnabled: true,
+      failureMonitoringEnabled: false,
+      performanceMonitoringEnabled: false,
+      dataDriftMonitoringEnabled: false,
       monitoringLookbackHours: 24,
       minPredictionsForMonitoring: 5,
       maxPredictionErrorRatePercent: 20,
@@ -231,21 +232,38 @@ export class MyProjectsComponent implements OnInit {
 
   private loadRetrainingConfigIntoForm(projectId: number): void {
     this.retrainingService.getConfig(projectId).subscribe({
-      next: (config) => {
+      next: (rawConfig: RetrainingConfigResponse) => {
+        const config = this.normalizeRetrainingConfig(rawConfig);
+
         this.retrainingConfigs[projectId] = config;
 
+        const strategy =
+          (config.strategy || 'SCHEDULED_ONLY') as RetrainingStrategy;
+
         this.projectForm.retrainingEnabled = config.enabled ?? false;
-        this.projectForm.retrainingFrequencyType = config.frequencyType || 'WEEK';
-        this.projectForm.retrainingFrequencyValue = config.frequencyValue || 1;
-        this.projectForm.retrainingStrategy = config.strategy || 'SCHEDULED_ONLY';
-        this.projectForm.failureMonitoringEnabled = config.failureMonitoringEnabled ?? true;
-        this.projectForm.performanceMonitoringEnabled = config.performanceMonitoringEnabled ?? true;
-        this.projectForm.dataDriftMonitoringEnabled = config.dataDriftMonitoringEnabled ?? true;
-        this.projectForm.monitoringLookbackHours = config.monitoringLookbackHours || 24;
-        this.projectForm.minPredictionsForMonitoring = config.minPredictionsForMonitoring || 5;
-        this.projectForm.maxPredictionErrorRatePercent = config.maxPredictionErrorRatePercent ?? 20;
-        this.projectForm.performanceDropThresholdPercent = config.performanceDropThresholdPercent ?? 10;
-        this.projectForm.dataDriftThresholdPercent = config.dataDriftThresholdPercent ?? 25;
+        this.projectForm.retrainingFrequencyType =
+          config.frequencyType || 'WEEK';
+        this.projectForm.retrainingFrequencyValue =
+          config.frequencyValue || 1;
+        this.projectForm.retrainingStrategy = strategy;
+
+        this.projectForm.failureMonitoringEnabled =
+          config.failureMonitoringEnabled ?? false;
+        this.projectForm.performanceMonitoringEnabled =
+          config.performanceMonitoringEnabled ?? false;
+        this.projectForm.dataDriftMonitoringEnabled =
+          config.dataDriftMonitoringEnabled ?? false;
+
+        this.projectForm.monitoringLookbackHours =
+          config.monitoringLookbackHours || 24;
+        this.projectForm.minPredictionsForMonitoring =
+          config.minPredictionsForMonitoring || 5;
+        this.projectForm.maxPredictionErrorRatePercent =
+          config.maxPredictionErrorRatePercent ?? 20;
+        this.projectForm.performanceDropThresholdPercent =
+          config.performanceDropThresholdPercent ?? 10;
+        this.projectForm.dataDriftThresholdPercent =
+          config.dataDriftThresholdPercent ?? 25;
       },
       error: () => {
         this.retrainingConfigs[projectId] = null;
@@ -254,9 +272,11 @@ export class MyProjectsComponent implements OnInit {
         this.projectForm.retrainingFrequencyType = 'WEEK';
         this.projectForm.retrainingFrequencyValue = 1;
         this.projectForm.retrainingStrategy = 'SCHEDULED_ONLY';
-        this.projectForm.failureMonitoringEnabled = true;
-        this.projectForm.performanceMonitoringEnabled = true;
-        this.projectForm.dataDriftMonitoringEnabled = true;
+
+        this.projectForm.failureMonitoringEnabled = false;
+        this.projectForm.performanceMonitoringEnabled = false;
+        this.projectForm.dataDriftMonitoringEnabled = false;
+
         this.projectForm.monitoringLookbackHours = 24;
         this.projectForm.minPredictionsForMonitoring = 5;
         this.projectForm.maxPredictionErrorRatePercent = 20;
@@ -325,6 +345,37 @@ export class MyProjectsComponent implements OnInit {
       this.projectForm.dataDriftThresholdPercent = this.projectForm.dataDriftThresholdPercent ?? 25;
     }
   }
+
+  onRetrainingStrategyChange(
+    strategy: RetrainingStrategy
+  ): void {
+    this.projectForm.retrainingStrategy =
+      strategy || 'SCHEDULED_ONLY';
+
+    if (!this.strategyUsesMonitoring(strategy)) {
+      this.projectForm.failureMonitoringEnabled = false;
+      this.projectForm.performanceMonitoringEnabled = false;
+      this.projectForm.dataDriftMonitoringEnabled = false;
+      return;
+    }
+
+    /*
+     * Lors du passage vers une stratégie avec monitoring,
+     * activer les trois contrôles par défaut uniquement si aucun
+     * contrôle n'est déjà sélectionné.
+     */
+    const hasAtLeastOneMonitoringCheck =
+      this.projectForm.failureMonitoringEnabled ||
+      this.projectForm.performanceMonitoringEnabled ||
+      this.projectForm.dataDriftMonitoringEnabled;
+
+    if (!hasAtLeastOneMonitoringCheck) {
+      this.projectForm.failureMonitoringEnabled = true;
+      this.projectForm.performanceMonitoringEnabled = true;
+      this.projectForm.dataDriftMonitoringEnabled = true;
+    }
+  }
+
 
   loadMetricOptions(
     projectType: ProjectType,
@@ -493,32 +544,61 @@ export class MyProjectsComponent implements OnInit {
       return false;
     }
 
-    if (!this.projectForm.monitoringLookbackHours || this.projectForm.monitoringLookbackHours <= 0) {
-      this.errorMessage = 'La fenêtre de monitoring doit être supérieure à 0 heure.';
-      return false;
-    }
+    if (this.strategyUsesMonitoring(this.projectForm.retrainingStrategy)) {
+      if (
+        !this.projectForm.failureMonitoringEnabled &&
+        !this.projectForm.performanceMonitoringEnabled &&
+        !this.projectForm.dataDriftMonitoringEnabled
+      ) {
+        this.errorMessage =
+          'Activez au moins un contrôle de monitoring.';
+        return false;
+      }
 
-    if (!this.projectForm.minPredictionsForMonitoring || this.projectForm.minPredictionsForMonitoring <= 0) {
-      this.errorMessage = 'Le nombre minimum de prédictions doit être supérieur à 0.';
-      return false;
-    }
+      if (
+        !this.projectForm.monitoringLookbackHours ||
+        this.projectForm.monitoringLookbackHours <= 0
+      ) {
+        this.errorMessage =
+          'La fenêtre de monitoring doit être supérieure à 0 heure.';
+        return false;
+      }
 
-    if (this.projectForm.maxPredictionErrorRatePercent < 0 || this.projectForm.maxPredictionErrorRatePercent > 100) {
-      this.errorMessage = 'Le seuil du taux d’erreur doit être entre 0 et 100 %.';
-      return false;
-    }
+      if (
+        !this.projectForm.minPredictionsForMonitoring ||
+        this.projectForm.minPredictionsForMonitoring <= 0
+      ) {
+        this.errorMessage =
+          'Le nombre minimum de prédictions doit être supérieur à 0.';
+        return false;
+      }
 
-    if (
-      this.projectForm.performanceDropThresholdPercent < 0 ||
-      this.projectForm.performanceDropThresholdPercent > 100
-    ) {
-      this.errorMessage = 'Le seuil de baisse de performance doit être entre 0 et 100 %.';
-      return false;
-    }
+      if (
+        this.projectForm.maxPredictionErrorRatePercent < 0 ||
+        this.projectForm.maxPredictionErrorRatePercent > 100
+      ) {
+        this.errorMessage =
+          'Le seuil du taux d’erreur doit être entre 0 et 100 %.';
+        return false;
+      }
 
-    if (this.projectForm.dataDriftThresholdPercent < 0 || this.projectForm.dataDriftThresholdPercent > 100) {
-      this.errorMessage = 'Le seuil de data drift doit être entre 0 et 100 %.';
-      return false;
+      if (
+        this.projectForm.performanceDropThresholdPercent < 0 ||
+        this.projectForm.performanceDropThresholdPercent > 100
+      ) {
+        this.errorMessage =
+          'Le seuil de baisse de performance doit être entre 0 et 100 %.';
+        return false;
+      }
+
+      if (
+        this.projectForm.dataDriftThresholdPercent < 0 ||
+        this.projectForm.dataDriftThresholdPercent > 100
+      ) {
+        this.errorMessage =
+          'Le seuil de data drift doit être entre 0 et 100 %.';
+        return false;
+      }
     }
 
     return true;
@@ -671,24 +751,51 @@ export class MyProjectsComponent implements OnInit {
     onSuccess: () => void,
     fallbackErrorMessage: string
   ): void {
+    const strategy =
+      this.projectForm.retrainingStrategy || 'SCHEDULED_ONLY';
+
+    const monitoringEnabled =
+      this.projectForm.retrainingEnabled &&
+      this.strategyUsesMonitoring(strategy);
+
     const request: RetrainingConfigRequest = {
       enabled: this.projectForm.retrainingEnabled,
-      frequencyType: this.projectForm.retrainingFrequencyType || 'WEEK',
-      frequencyValue: this.projectForm.retrainingFrequencyValue || 1,
-      strategy: this.projectForm.retrainingStrategy || 'SCHEDULED_ONLY',
-      failureMonitoringEnabled: this.projectForm.failureMonitoringEnabled,
-      performanceMonitoringEnabled: this.projectForm.performanceMonitoringEnabled,
-      dataDriftMonitoringEnabled: this.projectForm.dataDriftMonitoringEnabled,
-      monitoringLookbackHours: this.projectForm.monitoringLookbackHours || 24,
-      minPredictionsForMonitoring: this.projectForm.minPredictionsForMonitoring || 5,
-      maxPredictionErrorRatePercent: this.projectForm.maxPredictionErrorRatePercent ?? 20,
-      performanceDropThresholdPercent: this.projectForm.performanceDropThresholdPercent ?? 10,
-      dataDriftThresholdPercent: this.projectForm.dataDriftThresholdPercent ?? 25
+      frequencyType:
+        this.projectForm.retrainingFrequencyType || 'WEEK',
+      frequencyValue:
+        this.projectForm.retrainingFrequencyValue || 1,
+      strategy,
+
+      /*
+       * SCHEDULED_ONLY doit toujours être sauvegardé avec les
+       * trois contrôles intelligents désactivés.
+       */
+      failureMonitoringEnabled:
+        monitoringEnabled &&
+        this.projectForm.failureMonitoringEnabled,
+      performanceMonitoringEnabled:
+        monitoringEnabled &&
+        this.projectForm.performanceMonitoringEnabled,
+      dataDriftMonitoringEnabled:
+        monitoringEnabled &&
+        this.projectForm.dataDriftMonitoringEnabled,
+
+      monitoringLookbackHours:
+        this.projectForm.monitoringLookbackHours || 24,
+      minPredictionsForMonitoring:
+        this.projectForm.minPredictionsForMonitoring || 5,
+      maxPredictionErrorRatePercent:
+        this.projectForm.maxPredictionErrorRatePercent ?? 20,
+      performanceDropThresholdPercent:
+        this.projectForm.performanceDropThresholdPercent ?? 10,
+      dataDriftThresholdPercent:
+        this.projectForm.dataDriftThresholdPercent ?? 25
     };
 
     this.retrainingService.saveProjectConfig(projectId, request).subscribe({
-      next: (config) => {
-        this.retrainingConfigs[projectId] = config;
+      next: (config: RetrainingConfigResponse) => {
+        this.retrainingConfigs[projectId] =
+          this.normalizeRetrainingConfig(config);
         onSuccess();
       },
       error: (error) => {
@@ -718,8 +825,9 @@ export class MyProjectsComponent implements OnInit {
     }
 
     this.retrainingService.forceNow(project.id).subscribe({
-      next: (updatedConfig) => {
-        this.retrainingConfigs[project.id] = updatedConfig;
+      next: (updatedConfig: RetrainingConfigResponse) => {
+        this.retrainingConfigs[project.id] =
+          this.normalizeRetrainingConfig(updatedConfig);
         this.successMessage =
           'La demande de réentraînement a été enregistrée. '
           + 'Le scheduler va la traiter.';
@@ -971,9 +1079,81 @@ export class MyProjectsComponent implements OnInit {
     return 'Mode complet : fréquence + erreurs récentes + performance + data drift avant décision.';
   }
 
-  getMonitoringSummary(config: RetrainingConfigResponse | null): string {
+  getRetrainingSectionTitle(
+    config: RetrainingConfigResponse | null
+  ): string {
+    if (!config || !config.enabled) {
+      return 'Réentraînement désactivé';
+    }
+
+    const strategy = String(
+      config.strategy || 'SCHEDULED_ONLY'
+    ).toUpperCase();
+
+    if (strategy === 'SCHEDULED_ONLY') {
+      return 'Réentraînement planifié';
+    }
+
+    if (strategy === 'SCHEDULED_WITH_MONITORING') {
+      return 'Réentraînement planifié avec monitoring';
+    }
+
+    if (strategy === 'SMART_MONITORING_ONLY') {
+      return 'Réentraînement intelligent';
+    }
+
+    return 'Réentraînement intelligent complet';
+  }
+
+  strategyUsesMonitoring(
+    strategy: RetrainingStrategy | string | null | undefined
+  ): boolean {
+    return String(
+      strategy || 'SCHEDULED_ONLY'
+    ).toUpperCase() !== 'SCHEDULED_ONLY';
+  }
+
+  shouldShowMonitoringControls(
+    config: RetrainingConfigResponse | null
+  ): boolean {
+    return !!config?.enabled &&
+      this.strategyUsesMonitoring(config.strategy);
+  }
+
+  private normalizeRetrainingConfig(
+    config: RetrainingConfigResponse
+  ): RetrainingConfigResponse {
+    const strategy =
+      (config.strategy || 'SCHEDULED_ONLY') as RetrainingStrategy;
+
+    const monitoringEnabled =
+      config.enabled === true &&
+      this.strategyUsesMonitoring(strategy);
+
+    return {
+      ...config,
+      strategy,
+      failureMonitoringEnabled:
+        monitoringEnabled &&
+        config.failureMonitoringEnabled === true,
+      performanceMonitoringEnabled:
+        monitoringEnabled &&
+        config.performanceMonitoringEnabled === true,
+      dataDriftMonitoringEnabled:
+        monitoringEnabled &&
+        config.dataDriftMonitoringEnabled === true
+    };
+  }
+
+  getMonitoringSummary(
+    config: RetrainingConfigResponse | null
+  ): string {
     if (!config || !config.enabled) {
       return 'Monitoring inactif tant que le réentraînement est désactivé.';
+    }
+
+    if (!this.strategyUsesMonitoring(config.strategy)) {
+      return 'Aucun contrôle intelligent actif. Le réentraînement est lancé uniquement selon la planification.';
     }
 
     const activeChecks: string[] = [];
