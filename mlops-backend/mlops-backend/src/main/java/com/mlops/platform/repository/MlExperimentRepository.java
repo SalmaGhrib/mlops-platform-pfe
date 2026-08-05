@@ -164,6 +164,98 @@ public interface MlExperimentRepository
             String mlflowRunId
     );
 
+    /**
+     * Vérifie si un run MLflow est déjà lié à une AUTRE expérience.
+     *
+     * Remplace findAllByMlflowRunId (chargement complet de la liste)
+     * dans les chemins de synchronisation : une simple requête EXISTS
+     * suffit et évite de matérialiser des entités.
+     */
+    boolean existsByMlflowRunIdAndIdNot(
+            String mlflowRunId,
+            Long id
+    );
+
+    boolean existsByMlflowRunId(
+            String mlflowRunId
+    );
+
+    /**
+     * Registered model names d'un projet (Phase A du lifecycle auto),
+     * sans charger les entités complètes.
+     */
+    @Query("""
+        SELECT DISTINCT e.registeredModelName
+        FROM MlExperiment e
+        WHERE e.project.id = :projectId
+          AND e.registeredModelName IS NOT NULL
+          AND e.registeredModelName <> ''
+        """)
+    List<String> findDistinctRegisteredModelNamesByProjectId(
+            @Param("projectId")
+            Long projectId
+    );
+
+    /**
+     * Sélectionne uniquement les IDs des expériences candidates à la
+     * synchronisation d'un projet (Phase A de l'auto-sync).
+     *
+     * Une expérience est candidate si :
+     * - elle est encore active (CREATED / RUNNING / CANCELLED) ;
+     * - ou elle a été mise à jour récemment (fenêtre glissante) ;
+     * - ou elle possède un run MLflow sans version encore (à réimporter).
+     *
+     * Le tri par updatedAt DESC garantit que les expériences récemment
+     * modifiées sont traitées en priorité dans le lot.
+     */
+    @Query("""
+        SELECT e.id
+        FROM MlExperiment e
+        WHERE e.project.id = :projectId
+          AND (
+                e.status IN :activeStatuses
+                OR e.updatedAt >= :windowStart
+                OR (e.mlflowRunId IS NOT NULL AND e.mlflowRunId <> '' AND e.modelVersion IS NULL)
+          )
+        ORDER BY e.updatedAt DESC
+        """)
+    List<Long> findCandidateExperimentIds(
+            @Param("projectId")
+            Long projectId,
+
+            @Param("activeStatuses")
+            List<com.mlops.platform.entity.ExperimentStatus> activeStatuses,
+
+            @Param("windowStart")
+            java.time.LocalDateTime windowStart,
+
+            org.springframework.data.domain.Pageable pageable
+    );
+
+    /**
+     * Écriture courte et ciblée de l'état Production d'une expérience
+     * (utilisée par les Phase C courtes). N'écrit que les colonnes utiles.
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+        UPDATE ml_experiments
+        SET is_production = :production,
+            production_version = :productionVersion,
+            updated_at = NOW()
+        WHERE id = :id
+        """, nativeQuery = true)
+    int updateProductionStateById(
+            @Param("id")
+            Long id,
+
+            @Param("production")
+            boolean production,
+
+            @Param("productionVersion")
+            String productionVersion
+    );
+
     Optional<MlExperiment> findByKubeflowRunId(
             String kubeflowRunId
     );
@@ -467,6 +559,49 @@ public interface MlExperimentRepository
     Long countActiveScheduledRetrainingForProject(
             @Param("projectId")
             Long projectId
+    );
+
+    /**
+     * Expériences de réentraînement actives d'un projet.
+     *
+     * Utilisé par la récupération automatique des états bloqués :
+     * on vérifie ensuite l'âge du traitement et l'existence réelle du
+     * Job Kubernetes avant de décider d'un éventuel passage en échec.
+     */
+    @Query(value = """
+        SELECT *
+        FROM ml_experiments
+        WHERE project_id = :projectId
+          AND experiment_name LIKE 'scheduled_retraining_%'
+          AND status IN ('CREATED', 'RUNNING')
+        ORDER BY created_at ASC
+        """, nativeQuery = true)
+    List<MlExperiment> findActiveRetrainingForProject(
+            @Param("projectId")
+            Long projectId
+    );
+
+    /**
+     * Compte les expériences de réentraînement actives mais récentes
+     * uniquement (avec limite d'âge).
+     *
+     * Une expérience CREATED/RUNNING trop ancienne n'est plus considérée
+     * comme un réentraînement actif : elle est bloquée et récupérée.
+     */
+    @Query(value = """
+        SELECT COUNT(*)
+        FROM ml_experiments
+        WHERE project_id = :projectId
+          AND experiment_name LIKE 'scheduled_retraining_%'
+          AND status IN ('CREATED', 'RUNNING')
+          AND created_at >= DATE_SUB(NOW(), INTERVAL :hours HOUR)
+        """, nativeQuery = true)
+    Long countActiveRetrainingForProjectSince(
+            @Param("projectId")
+            Long projectId,
+
+            @Param("hours")
+            int hours
     );
 
     @Query(value = """

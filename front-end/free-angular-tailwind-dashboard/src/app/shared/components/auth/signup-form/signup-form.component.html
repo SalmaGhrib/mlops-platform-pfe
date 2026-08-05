@@ -19,11 +19,11 @@
         stroke-linejoin="round"
       ></path>
     </svg>
-    Back to dashboard
+    Retour à l'accueil
   </a>
 </div>
 
-<div class="flex flex-col justify-center flex-1 w-full max-w-md mx-auto">
+<div class="mlops-fade-in flex flex-col justify-center flex-1 w-full max-w-md mx-auto">
   <div class="rounded-3xl border border-gray-200 bg-white p-8 shadow-xl dark:border-gray-800 dark:bg-gray-900">
     <div class="mb-8 text-center">
       <h2 class="mb-2 text-2xl font-bold text-gray-900 dark:text-white">
@@ -47,7 +47,7 @@
             [(ngModel)]="fname"
             placeholder="Entrez votre prénom"
             required
-            class="h-12 w-full rounded-xl border border-gray-300 bg-transparent px-4 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:text-white"
+            class="h-12 w-full rounded-xl border border-gray-300 bg-transparent px-4 text-sm text-gray-900 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:text-white"
           />
         </div>
 
@@ -62,7 +62,7 @@
             [(ngModel)]="lname"
             placeholder="Entrez votre nom"
             required
-            class="h-12 w-full rounded-xl border border-gray-300 bg-transparent px-4 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:text-white"
+            class="h-12 w-full rounded-xl border border-gray-300 bg-transparent px-4 text-sm text-gray-900 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:text-white"
           />
         </div>
       </div>
@@ -78,7 +78,7 @@
           [(ngModel)]="email"
           placeholder="admin@mlops-platform.com"
           required
-          class="h-12 w-full rounded-xl border border-gray-300 bg-transparent px-4 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:text-white"
+          class="h-12 w-full rounded-xl border border-gray-300 bg-transparent px-4 text-sm text-gray-900 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:text-white"
         />
       </div>
 
@@ -94,7 +94,7 @@
             [(ngModel)]="password"
             placeholder="Entrez votre mot de passe"
             required
-            class="h-12 w-full rounded-xl border border-gray-300 bg-transparent px-4 pr-12 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:text-white"
+            class="h-12 w-full rounded-xl border border-gray-300 bg-transparent px-4 pr-12 text-sm text-gray-900 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:text-white"
           />
 
           <span
@@ -137,12 +137,18 @@
         </div>
       </div>
 
-      <div *ngIf="errorMessage" class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-400">
-        {{ errorMessage }}
+      <div *ngIf="errorMessage" class="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-400">
+        <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+        </svg>
+        <span>{{ errorMessage }}</span>
       </div>
 
-      <div *ngIf="successMessage" class="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-600 dark:border-green-900/50 dark:bg-green-900/20 dark:text-green-400">
-        {{ successMessage }}
+      <div *ngIf="successMessage" class="flex items-start gap-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-600 dark:border-green-900/50 dark:bg-green-900/20 dark:text-green-400">
+        <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <span>{{ successMessage }}</span>
       </div>
 
       <div class="flex items-start gap-3">
@@ -150,7 +156,7 @@
           type="checkbox"
           name="terms"
           [(ngModel)]="isChecked"
-          class="mt-1 h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-700 dark:bg-gray-900"
+          class="mt-1 h-5 w-5 rounded border-gray-300 text-brand-600 focus:ring-brand-500 dark:border-gray-700 dark:bg-gray-900"
         />
 
         <p class="inline-block font-normal text-gray-500 dark:text-gray-400">
@@ -168,15 +174,16 @@
       <button
         type="submit"
         [disabled]="loading"
-        class="flex w-full items-center justify-center rounded-lg bg-brand-500 px-4 py-3 text-sm font-medium text-white shadow-theme-xs transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
+        class="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-3 text-sm font-medium text-white shadow-theme-xs transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
       >
+        <span *ngIf="loading" class="mlops-spinner h-4 w-4 border-2 text-white"></span>
         {{ loading ? 'Création...' : 'Créer un compte' }}
       </button>
     </form>
 
     <p class="mt-6 text-center text-sm text-gray-500 dark:text-gray-400">
       Vous avez déjà un compte?
-      <a routerLink="/signin" class="font-medium text-blue-600 hover:text-blue-700">
+      <a routerLink="/signin" class="font-medium text-brand-600 hover:text-brand-700">
         Se connecter
       </a>
     </p>

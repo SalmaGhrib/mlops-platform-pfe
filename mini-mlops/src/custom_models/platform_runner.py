@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import importlib.util
 import math
@@ -997,6 +998,7 @@ def find_dataset_for_auto_metrics(workspace: Path, dataset_path: Optional[Path])
         candidates.append(dataset_path)
 
     env_candidates = [
+        os.environ.get("PLATFORM_MATERIALIZED_DATASET_PATH"),
         os.environ.get("DATASET_PATH"),
         os.environ.get("DATA_PATH"),
         os.environ.get("MLOPS_DATASET_PATH"),
@@ -1020,8 +1022,32 @@ def find_dataset_for_auto_metrics(workspace: Path, dataset_path: Optional[Path])
     for candidate in candidates:
         try:
             candidate = candidate.resolve()
+
             if candidate.exists() and candidate.is_file():
-                return candidate
+                if candidate.suffix.lower() in {".csv", ".tsv", ".txt"}:
+                    return candidate
+
+            if candidate.exists() and candidate.is_dir():
+                nested_files = sorted(
+                    [
+                        path.resolve()
+                        for path in candidate.rglob("*")
+                        if path.is_file()
+                        and path.suffix.lower() in {".csv", ".tsv", ".txt"}
+                        and path.name.lower()
+                        not in {
+                            "metrics.csv",
+                            "predictions.csv",
+                            "history.csv",
+                        }
+                    ],
+                    key=lambda path: path.stat().st_size,
+                    reverse=True,
+                )
+
+                if nested_files:
+                    return nested_files[0]
+
         except Exception:
             continue
 
@@ -2270,122 +2296,1254 @@ def build_recovered_mlflow_warning(
     }
 
 
-ARCHIVE_EXTENSIONS = {".zip", ".tar", ".tgz", ".gz"}
+
+ARCHIVE_EXTENSIONS = {".zip", ".tar", ".tgz", ".gz", ".tar.gz"}
+TABULAR_DATASET_EXTENSIONS = {
+    ".csv",
+    ".tsv",
+    ".txt",
+    ".json",
+    ".jsonl",
+    ".parquet",
+    ".xlsx",
+    ".xls",
+}
+IMAGE_DATASET_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".bmp",
+    ".gif",
+    ".webp",
+    ".tif",
+    ".tiff",
+}
+DATASET_PREPARATION_EXTENSIONS = {".py"}
+
+PREPARED_DATASET_MARKER_REGEX = re.compile(
+    r"(?im)^\\s*(?:PLATFORM_DATASET_PATH|DATASET_PATH|DATASET_OUTPUT_PATH)"
+    r"\\s*=\\s*(?P<path>.+?)\\s*$"
+)
 
 
-def _safe_extract_zip(archive_path: Path, destination: Path) -> None:
+@dataclass
+class DatasetMaterialization:
+    source_type: str
+    original_path: str
+    materialized_path: str
+    generated: bool
+    validation: Dict[str, Any]
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = _clean_env_value(os.environ.get(name))
+    if not raw:
+        return default
+
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+
+    return value if value > 0 else default
+
+
+def _archive_limits() -> tuple[int, int, float]:
+    """
+    Limites de sécurité contre les archives corrompues et les ZIP bombs.
+
+    Elles restent configurables pour les grands datasets réels.
+    """
+    max_files = _positive_int_env(
+        "PLATFORM_DATASET_MAX_FILES",
+        250_000,
+    )
+    max_uncompressed_bytes = _positive_int_env(
+        "PLATFORM_DATASET_MAX_UNCOMPRESSED_BYTES",
+        20 * 1024 * 1024 * 1024,
+    )
+    max_compression_ratio = float(
+        os.environ.get(
+            "PLATFORM_DATASET_MAX_COMPRESSION_RATIO",
+            "250",
+        )
+    )
+
+    if max_compression_ratio <= 0:
+        max_compression_ratio = 250.0
+
+    return max_files, max_uncompressed_bytes, max_compression_ratio
+
+
+def _ensure_within_directory(
+    destination: Path,
+    member_name: str,
+) -> Path:
     destination = destination.resolve()
+    target = (destination / member_name).resolve()
+
+    if not target.is_relative_to(destination):
+        raise ValueError(
+            f"Unsafe archive entry outside destination: {member_name}"
+        )
+
+    return target
+
+
+def _safe_extract_zip(
+    archive_path: Path,
+    destination: Path,
+) -> None:
+    destination = destination.resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+
+    max_files, max_uncompressed_bytes, max_ratio = _archive_limits()
+
     with zipfile.ZipFile(archive_path) as archive:
-        for entry in archive.infolist():
-            target = (destination / entry.filename).resolve()
-            if not target.is_relative_to(destination):
-                raise ValueError(f"Unsafe archive entry: {entry.filename}")
+        entries = archive.infolist()
+
+        if len(entries) > max_files:
+            raise ValueError(
+                "Archive rejected: too many entries "
+                f"({len(entries)} > {max_files})."
+            )
+
+        total_uncompressed = 0
+
+        for entry in entries:
+            _ensure_within_directory(
+                destination,
+                entry.filename,
+            )
+
+            total_uncompressed += max(0, int(entry.file_size or 0))
+
+            if total_uncompressed > max_uncompressed_bytes:
+                raise ValueError(
+                    "Archive rejected: uncompressed size exceeds "
+                    f"{max_uncompressed_bytes} bytes."
+                )
+
+            compressed_size = max(1, int(entry.compress_size or 0))
+            ratio = float(entry.file_size or 0) / compressed_size
+
+            if ratio > max_ratio:
+                raise ValueError(
+                    "Archive rejected: suspicious compression ratio "
+                    f"for {entry.filename}: {ratio:.2f}."
+                )
+
         archive.extractall(destination)
 
 
-def _safe_extract_tar(archive_path: Path, destination: Path) -> None:
+def _safe_extract_tar(
+    archive_path: Path,
+    destination: Path,
+) -> None:
     destination = destination.resolve()
-    with tarfile.open(archive_path) as archive:
-        for member in archive.getmembers():
-            target = (destination / member.name).resolve()
-            if not target.is_relative_to(destination):
-                raise ValueError(f"Unsafe archive entry: {member.name}")
-        archive.extractall(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+
+    max_files, max_uncompressed_bytes, _ = _archive_limits()
+
+    with tarfile.open(archive_path, mode="r:*") as archive:
+        members = archive.getmembers()
+
+        if len(members) > max_files:
+            raise ValueError(
+                "Archive rejected: too many entries "
+                f"({len(members)} > {max_files})."
+            )
+
+        total_uncompressed = 0
+
+        for member in members:
+            _ensure_within_directory(
+                destination,
+                member.name,
+            )
+
+            # Les liens symboliques, hard links et fichiers spéciaux sont
+            # rejetés afin d'éviter toute sortie du répertoire d'extraction.
+            if (
+                member.issym()
+                or member.islnk()
+                or member.isdev()
+                or member.isfifo()
+            ):
+                raise ValueError(
+                    "Archive rejected: unsupported special entry "
+                    f"{member.name}."
+                )
+
+            total_uncompressed += max(0, int(member.size or 0))
+
+            if total_uncompressed > max_uncompressed_bytes:
+                raise ValueError(
+                    "Archive rejected: uncompressed size exceeds "
+                    f"{max_uncompressed_bytes} bytes."
+                )
+
+        archive.extractall(destination, members=members)
 
 
-def materialize_dataset_source(workspace: Path, dataset_path: Optional[Path]) -> Optional[Path]:
-    """Return a usable file or directory for CSV, ZIP, TAR/TGZ and folder datasets."""
+def _clean_dataset_directory(directory: Path) -> None:
+    if directory.exists():
+        shutil.rmtree(directory)
+
+    directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+
+def _visible_children(directory: Path) -> List[Path]:
+    ignored_names = {
+        "__MACOSX",
+        ".DS_Store",
+        "Thumbs.db",
+        ".gitkeep",
+    }
+
+    return sorted(
+        [
+            item
+            for item in directory.iterdir()
+            if item.name not in ignored_names
+            and not item.name.startswith("._")
+        ],
+        key=lambda item: item.name.lower(),
+    )
+
+
+def _collapse_single_directory(directory: Path) -> Path:
+    current = directory.resolve()
+
+    # Plusieurs archives contiennent une ou deux couches de dossiers inutiles.
+    # On les retire sans dépasser une profondeur raisonnable.
+    for _ in range(4):
+        children = _visible_children(current)
+
+        if len(children) != 1 or not children[0].is_dir():
+            break
+
+        current = children[0].resolve()
+
+    return current
+
+
+def _is_archive(path: Path) -> bool:
+    lower_name = path.name.lower()
+
+    return (
+        lower_name.endswith(".zip")
+        or lower_name.endswith(".tar")
+        or lower_name.endswith(".tar.gz")
+        or lower_name.endswith(".tgz")
+    )
+
+
+def _validate_tabular_file(path: Path) -> Dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(
+            f"Tabular dataset not found: {path}"
+        )
+
+    if path.stat().st_size <= 0:
+        raise ValueError(
+            f"Tabular dataset is empty: {path}"
+        )
+
+    suffix = path.suffix.lower()
+    report: Dict[str, Any] = {
+        "kind": "tabular",
+        "filename": path.name,
+        "extension": suffix,
+        "size_bytes": path.stat().st_size,
+    }
+
+    if suffix not in {".csv", ".tsv", ".txt"}:
+        return report
+
+    sample_bytes = path.read_bytes()[:256 * 1024]
+
+    decoded: Optional[str] = None
+    encoding_used: Optional[str] = None
+
+    for encoding in (
+        "utf-8-sig",
+        "utf-8",
+        "latin-1",
+    ):
+        try:
+            decoded = sample_bytes.decode(encoding)
+            encoding_used = encoding
+            break
+        except UnicodeDecodeError:
+            continue
+
+    if decoded is None:
+        raise ValueError(
+            f"Could not decode tabular dataset: {path}"
+        )
+
+    non_empty_lines = [
+        line
+        for line in decoded.splitlines()
+        if line.strip()
+    ]
+
+    if len(non_empty_lines) < 2:
+        raise ValueError(
+            "Tabular dataset must contain a header and at least one row."
+        )
+
+    delimiter = "\t" if suffix == ".tsv" else None
+
+    if delimiter is None:
+        try:
+            dialect = csv.Sniffer().sniff(
+                "\n".join(non_empty_lines[:20]),
+                delimiters=",;\t|",
+            )
+            delimiter = dialect.delimiter
+        except csv.Error:
+            delimiter = ","
+
+    reader = csv.reader(
+        non_empty_lines[:100],
+        delimiter=delimiter,
+    )
+    rows = list(reader)
+
+    if not rows or len(rows[0]) < 2:
+        raise ValueError(
+            "Tabular dataset must contain at least two columns."
+        )
+
+    expected_columns = len(rows[0])
+    malformed_rows = sum(
+        1
+        for row in rows[1:]
+        if len(row) != expected_columns
+    )
+
+    report.update(
+        {
+            "encoding": encoding_used,
+            "delimiter": delimiter,
+            "sample_columns": expected_columns,
+            "sample_rows": max(0, len(rows) - 1),
+            "malformed_sample_rows": malformed_rows,
+        }
+    )
+
+    print(
+        "[PLATFORM_DATASET] Tabular validation passed: "
+        f"{json.dumps(report, ensure_ascii=False)}"
+    )
+
+    return report
+
+
+def _count_dataset_files(
+    directory: Path,
+) -> tuple[int, int, int]:
+    total_files = 0
+    image_files = 0
+    tabular_files = 0
+
+    for path in directory.rglob("*"):
+        if not path.is_file():
+            continue
+
+        total_files += 1
+        suffix = path.suffix.lower()
+
+        if suffix in IMAGE_DATASET_EXTENSIONS:
+            image_files += 1
+
+        if suffix in TABULAR_DATASET_EXTENSIONS:
+            tabular_files += 1
+
+    return total_files, image_files, tabular_files
+
+
+def _detect_image_split_structure(
+    directory: Path,
+) -> Dict[str, Any]:
+    split_aliases = {
+        "train": ("train", "training"),
+        "val": ("val", "valid", "validation"),
+        "test": ("test", "testing"),
+    }
+
+    resolved_splits: Dict[str, Path] = {}
+
+    lower_children = {
+        child.name.lower(): child
+        for child in _visible_children(directory)
+        if child.is_dir()
+    }
+
+    for canonical_name, aliases in split_aliases.items():
+        for alias in aliases:
+            match = lower_children.get(alias)
+            if match is not None:
+                resolved_splits[canonical_name] = match
+                break
+
+    if not resolved_splits:
+        return {}
+
+    class_sets: Dict[str, List[str]] = {}
+    image_counts: Dict[str, int] = {}
+
+    for split_name, split_path in resolved_splits.items():
+        class_dirs = [
+            child
+            for child in _visible_children(split_path)
+            if child.is_dir()
+        ]
+
+        class_sets[split_name] = sorted(
+            child.name
+            for child in class_dirs
+        )
+
+        image_counts[split_name] = sum(
+            1
+            for file_path in split_path.rglob("*")
+            if file_path.is_file()
+            and file_path.suffix.lower()
+            in IMAGE_DATASET_EXTENSIONS
+        )
+
+    return {
+        "splits": {
+            name: str(path)
+            for name, path in resolved_splits.items()
+        },
+        "classes_by_split": class_sets,
+        "images_by_split": image_counts,
+    }
+
+
+def _validate_dataset_directory(
+    directory: Path,
+) -> Dict[str, Any]:
+    if not directory.exists() or not directory.is_dir():
+        raise FileNotFoundError(
+            f"Dataset directory not found: {directory}"
+        )
+
+    total_files, image_files, tabular_files = _count_dataset_files(
+        directory
+    )
+
+    if total_files == 0:
+        raise ValueError(
+            f"Dataset directory is empty: {directory}"
+        )
+
+    report: Dict[str, Any] = {
+        "kind": "directory",
+        "total_files": total_files,
+        "image_files": image_files,
+        "tabular_files": tabular_files,
+    }
+
+    image_structure = _detect_image_split_structure(directory)
+
+    if image_structure:
+        report["image_structure"] = image_structure
+
+        classes_by_split = image_structure.get(
+            "classes_by_split",
+            {},
+        )
+        train_classes = set(
+            classes_by_split.get("train", [])
+        )
+
+        if len(train_classes) < 2:
+            raise ValueError(
+                "Image classification dataset must contain at least "
+                "two class folders in train/."
+            )
+
+        for split_name in ("val", "test"):
+            split_classes = set(
+                classes_by_split.get(split_name, [])
+            )
+
+            if split_classes and split_classes != train_classes:
+                raise ValueError(
+                    "Image dataset class mismatch between train and "
+                    f"{split_name}: train={sorted(train_classes)}, "
+                    f"{split_name}={sorted(split_classes)}"
+                )
+
+    elif image_files > 0:
+        class_dirs = [
+            child
+            for child in _visible_children(directory)
+            if child.is_dir()
+        ]
+
+        if len(class_dirs) < 2:
+            print(
+                "[PLATFORM_DATASET] Image directory detected without "
+                "train/val/test split. The user training script remains "
+                "responsible for splitting the data."
+            )
+
+    elif tabular_files == 0:
+        raise ValueError(
+            "Dataset directory contains no supported image or tabular file."
+        )
+
+    print(
+        "[PLATFORM_DATASET] Directory validation passed: "
+        f"{json.dumps(report, ensure_ascii=False)}"
+    )
+
+    return report
+
+
+def _resolve_declared_prepared_dataset(
+    stdout: str,
+    output_root: Path,
+    workspace: Path,
+) -> Optional[Path]:
+    """
+    Lit un chemin explicite produit par le script de préparation.
+
+    Formats reconnus dans stdout :
+      PLATFORM_DATASET_PATH=/chemin/dataset.zip
+      DATASET_OUTPUT_PATH=dataset/
+      DATASET_PATH=data.csv
+
+    Pour des raisons de sécurité, le chemin déclaré doit rester dans le
+    workspace du Job ou dans le répertoire de préparation dédié.
+    """
+    match = PREPARED_DATASET_MARKER_REGEX.search(stdout or "")
+    if not match:
+        return None
+
+    raw_value = match.group("path").strip().strip('"').strip("'")
+    if not raw_value:
+        return None
+
+    declared = Path(raw_value).expanduser()
+    if not declared.is_absolute():
+        declared = (output_root / declared).resolve()
+    else:
+        declared = declared.resolve()
+
+    allowed_roots = [
+        output_root.resolve(),
+        workspace.resolve(),
+    ]
+
+    if not any(
+        declared == root or declared.is_relative_to(root)
+        for root in allowed_roots
+    ):
+        raise ValueError(
+            "Le script de préparation a déclaré un dataset hors du "
+            f"workspace autorisé : {declared}"
+        )
+
+    if not declared.exists():
+        raise FileNotFoundError(
+            "Le script de préparation a déclaré un dataset introuvable : "
+            f"{declared}"
+        )
+
+    print(
+        "[PLATFORM_DATASET] Explicit prepared dataset marker resolved: "
+        f"{declared}"
+    )
+    return declared
+
+
+def _choose_prepared_dataset_candidate(
+    output_root: Path,
+    workspace: Optional[Path] = None,
+    stdout: str = "",
+) -> Optional[Path]:
+    """
+    Choisit de façon déterministe le dataset produit par un script .py.
+
+    Priorités :
+    1. chemin explicitement déclaré dans stdout ;
+    2. dataset.zip / dataset.csv / data.csv ;
+    3. dossier dataset/ ;
+    4. dossier avec train/val/test ;
+    5. plus gros fichier tabulaire ;
+    6. unique dossier non vide.
+    """
+    output_root = output_root.resolve()
+    workspace = (workspace or output_root.parent).resolve()
+
+    declared = _resolve_declared_prepared_dataset(
+        stdout=stdout,
+        output_root=output_root,
+        workspace=workspace,
+    )
+    if declared is not None:
+        return declared
+
+    exact_candidates = [
+        output_root / "dataset.zip",
+        output_root / "dataset.tar.gz",
+        output_root / "dataset.tgz",
+        output_root / "dataset.csv",
+        output_root / "data.csv",
+        output_root / "train.csv",
+        output_root / "dataset",
+        output_root / "data",
+        output_root / "prepared_data" / "dataset.zip",
+        output_root / "prepared_data" / "dataset",
+    ]
+
+    for candidate in exact_candidates:
+        if candidate.exists():
+            return candidate.resolve()
+
+    split_roots: List[Path] = []
+
+    directories = [output_root]
+    directories.extend(
+        path
+        for path in output_root.rglob("*")
+        if path.is_dir()
+    )
+
+    for directory in directories:
+        try:
+            child_names = {
+                child.name.lower()
+                for child in _visible_children(directory)
+                if child.is_dir()
+            }
+        except OSError:
+            continue
+
+        if (
+            {"train", "val", "test"}.issubset(child_names)
+            or {"train", "validation", "test"}.issubset(child_names)
+            or {"training", "validation", "testing"}.issubset(child_names)
+        ):
+            split_roots.append(directory.resolve())
+
+    if split_roots:
+        split_roots.sort(
+            key=lambda path: (
+                len(path.parts),
+                str(path).lower(),
+            )
+        )
+        return split_roots[0]
+
+    tabular_candidates = [
+        path.resolve()
+        for path in output_root.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in TABULAR_DATASET_EXTENSIONS
+        and path.name.lower()
+        not in {
+            "metrics.csv",
+            "predictions.csv",
+            "history.csv",
+        }
+    ]
+
+    if tabular_candidates:
+        tabular_candidates.sort(
+            key=lambda path: (
+                path.stat().st_size,
+                str(path).lower(),
+            ),
+            reverse=True,
+        )
+        return tabular_candidates[0]
+
+    visible = _visible_children(output_root)
+
+    if len(visible) == 1:
+        return visible[0].resolve()
+
+    non_empty_directories = []
+    for child in visible:
+        if not child.is_dir():
+            continue
+        try:
+            if any(child.rglob("*")):
+                non_empty_directories.append(child.resolve())
+        except OSError:
+            continue
+
+    if len(non_empty_directories) == 1:
+        return non_empty_directories[0]
+
+    return None
+
+
+def _is_dataset_preparation_argument_error(
+    stderr: str,
+) -> bool:
+    text = (stderr or "").lower()
+
+    return (
+        "usage:" in text
+        or "unrecognized arguments" in text
+        or "the following arguments are required" in text
+        or "error: argument" in text
+    )
+
+
+def _write_dataset_preparation_logs(
+    workspace: Path,
+    attempt_index: int,
+    command: List[str],
+    result: subprocess.CompletedProcess,
+) -> None:
+    """Conserve les logs de préparation pour l'audit MLflow et le diagnostic."""
+    try:
+        log_dir = prepare_outputs_dir(workspace) / "dataset_preparation_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        payload = {
+            "attempt": attempt_index,
+            "command": command,
+            "return_code": int(result.returncode),
+        }
+        (log_dir / f"attempt-{attempt_index}.json").write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (log_dir / f"attempt-{attempt_index}.stdout.log").write_text(
+            result.stdout or "",
+            encoding="utf-8",
+        )
+        (log_dir / f"attempt-{attempt_index}.stderr.log").write_text(
+            result.stderr or "",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        print(
+            "[PLATFORM_DATASET] Could not persist preparation logs: "
+            f"{exc}"
+        )
+
+
+def execute_dataset_preparation_script(
+    script_path: Path,
+    workspace: Path,
+) -> Path:
+    """
+    Exécute un script de préparation dans le Job Kubernetes isolé.
+
+    Contrats supportés :
+      python prepare.py --output-dir <dir>
+      python prepare.py --output_dir <dir>
+      python prepare.py --output <dir>
+      python prepare.py <dir>
+      python prepare.py
+
+    Le script peut produire :
+      - un dossier d'images ;
+      - un CSV/TSV/JSON/Parquet/Excel ;
+      - une archive ZIP/TAR/TGZ.
+
+    Il peut aussi imprimer :
+      PLATFORM_DATASET_PATH=<chemin>
+
+    Le fichier .py n'est jamais transmis à train.py. Seul le dataset généré
+    et validé est transmis à l'étape d'entraînement.
+    """
+    script_path = script_path.expanduser().resolve()
+    workspace = workspace.expanduser().resolve()
+
+    if not script_path.exists() or not script_path.is_file():
+        raise FileNotFoundError(
+            f"Dataset preparation script not found: {script_path}"
+        )
+
+    if script_path.suffix.lower() != ".py":
+        raise ValueError(
+            "Dataset preparation source must be a Python file: "
+            f"{script_path}"
+        )
+
+    max_script_bytes = _positive_int_env(
+        "PLATFORM_DATASET_SCRIPT_MAX_BYTES",
+        5 * 1024 * 1024,
+    )
+    if script_path.stat().st_size > max_script_bytes:
+        raise ValueError(
+            "Dataset preparation script is too large: "
+            f"{script_path.stat().st_size} bytes."
+        )
+
+    output_root = workspace / ".platform_prepared_dataset"
+    timeout_seconds = _positive_int_env(
+        "PLATFORM_DATASET_PREPARATION_TIMEOUT_SECONDS",
+        1800,
+    )
+
+    env = {
+        **os.environ,
+        "PLATFORM_DATASET_PREPARATION_MODE": "true",
+        "DATASET_OUTPUT_DIR": str(output_root),
+        "OUTPUT_DIR": str(output_root),
+        "PLATFORM_DATASET_OUTPUT_DIR": str(output_root),
+        "PLATFORM_PREPARE_OUTPUT_DIR": str(output_root),
+        "WORKSPACE_DIR": str(workspace),
+        "PYTHONUNBUFFERED": "1",
+    }
+
+    # Le dossier du script reste importable si le préparateur utilise des
+    # modules compagnons présents dans le même upload.
+    existing_pythonpath = _clean_env_value(env.get("PYTHONPATH"))
+    pythonpath_parts = [
+        str(script_path.parent),
+        str(workspace),
+    ]
+    if existing_pythonpath:
+        pythonpath_parts.append(existing_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+
+    commands = [
+        [
+            sys.executable,
+            str(script_path),
+            "--output-dir",
+            str(output_root),
+        ],
+        [
+            sys.executable,
+            str(script_path),
+            "--output_dir",
+            str(output_root),
+        ],
+        [
+            sys.executable,
+            str(script_path),
+            "--output",
+            str(output_root),
+        ],
+        [
+            sys.executable,
+            str(script_path),
+            str(output_root),
+        ],
+        [
+            sys.executable,
+            str(script_path),
+        ],
+    ]
+
+    last_result: Optional[subprocess.CompletedProcess] = None
+
+    for index, command in enumerate(commands, start=1):
+        _clean_dataset_directory(output_root)
+
+        print(
+            "[PLATFORM_DATASET] Trying preparation command "
+            f"{index}/{len(commands)}: {' '.join(command)}"
+        )
+
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(workspace),
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode("utf-8", errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+
+            result = subprocess.CompletedProcess(
+                args=command,
+                returncode=124,
+                stdout=stdout,
+                stderr=(
+                    stderr
+                    + "\nDataset preparation timed out after "
+                    + str(timeout_seconds)
+                    + " seconds."
+                ),
+            )
+
+        last_result = result
+        _write_dataset_preparation_logs(
+            workspace=workspace,
+            attempt_index=index,
+            command=command,
+            result=result,
+        )
+
+        if result.stdout:
+            print(
+                "[PLATFORM_DATASET] Preparation stdout:\n"
+                + result.stdout
+            )
+
+        if result.stderr:
+            print(
+                "[PLATFORM_DATASET] Preparation stderr:\n"
+                + result.stderr
+            )
+
+        if result.returncode == 0:
+            candidate = _choose_prepared_dataset_candidate(
+                output_root=output_root,
+                workspace=workspace,
+                stdout=result.stdout or "",
+            )
+
+            if candidate is None:
+                raise RuntimeError(
+                    "Dataset preparation script completed successfully "
+                    "but produced no supported dataset. Expected dataset.zip, "
+                    "dataset/, train/val/test, a tabular file, or the marker "
+                    "PLATFORM_DATASET_PATH=<path> under "
+                    f"{output_root}."
+                )
+
+            print(
+                "[PLATFORM_DATASET] Preparation completed. "
+                f"Selected output={candidate}"
+            )
+            return candidate.resolve()
+
+        if _is_dataset_preparation_argument_error(
+            result.stderr
+        ):
+            print(
+                "[PLATFORM_DATASET] Preparation argument mismatch; "
+                "trying the next supported convention."
+            )
+            continue
+
+        raise RuntimeError(
+            "Dataset preparation script failed with return code "
+            f"{result.returncode}. Last stderr lines: "
+            + " | ".join(
+                (result.stderr or "").strip().splitlines()[-8:]
+            )
+        )
+
+    raise RuntimeError(
+        "Dataset preparation script failed for every supported "
+        "argument format. Last return code="
+        + str(
+            last_result.returncode
+            if last_result is not None
+            else "none"
+        )
+    )
+
+
+def _extract_archive_dataset(
+    archive_path: Path,
+    workspace: Path,
+) -> Path:
+    target = (
+        workspace.resolve()
+        / ".platform_dataset"
+    )
+    _clean_dataset_directory(target)
+
+    lower_name = archive_path.name.lower()
+
+    if lower_name.endswith(".zip"):
+        _safe_extract_zip(
+            archive_path,
+            target,
+        )
+    elif lower_name.endswith(
+        (
+            ".tar",
+            ".tar.gz",
+            ".tgz",
+        )
+    ):
+        _safe_extract_tar(
+            archive_path,
+            target,
+        )
+    else:
+        raise ValueError(
+            f"Unsupported archive format: {archive_path}"
+        )
+
+    collapsed = _collapse_single_directory(target)
+    _validate_dataset_directory(collapsed)
+
+    return collapsed
+
+
+def materialize_dataset_source(
+    workspace: Path,
+    dataset_path: Optional[Path],
+) -> Optional[Path]:
+    """
+    Retourne une source dataset directement utilisable.
+
+    Formats acceptés :
+    - dossier déjà préparé ;
+    - ZIP/TAR/TGZ contenant des images ou fichiers tabulaires ;
+    - CSV/TSV/JSON/Parquet/Excel ;
+    - script Python de préparation générant un dossier, fichier ou ZIP.
+    """
     if dataset_path is None:
         return None
-    source = dataset_path.resolve()
+
+    workspace = workspace.resolve()
+    source = dataset_path.expanduser().resolve()
+
     if not source.exists():
-        raise FileNotFoundError(f"Dataset not found: {source}")
-    if source.is_dir():
-        return source
+        raise FileNotFoundError(
+            f"Dataset not found: {source}"
+        )
 
-    lower_name = source.name.lower()
-    if lower_name.endswith('.zip'):
-        target = workspace / '.platform_dataset'
-        if target.exists():
-            shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
-        _safe_extract_zip(source, target)
-        children = [item for item in target.iterdir() if item.name != '__MACOSX']
-        return children[0] if len(children) == 1 and children[0].is_dir() else target
+    generated = False
+    original_source = source
 
-    if lower_name.endswith(('.tar', '.tar.gz', '.tgz')):
-        target = workspace / '.platform_dataset'
-        if target.exists():
-            shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
-        _safe_extract_tar(source, target)
-        children = [item for item in target.iterdir()]
-        return children[0] if len(children) == 1 and children[0].is_dir() else target
+    if (
+        source.is_file()
+        and source.suffix.lower()
+        in DATASET_PREPARATION_EXTENSIONS
+    ):
+        source = execute_dataset_preparation_script(
+            script_path=source,
+            workspace=workspace,
+        )
+        generated = True
+
+    # Le script de préparation peut lui-même produire une archive.
+    if source.is_file() and _is_archive(source):
+        source = _extract_archive_dataset(
+            archive_path=source,
+            workspace=workspace,
+        )
+
+    elif source.is_dir():
+        source = _collapse_single_directory(source)
+        _validate_dataset_directory(source)
+
+    elif source.is_file():
+        suffix = source.suffix.lower()
+
+        if suffix not in TABULAR_DATASET_EXTENSIONS:
+            raise ValueError(
+                "Unsupported dataset format: "
+                f"{source.name}. Supported formats are directories, "
+                "ZIP/TAR/TGZ, Python preparation scripts, CSV/TSV, "
+                "JSON/JSONL, Parquet and Excel."
+            )
+
+        _validate_tabular_file(source)
+
+    else:
+        raise ValueError(
+            f"Unsupported dataset source: {source}"
+        )
+
+    report = {
+        "original_path": str(original_source),
+        "materialized_path": str(source),
+        "generated": generated,
+        "source_type": (
+            "directory"
+            if source.is_dir()
+            else source.suffix.lower().lstrip(".")
+        ),
+    }
+
+    os.environ[
+        "PLATFORM_MATERIALIZED_DATASET_PATH"
+    ] = str(source)
+    os.environ[
+        "PLATFORM_ORIGINAL_DATASET_PATH"
+    ] = str(original_source)
+    os.environ[
+        "PLATFORM_DATASET_WAS_GENERATED"
+    ] = str(bool(generated)).lower()
+
+    print(
+        "[PLATFORM_DATASET] Materialization completed: "
+        f"{json.dumps(report, ensure_ascii=False)}"
+    )
+
     return source
 
 
-def materialize_dataset_alias(source: Path, destination: Path) -> None:
+def materialize_dataset_alias(
+    source: Path,
+    destination: Path,
+) -> None:
     source = source.resolve()
     destination = destination.resolve()
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     if destination.exists() or destination.is_symlink():
+        try:
+            if destination.resolve() == source:
+                return
+        except Exception:
+            pass
+
+        # Ne jamais écraser un fichier utilisateur existant.
+        print(
+            "[PLATFORM_DATASET] Alias skipped because destination "
+            f"already exists: {destination}"
+        )
         return
+
     try:
-        destination.symlink_to(source, target_is_directory=source.is_dir())
+        destination.symlink_to(
+            source,
+            target_is_directory=source.is_dir(),
+        )
     except Exception:
         if source.is_dir():
-            shutil.copytree(source, destination, dirs_exist_ok=True)
+            shutil.copytree(
+                source,
+                destination,
+                dirs_exist_ok=False,
+            )
         else:
-            shutil.copy2(source, destination)
+            shutil.copy2(
+                source,
+                destination,
+            )
 
 
-def extract_hardcoded_dataset_paths(script_path: Optional[Path]) -> List[str]:
+def extract_hardcoded_dataset_paths(
+    script_path: Optional[Path],
+) -> List[str]:
     """
     Détecte les chemins de datasets écrits en dur dans les scripts utilisateurs.
 
-    Exemple supporté :
-    DATA_PATH = os.path.join("data", "iris.csv")
-    pd.read_csv("data/iris.csv")
-    pd.read_csv('iris.csv')
+    Exemples :
+      pd.read_csv("data/iris.csv")
+      ImageFolder("dataset/train")
+      open("inputs/data.csv")
     """
     if script_path is None:
         return []
 
     try:
-        code = script_path.read_text(encoding="utf-8", errors="ignore")
+        code = script_path.read_text(
+            encoding="utf-8",
+            errors="ignore",
+        )
     except Exception:
         return []
 
     candidates: List[str] = []
 
-    # pd.read_csv("...csv"), open("...csv"), variable = "...csv"
+    supported_pattern = (
+        r"csv|tsv|txt|json|jsonl|parquet|xlsx|xls|"
+        r"zip|tar|tgz"
+    )
+
     for match in re.finditer(
-        r"""["'](?P<path>[^"']+\.(?:csv|tsv|xlsx|xls|parquet|json))["']""",
+        rf"""["'](?P<path>[^"']+\.(?:{supported_pattern}))["']""",
         code,
         re.IGNORECASE,
     ):
         value = match.group("path").strip()
-        if value and not value.startswith(("http://", "https://", "s3://", "wasbs://")):
+
+        if value and not value.startswith(
+            (
+                "http://",
+                "https://",
+                "s3://",
+                "wasbs://",
+                "gs://",
+            )
+        ):
             candidates.append(value)
 
-    # os.path.join("data", "iris.csv")
     for match in re.finditer(
-        r"""os\.path\.join\(\s*["'](?P<dir>[^"']+)["']\s*,\s*["'](?P<file>[^"']+\.(?:csv|tsv|xlsx|xls|parquet|json))["']\s*\)""",
+        rf"""os\.path\.join\(\s*["'](?P<dir>[^"']+)["']\s*,\s*["'](?P<file>[^"']+\.(?:{supported_pattern}))["']\s*\)""",
         code,
         re.IGNORECASE,
     ):
-        candidates.append(str(Path(match.group("dir")) / match.group("file")))
+        candidates.append(
+            str(
+                Path(match.group("dir"))
+                / match.group("file")
+            )
+        )
 
-    # Dédupliquer en gardant l'ordre.
     unique: List[str] = []
-    seen = set()
+    seen: set[str] = set()
+
     for candidate in candidates:
-        normalized = candidate.replace("\\", "/").strip("/")
-        if normalized and normalized not in seen:
+        normalized = (
+            candidate
+            .replace("\\", "/")
+            .strip("/")
+        )
+
+        if (
+            normalized
+            and normalized not in seen
+            and ".." not in Path(normalized).parts
+        ):
             seen.add(normalized)
             unique.append(normalized)
 
     return unique
+
+
+def _tabular_aliases(
+    source: Path,
+) -> List[str]:
+    original_name = source.name or "dataset.csv"
+    suffix = source.suffix.lower()
+
+    aliases = [
+        original_name,
+        f"data/{original_name}",
+        f"datasets/{original_name}",
+        f"input_data/{original_name}",
+    ]
+
+    if suffix in {".csv", ".tsv", ".txt"}:
+        aliases.extend(
+            [
+                "dataset.csv",
+                "data.csv",
+                "train.csv",
+                "input.csv",
+                "uploaded_dataset.csv",
+                "data/dataset.csv",
+                "data/data.csv",
+                "data/train.csv",
+                "datasets/dataset.csv",
+            ]
+        )
+
+    return aliases
 
 
 def create_dataset_aliases(
@@ -2393,43 +3551,131 @@ def create_dataset_aliases(
     dataset_path: Optional[Path],
     script_path: Optional[Path] = None,
 ) -> Optional[Path]:
-    """Expose uploaded CSV/files, archives and complete dataset folders under common paths."""
+    """
+    Expose le dataset sous des chemins conventionnels sans modifier la source.
+
+    Pour un dossier/ZIP image :
+      data/, dataset/, datasets/, input_data/
+
+    Pour un CSV :
+      dataset.csv, data.csv, train.csv, input.csv, data/dataset.csv...
+    """
     if dataset_path is None:
         return None
 
     workspace = workspace.resolve()
-    source = materialize_dataset_source(workspace, dataset_path)
+    source = materialize_dataset_source(
+        workspace,
+        dataset_path,
+    )
+
     if source is None:
         return None
 
-    if source.is_dir():
-        aliases = ["data", "dataset", "datasets", "input_data"]
-        for alias in aliases:
-            materialize_dataset_alias(source, workspace / alias)
-        print(f"[PLATFORM_DATASET] Directory dataset ready: source={source}")
-        return source
+    # Garde-fou : un fichier Python est une source de préparation, jamais un
+    # dataset final. Cette situation indiquerait une régression interne.
+    if source.is_file() and source.suffix.lower() == ".py":
+        raise RuntimeError(
+            "Internal dataset materialization error: a Python preparation "
+            "script reached the training stage instead of its generated data."
+        )
 
-    original_name = source.name or "dataset.csv"
-    aliases = [
-        original_name, "dataset.csv", "data.csv", "train.csv", "input.csv",
-        f"data/{original_name}", "data/dataset.csv", "data/data.csv", "data/train.csv",
-        f"datasets/{original_name}", "datasets/dataset.csv",
-    ]
-    aliases.extend(extract_hardcoded_dataset_paths(script_path))
-    seen = set()
-    for alias in aliases:
-        normalized = str(alias or '').replace('\\', '/').strip()
-        if not normalized or normalized.startswith('/') or '..' in Path(normalized).parts:
-            continue
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        try:
-            materialize_dataset_alias(source, workspace / normalized)
-            print(f"[PLATFORM_DATASET] Alias created: {workspace / normalized}")
-        except Exception as exc:
-            print(f"[PLATFORM_DATASET] Could not create alias {normalized}: {exc}")
+    if source.is_dir():
+        aliases = [
+            "data",
+            "dataset",
+            "datasets",
+            "input_data",
+        ]
+
+        for alias in aliases:
+            materialize_dataset_alias(
+                source,
+                workspace / alias,
+            )
+
+        print(
+            "[PLATFORM_DATASET] Directory dataset ready: "
+            f"source={source}"
+        )
+
+    else:
+        aliases = _tabular_aliases(source)
+        aliases.extend(
+            extract_hardcoded_dataset_paths(
+                script_path
+            )
+        )
+
+        seen: set[str] = set()
+
+        for alias in aliases:
+            normalized = (
+                str(alias or "")
+                .replace("\\", "/")
+                .strip()
+            )
+
+            if (
+                not normalized
+                or normalized.startswith("/")
+                or ".." in Path(normalized).parts
+                or normalized in seen
+            ):
+                continue
+
+            seen.add(normalized)
+
+            try:
+                materialize_dataset_alias(
+                    source,
+                    workspace / normalized,
+                )
+                print(
+                    "[PLATFORM_DATASET] Alias created: "
+                    f"{workspace / normalized}"
+                )
+            except Exception as exc:
+                print(
+                    "[PLATFORM_DATASET] Could not create alias "
+                    f"{normalized}: {exc}"
+                )
+
+    # Manifeste de traçabilité sauvegardé avec les autres outputs.
+    try:
+        outputs_dir = prepare_outputs_dir(workspace)
+        manifest_path = (
+            outputs_dir
+            / "dataset_materialization.json"
+        )
+
+        manifest = {
+            "original_dataset_path": str(
+                dataset_path.resolve()
+            ),
+            "materialized_dataset_path": str(source),
+            "materialized_is_directory": source.is_dir(),
+            "data_type": get_data_type_from_platform(),
+            "project_type": get_project_type_from_platform(),
+            "created_at_epoch": int(time.time()),
+        }
+
+        manifest_path.write_text(
+            json.dumps(
+                manifest,
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        print(
+            "[PLATFORM_DATASET] Could not write materialization "
+            f"manifest: {exc}"
+        )
+
     return source
+
 
 def build_script_commands(
     script_path: Path,

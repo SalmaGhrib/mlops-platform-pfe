@@ -23,7 +23,6 @@ export class UserDropdownComponent implements OnInit {
   lastName = '';
   email = '';
   role = '';
-  avatar = '/images/user/owner.png';
 
   constructor(
     private authService: AuthService,
@@ -51,6 +50,12 @@ export class UserDropdownComponent implements OnInit {
   get displayName(): string {
     const fullName = `${this.firstName} ${this.lastName}`.trim();
     return fullName || 'Utilisateur';
+  }
+
+  get initials(): string {
+    const first = (this.firstName || '').trim().charAt(0);
+    const last = (this.lastName || '').trim().charAt(0);
+    return `${first}${last}`.toUpperCase() || 'U';
   }
 
   toggleDropdown(): void {

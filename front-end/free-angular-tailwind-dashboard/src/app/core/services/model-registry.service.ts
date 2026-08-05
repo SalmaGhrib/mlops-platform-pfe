@@ -156,6 +156,41 @@ export interface ModelDeploymentResponse {
 
 export type AccessibleModel = ModelDeploymentResponse;
 
+export interface ModelApiKeyItem {
+  id: number;
+  deploymentId?: number;
+  ownerId?: number;
+  name?: string | null;
+  keyPrefix?: string | null;
+  maskedKey?: string | null;
+  apiKey?: string | null;
+  enabled?: boolean | null;
+  createdAt?: string | null;
+  expiresAt?: string | null;
+  revokedAt?: string | null;
+  lastUsedAt?: string | null;
+  dailyQuota?: number | null;
+  requestsToday?: number | null;
+  totalRequests?: number | null;
+  usageDate?: string | null;
+  quotaRemaining?: number | null;
+
+  [key: string]: any;
+}
+
+export interface ModelApiKeyStats {
+  totalToday?: number | null;
+  successToday?: number | null;
+  failedToday?: number | null;
+  successRate?: number | null;
+  avgLatencyMs?: number | null;
+  dailyQuota?: number | null;
+  quotaRemaining?: number | null;
+  keys?: ModelApiKeyItem[] | null;
+
+  [key: string]: any;
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -395,5 +430,105 @@ export class ModelRegistryService {
         headers: this.getAuthHeaders()
       }
     );
+  }
+
+  /*
+   * =========================================================
+   * SMART MODEL GATEWAY — gestion des clés API
+   * =========================================================
+   */
+
+  private readonly gatewayKeysUrl = '/api/models';
+
+  getApiKeys(modelId: number): Observable<ModelApiKeyItem[]> {
+    return this.http.get<ModelApiKeyItem[]>(
+      `${this.gatewayKeysUrl}/${modelId}/api-keys`,
+      {
+        headers: this.getAuthHeaders()
+      }
+    );
+  }
+
+  createApiKey(
+    modelId: number,
+    body: {
+      name?: string | null;
+      dailyQuota?: number | null;
+      expiresAt?: string | null;
+    }
+  ): Observable<ModelApiKeyItem> {
+    return this.http.post<ModelApiKeyItem>(
+      `${this.gatewayKeysUrl}/${modelId}/api-keys`,
+      body || {},
+      {
+        headers: this.getAuthHeaders()
+      }
+    );
+  }
+
+  getApiKeyStats(modelId: number): Observable<ModelApiKeyStats> {
+    return this.http.get<ModelApiKeyStats>(
+      `${this.gatewayKeysUrl}/${modelId}/api-keys/stats`,
+      {
+        headers: this.getAuthHeaders()
+      }
+    );
+  }
+
+  enableApiKey(keyId: number): Observable<ModelApiKeyItem> {
+    return this.http.patch<ModelApiKeyItem>(
+      `/api/model-api-keys/${keyId}/enable`,
+      {},
+      {
+        headers: this.getAuthHeaders()
+      }
+    );
+  }
+
+  disableApiKey(keyId: number): Observable<ModelApiKeyItem> {
+    return this.http.patch<ModelApiKeyItem>(
+      `/api/model-api-keys/${keyId}/disable`,
+      {},
+      {
+        headers: this.getAuthHeaders()
+      }
+    );
+  }
+
+  revokeApiKey(keyId: number): Observable<any> {
+    return this.http.delete<any>(
+      `/api/model-api-keys/${keyId}`,
+      {
+        headers: this.getAuthHeaders()
+      }
+    );
+  }
+
+  buildCurlForModel(registeredModelName: string, apiKey: string | null): string {
+    const cleanName = encodeURIComponent(registeredModelName || '');
+    const baseUrl = this.getPublicBaseUrl();
+    const keyValue = apiKey || 'VOTRE_CLE_API';
+
+    return [
+      'curl.exe -X POST \\',
+      `  "${baseUrl}/api/external/models/${cleanName}/predict" \\`,
+      '  -H "X-API-KEY: VOTRE_CLE_API" \\',
+      '  -H "Content-Type: application/json" \\',
+      '  -d \'{ "feature_1": 1.2, "feature_2": 0.4 }\''
+    ].join('\n');
+  }
+
+  getPublicBaseUrlForCopy(): string {
+    return this.getPublicBaseUrl();
+  }
+
+  private getPublicBaseUrl(): string {
+    const origin = window.location.origin;
+
+    if (origin && origin !== 'http://localhost:4200' && origin !== 'http://127.0.0.1:4200') {
+      return origin;
+    }
+
+    return 'http://128.251.112.197';
   }
 }

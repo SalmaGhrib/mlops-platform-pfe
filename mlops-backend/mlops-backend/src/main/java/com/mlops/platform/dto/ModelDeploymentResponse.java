@@ -44,7 +44,6 @@ public class ModelDeploymentResponse {
      */
     private Boolean apiEnabled;
     private String visibility;
-    private String apiKey;
     private String apiKeyCreatedAt;
     private String apiKeyLastUsedAt;
 
@@ -100,7 +99,6 @@ public class ModelDeploymentResponse {
             response.setVisibility("PRIVATE");
         }
 
-        response.setApiKey(deployment.getApiKey());
         response.setApiKeyCreatedAt(toUtcIsoString(deployment.getApiKeyCreatedAt()));
         response.setApiKeyLastUsedAt(toUtcIsoString(deployment.getApiKeyLastUsedAt()));
 
@@ -197,10 +195,6 @@ public class ModelDeploymentResponse {
         return visibility;
     }
 
-    public String getApiKey() {
-        return apiKey;
-    }
-
     public String getApiKeyCreatedAt() {
         return apiKeyCreatedAt;
     }
@@ -295,10 +289,6 @@ public class ModelDeploymentResponse {
 
     public void setVisibility(String visibility) {
         this.visibility = visibility;
-    }
-
-    public void setApiKey(String apiKey) {
-        this.apiKey = apiKey;
     }
 
     public void setApiKeyCreatedAt(String apiKeyCreatedAt) {

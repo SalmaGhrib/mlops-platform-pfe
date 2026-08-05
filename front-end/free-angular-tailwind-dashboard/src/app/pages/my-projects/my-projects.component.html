@@ -1,6 +1,6 @@
 <app-page-breadcrumb pageTitle="Mes Projets ML" />
 
-<div class="space-y-6">
+<div class="space-y-6 mlops-fade-in">
   <div class="overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-white/[0.03]">
     <div class="border-b border-gray-100 bg-gradient-to-r from-blue-50 via-white to-indigo-50 px-6 py-6 dark:border-gray-800 dark:from-blue-950/20 dark:via-transparent dark:to-indigo-950/20">
       <div class="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
@@ -30,7 +30,7 @@
           <button
             type="button"
             (click)="openCreateForm()"
-            class="inline-flex items-center justify-center rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 hover:shadow-md"
+            class="inline-flex items-center justify-center rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-600 hover:shadow-md"
           >
             Nouveau projet
           </button>
@@ -40,14 +40,20 @@
 
     <div class="p-6">
       @if (errorMessage) {
-        <div class="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
-          {{ errorMessage }}
+        <div class="mb-5 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+          <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+          </svg>
+          <span>{{ errorMessage }}</span>
         </div>
       }
 
       @if (successMessage) {
-        <div class="mb-5 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700 dark:border-green-900/50 dark:bg-green-900/20 dark:text-green-300">
-          {{ successMessage }}
+        <div class="mb-5 flex items-start gap-3 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700 dark:border-green-900/50 dark:bg-green-900/20 dark:text-green-300">
+          <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          <span>{{ successMessage }}</span>
         </div>
       }
 
@@ -274,7 +280,7 @@
                         <span
                           class="mt-1 flex h-5 w-5 items-center justify-center rounded-full border"
                           [ngClass]="projectForm.runtimeMode === 'STANDARD_RUNTIME'
-                            ? 'border-blue-600 bg-blue-600'
+                            ? 'border-brand-500 bg-brand-500'
                             : 'border-gray-300 dark:border-gray-700'"
                         >
                           @if (projectForm.runtimeMode === 'STANDARD_RUNTIME') {
@@ -448,124 +454,130 @@
                       }
                     </div>
 
-                    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                      <label class="cursor-pointer rounded-2xl border p-4 transition"
-                        [ngClass]="projectForm.failureMonitoringEnabled ? 'border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-900/20' : 'border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40'">
-                        <div class="flex items-start gap-3">
-                          <input
-                            type="checkbox"
-                            name="failureMonitoringEnabled"
-                            [(ngModel)]="projectForm.failureMonitoringEnabled"
-                            [disabled]="!projectForm.retrainingEnabled"
-                            class="mt-1 h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
-                          />
-                          <div>
-                            <p class="text-sm font-semibold text-gray-900 dark:text-white">Échecs récents</p>
-                            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                              Relancer si des runs ou prédictions échouent trop souvent.
-                            </p>
+                    @if (strategyUsesMonitoring(projectForm.retrainingStrategy)) {
+                      <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                        <label class="cursor-pointer rounded-2xl border p-4 transition"
+                          [ngClass]="projectForm.failureMonitoringEnabled ? 'border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-900/20' : 'border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40'">
+                          <div class="flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              name="failureMonitoringEnabled"
+                              [(ngModel)]="projectForm.failureMonitoringEnabled"
+                              [disabled]="!projectForm.retrainingEnabled"
+                              class="mt-1 h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                            />
+                            <div>
+                              <p class="text-sm font-semibold text-gray-900 dark:text-white">Échecs récents</p>
+                              <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                                Relancer si des runs ou prédictions échouent trop souvent.
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                      </label>
+                        </label>
 
-                      <label class="cursor-pointer rounded-2xl border p-4 transition"
-                        [ngClass]="projectForm.performanceMonitoringEnabled ? 'border-blue-200 bg-blue-50 dark:border-blue-900/40 dark:bg-blue-900/20' : 'border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40'">
-                        <div class="flex items-start gap-3">
-                          <input
-                            type="checkbox"
-                            name="performanceMonitoringEnabled"
-                            [(ngModel)]="projectForm.performanceMonitoringEnabled"
-                            [disabled]="!projectForm.retrainingEnabled"
-                            class="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                          />
-                          <div>
-                            <p class="text-sm font-semibold text-gray-900 dark:text-white">Performance</p>
-                            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                              Vérifier la baisse de performance avant de relancer.
-                            </p>
+                        <label class="cursor-pointer rounded-2xl border p-4 transition"
+                          [ngClass]="projectForm.performanceMonitoringEnabled ? 'border-blue-200 bg-blue-50 dark:border-blue-900/40 dark:bg-blue-900/20' : 'border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40'">
+                          <div class="flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              name="performanceMonitoringEnabled"
+                              [(ngModel)]="projectForm.performanceMonitoringEnabled"
+                              [disabled]="!projectForm.retrainingEnabled"
+                              class="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <div>
+                              <p class="text-sm font-semibold text-gray-900 dark:text-white">Performance</p>
+                              <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                                Vérifier la baisse de performance avant de relancer.
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                      </label>
+                        </label>
 
-                      <label class="cursor-pointer rounded-2xl border p-4 transition"
-                        [ngClass]="projectForm.dataDriftMonitoringEnabled ? 'border-purple-200 bg-purple-50 dark:border-purple-900/40 dark:bg-purple-900/20' : 'border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40'">
-                        <div class="flex items-start gap-3">
-                          <input
-                            type="checkbox"
-                            name="dataDriftMonitoringEnabled"
-                            [(ngModel)]="projectForm.dataDriftMonitoringEnabled"
-                            [disabled]="!projectForm.retrainingEnabled"
-                            class="mt-1 h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                          />
-                          <div>
-                            <p class="text-sm font-semibold text-gray-900 dark:text-white">Data drift</p>
-                            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                              Comparer les nouvelles prédictions avec le comportement attendu.
-                            </p>
+                        <label class="cursor-pointer rounded-2xl border p-4 transition"
+                          [ngClass]="projectForm.dataDriftMonitoringEnabled ? 'border-purple-200 bg-purple-50 dark:border-purple-900/40 dark:bg-purple-900/20' : 'border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40'">
+                          <div class="flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              name="dataDriftMonitoringEnabled"
+                              [(ngModel)]="projectForm.dataDriftMonitoringEnabled"
+                              [disabled]="!projectForm.retrainingEnabled"
+                              class="mt-1 h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                            />
+                            <div>
+                              <p class="text-sm font-semibold text-gray-900 dark:text-white">Data drift</p>
+                              <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                                Comparer les nouvelles prédictions avec le comportement attendu.
+                              </p>
+                            </div>
                           </div>
+                        </label>
+                      </div>
+
+                      <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                        <div>
+                          <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Fenêtre monitoring, heures
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            [(ngModel)]="projectForm.monitoringLookbackHours"
+                            name="monitoringLookbackHours"
+                            [disabled]="!projectForm.retrainingEnabled"
+                            class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                          />
                         </div>
-                      </label>
-                    </div>
 
-                    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                      <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                          Fenêtre monitoring, heures
-                        </label>
-                        <input
-                          type="number"
-                          min="1"
-                          [(ngModel)]="projectForm.monitoringLookbackHours"
-                          name="monitoringLookbackHours"
-                          [disabled]="!projectForm.retrainingEnabled"
-                          class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
-                        />
-                      </div>
+                        <div>
+                          <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Min prédictions
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            [(ngModel)]="projectForm.minPredictionsForMonitoring"
+                            name="minPredictionsForMonitoring"
+                            [disabled]="!projectForm.retrainingEnabled"
+                            class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                          />
+                        </div>
 
-                      <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                          Min prédictions
-                        </label>
-                        <input
-                          type="number"
-                          min="1"
-                          [(ngModel)]="projectForm.minPredictionsForMonitoring"
-                          name="minPredictionsForMonitoring"
-                          [disabled]="!projectForm.retrainingEnabled"
-                          class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
-                        />
-                      </div>
+                        <div>
+                          <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Taux erreur max, %
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            [(ngModel)]="projectForm.maxPredictionErrorRatePercent"
+                            name="maxPredictionErrorRatePercent"
+                            [disabled]="!projectForm.retrainingEnabled"
+                            class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                          />
+                        </div>
 
-                      <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                          Taux erreur max, %
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          [(ngModel)]="projectForm.maxPredictionErrorRatePercent"
-                          name="maxPredictionErrorRatePercent"
-                          [disabled]="!projectForm.retrainingEnabled"
-                          class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
-                        />
+                        <div>
+                          <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Seuil drift, %
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            [(ngModel)]="projectForm.dataDriftThresholdPercent"
+                            name="dataDriftThresholdPercent"
+                            [disabled]="!projectForm.retrainingEnabled"
+                            class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
+                          />
+                        </div>
                       </div>
-
-                      <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                          Seuil drift, %
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          [(ngModel)]="projectForm.dataDriftThresholdPercent"
-                          name="dataDriftThresholdPercent"
-                          [disabled]="!projectForm.retrainingEnabled"
-                          class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 disabled:cursor-not-allowed disabled:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:disabled:bg-gray-900"
-                        />
+                    } @else {
+                      <div class="rounded-2xl border border-green-100 bg-green-50 px-4 py-3 text-xs leading-5 text-green-700 dark:border-green-900/40 dark:bg-green-900/20 dark:text-green-300">
+                        Aucun contrôle intelligent nécessaire : le réentraînement est relancé selon la planification.
                       </div>
-                    </div>
+                    }
                   </div>
                 </div>
               </div>
@@ -583,26 +595,6 @@
                   placeholder="Décrivez brièvement l'objectif du projet, le dataset utilisé ou le problème à résoudre..."
                 ></textarea>
               </div>
-
-              <div class="lg:col-span-2">
-                <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
-                  Colonne cible
-                </label>
-
-                <input
-                  type="text"
-                  [(ngModel)]="projectForm.targetColumn"
-                  name="targetColumn"
-                  class="h-12 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                  placeholder="Exemple : label, target, outcome"
-                />
-
-                @if (projectForm.dataType === 'TEXT') {
-                  <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                    Pour un dataset NLP : la colonne texte peut être <strong>text</strong> et la colonne cible <strong>label</strong>.
-                  </p>
-                }
-              </div>
             </div>
 
             <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
@@ -618,7 +610,7 @@
                 type="button"
                 (click)="saveProject()"
                 [disabled]="saving || loadingMetrics"
-                class="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+                class="rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-600 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
               >
                 @if (saving) {
                   Enregistrement...
@@ -632,15 +624,18 @@
       }
 
       @if (loading) {
-        <div class="rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4 text-sm font-medium text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300">
+        <div class="flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4 text-sm font-medium text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300">
+          <span class="mlops-spinner text-blue-600 dark:text-blue-300"></span>
           Chargement des projets...
         </div>
       }
 
       @if (!loading && projects.length === 0) {
         <div class="rounded-3xl border border-dashed border-gray-300 bg-gray-50 p-10 text-center dark:border-gray-700 dark:bg-gray-900/40">
-          <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300">
-            ML
+          <div class="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300">
+            <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 2h10a2 2 0 012 2v1h3a1 1 0 011 1v2h-2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V8H0V6a1 1 0 011-1h3V4a2 2 0 012-2zm8 2H7v2h8V4zm-8 4v12h10V8H7z"/>
+            </svg>
           </div>
 
           <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
@@ -654,8 +649,11 @@
           <button
             type="button"
             (click)="openCreateForm()"
-            class="mt-6 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 hover:shadow-md"
+            class="mt-6 inline-flex items-center gap-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-600 hover:shadow-md"
           >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
             Créer un projet
           </button>
         </div>
@@ -664,246 +662,207 @@
       @if (!loading && projects.length > 0) {
         <div class="grid grid-cols-1 gap-5 lg:grid-cols-2 xl:grid-cols-3">
           @for (project of projects; track project.id) {
-            <div class="group overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg dark:border-gray-800 dark:bg-gray-900">
+            <div
+              class="group relative overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm transition hover:-translate-y-1 hover:border-brand-300 hover:shadow-xl hover:shadow-brand-500/5 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-brand-500/40"
+            >
+              <div
+                class="absolute inset-x-0 top-0 h-1.5"
+                [ngClass]="{
+                  'bg-gradient-to-r from-purple-500 to-violet-400': project.projectType === 'classification',
+                  'bg-gradient-to-r from-orange-500 to-amber-400': project.projectType === 'regression'
+                }"
+              ></div>
+
               <div class="p-5">
                 <div class="mb-4 flex items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <h3 class="truncate text-lg font-bold text-gray-900 dark:text-white">
-                      {{ project.name }}
-                    </h3>
-
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      Créé le {{ formatDate(project.createdAt) }}
-                    </p>
-                  </div>
-
-                  <div class="flex shrink-0 flex-col items-end gap-2">
-                    <span
-                      class="rounded-full px-3 py-1 text-xs font-semibold"
+                  <div class="flex min-w-0 items-start gap-3">
+                    <div
+                      class="mt-0.5 flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-white shadow-sm"
                       [ngClass]="{
-                        'bg-purple-50 text-purple-700 ring-1 ring-purple-100 dark:bg-purple-900/20 dark:text-purple-300 dark:ring-purple-900/30': project.projectType === 'classification',
-                        'bg-orange-50 text-orange-700 ring-1 ring-orange-100 dark:bg-orange-900/20 dark:text-orange-300 dark:ring-orange-900/30': project.projectType === 'regression'
+                        'bg-gradient-to-br from-purple-500 to-violet-600 shadow-purple-500/20': project.projectType === 'classification',
+                        'bg-gradient-to-br from-orange-500 to-amber-600 shadow-orange-500/20': project.projectType === 'regression'
                       }"
                     >
-                      {{ getProjectTypeLabel(project.projectType) }}
-                    </span>
+                      @if (project.projectType === 'classification') {
+                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                        </svg>
+                      } @else {
+                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+                        </svg>
+                      }
+                    </div>
 
-                    <span
-                      class="rounded-full px-3 py-1 text-xs font-semibold"
-                      [ngClass]="getDataTypeClass(getProjectDataType(project))"
-                    >
-                      {{ getDataTypeLabel(getProjectDataType(project)) }}
-                    </span>
+                    <div class="min-w-0">
+                      <h3 class="truncate text-lg font-bold text-gray-900 dark:text-white">
+                        {{ project.name }}
+                      </h3>
 
-                    <span
-                      class="rounded-full px-3 py-1 text-xs font-semibold"
-                      [ngClass]="getRuntimeModeClass(project)"
-                    >
-                      {{ getRuntimeModeLabel(project) }}
-                    </span>
-
-                    <span
-                      class="rounded-full px-3 py-1 text-xs font-semibold"
-                      [ngClass]="getRetrainingBadgeClass(project)"
-                    >
-                      {{ getRetrainingBadgeLabel(project) }}
-                    </span>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        Créé le {{ formatDate(project.createdAt) }}
+                      </p>
+                    </div>
                   </div>
+
+                  <span
+                    class="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
+                    [ngClass]="{
+                      'bg-purple-50 text-purple-700 ring-1 ring-purple-100 dark:bg-purple-900/20 dark:text-purple-300 dark:ring-purple-900/30': project.projectType === 'classification',
+                      'bg-orange-50 text-orange-700 ring-1 ring-orange-100 dark:bg-orange-900/20 dark:text-orange-300 dark:ring-orange-900/30': project.projectType === 'regression'
+                    }"
+                  >
+                    {{ getProjectTypeLabel(project.projectType) }}
+                  </span>
                 </div>
 
-                <p class="min-h-[56px] text-sm leading-6 text-gray-600 dark:text-gray-400">
+                <p class="line-clamp-2 min-h-[40px] text-sm leading-6 text-gray-600 dark:text-gray-400">
                   {{ project.description || 'Aucune description pour ce projet.' }}
                 </p>
 
-                <div class="mt-4 rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
-                  <div class="grid grid-cols-1 gap-3">
-                    <div class="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 dark:bg-gray-900">
-                      <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                        Type de données
-                      </span>
-                      <span class="text-sm font-semibold text-gray-900 dark:text-white">
-                        {{ getDataTypeLabel(getProjectDataType(project)) }}
-                      </span>
-                    </div>
+                <div class="mt-4 flex flex-wrap gap-2">
+                  <span
+                    class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold"
+                    [ngClass]="getDataTypeClass(getProjectDataType(project))"
+                  >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
+                    </svg>
+                    {{ getDataTypeLabel(getProjectDataType(project)) }}
+                  </span>
 
-                    <div class="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 dark:bg-gray-900">
-                      <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                        Colonne cible
-                      </span>
-                      <span class="text-sm font-semibold text-gray-900 dark:text-white">
-                        {{ project.targetColumn || '-' }}
-                      </span>
-                    </div>
-                  </div>
+                  <span
+                    class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold"
+                    [ngClass]="getRuntimeModeClass(project)"
+                  >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                    </svg>
+                    {{ getRuntimeModeLabel(project) }}
+                  </span>
                 </div>
 
-                <div class="mt-4 rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
-                  <div class="flex items-start justify-between gap-3">
-                    <div>
-                      <p class="text-sm font-semibold text-gray-900 dark:text-white">
-                        Mode d’exécution
-                      </p>
-                      <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                        @if (isCustomDockerfileProject(project)) {
-                          Ce projet utilisera un Dockerfile personnalisé pour ses futurs entraînements.
-                        } @else {
-                          Ce projet utilise l’image runtime standard de la plateforme.
-                        }
-                      </p>
-                    </div>
+                <div class="mt-4 grid grid-cols-3 gap-3">
+                  <div class="rounded-2xl border border-gray-100 bg-gray-50 px-3 py-2.5 dark:border-gray-800 dark:bg-white/[0.03]">
+                    <span class="block text-[11px] font-medium text-gray-500 dark:text-gray-400">
+                      Priorité 1
+                    </span>
+                    <span class="mt-0.5 block truncate text-sm font-semibold text-gray-900 dark:text-white">
+                      {{ formatMetric(project.primaryMetric1) }}
+                    </span>
+                  </div>
 
-                    <span
-                      class="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
-                      [ngClass]="getRuntimeModeClass(project)"
-                    >
-                      {{ getRuntimeModeLabel(project) }}
+                  <div class="rounded-2xl border border-gray-100 bg-gray-50 px-3 py-2.5 dark:border-gray-800 dark:bg-white/[0.03]">
+                    <span class="block text-[11px] font-medium text-gray-500 dark:text-gray-400">
+                      Priorité 2
+                    </span>
+                    <span class="mt-0.5 block truncate text-sm font-semibold text-gray-900 dark:text-white">
+                      {{ formatMetric(project.primaryMetric2) }}
+                    </span>
+                  </div>
+
+                  <div class="rounded-2xl border border-gray-100 bg-gray-50 px-3 py-2.5 dark:border-gray-800 dark:bg-white/[0.03]">
+                    <span class="block text-[11px] font-medium text-gray-500 dark:text-gray-400">
+                      Priorité 3
+                    </span>
+                    <span class="mt-0.5 block truncate text-sm font-semibold text-gray-900 dark:text-white">
+                      {{ formatMetric(project.primaryMetric3) }}
                     </span>
                   </div>
                 </div>
 
-                <div class="mt-4 overflow-hidden rounded-2xl border border-gray-100 bg-gray-50 dark:border-gray-800 dark:bg-white/[0.03]">
-                  <div class="flex items-start justify-between gap-3 border-b border-gray-100 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-                    <div>
-                      <p class="text-sm font-semibold text-gray-900 dark:text-white">
+                <div
+                  class="mt-3 flex items-center justify-between gap-3 rounded-2xl border px-3 py-2.5"
+                  [ngClass]="
+                    isRetrainingEnabled(project)
+                      ? 'border-green-100 bg-green-50 dark:border-green-900/40 dark:bg-green-900/10'
+                      : 'border-gray-100 bg-gray-50 dark:border-gray-800 dark:bg-white/[0.03]'
+                  "
+                >
+                  <div class="flex min-w-0 items-center gap-2.5">
+                    <span
+                      class="inline-flex h-2 w-2 shrink-0 rounded-full"
+                      [ngClass]="isRetrainingEnabled(project) ? 'bg-green-500 mlops-pulse' : 'bg-gray-400'"
+                    ></span>
+                    <div class="min-w-0">
+                      <p class="text-xs font-semibold text-gray-900 dark:text-white">
                         Réentraînement intelligent
                       </p>
-
-                      <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                      <p class="mt-0.5 truncate text-[11px] text-gray-500 dark:text-gray-400">
                         @if (isRetrainingEnabled(project)) {
                           Prochain contrôle :
                           {{ formatDateTime(getProjectRetrainingConfig(project)?.nextRetrainingAt) }}
                         } @else {
-                          Aucun réentraînement planifié pour ce projet.
+                          Aucun réentraînement planifié.
                         }
                       </p>
                     </div>
-
-                    <span
-                      class="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
-                      [ngClass]="getRetrainingBadgeClass(project)"
-                    >
-                      {{ getRetrainingBadgeLabel(project) }}
-                    </span>
                   </div>
 
-                  @if (getProjectRetrainingConfig(project); as config) {
-                    <div class="space-y-3 p-4">
-                      <div class="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 dark:bg-gray-900">
-                        <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                          Stratégie
-                        </span>
-                        <span class="text-sm font-semibold text-gray-900 dark:text-white">
-                          {{ getRetrainingStrategyLabel(config.strategy) }}
-                        </span>
-                      </div>
-
-                      <div class="grid grid-cols-3 gap-2">
-                        <span class="rounded-full px-2 py-1 text-center text-[11px] font-semibold" [ngClass]="getMonitoringFlagClass(config.failureMonitoringEnabled)">
-                          Échecs {{ getMonitoringFlagLabel(config.failureMonitoringEnabled) }}
-                        </span>
-                        <span class="rounded-full px-2 py-1 text-center text-[11px] font-semibold" [ngClass]="getMonitoringFlagClass(config.performanceMonitoringEnabled)">
-                          Perf {{ getMonitoringFlagLabel(config.performanceMonitoringEnabled) }}
-                        </span>
-                        <span class="rounded-full px-2 py-1 text-center text-[11px] font-semibold" [ngClass]="getMonitoringFlagClass(config.dataDriftMonitoringEnabled)">
-                          Drift {{ getMonitoringFlagLabel(config.dataDriftMonitoringEnabled) }}
-                        </span>
-                      </div>
-
-                      <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">
-                        {{ getMonitoringSummary(config) }}
-                      </p>
-
-                      <div class="rounded-xl border border-dashed border-gray-200 bg-white px-3 py-2 text-xs leading-5 text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">
-                        <span class="font-semibold text-gray-800 dark:text-gray-200">Dernière décision :</span>
-                        {{ getRetrainingDecisionLabel(config) }}
-                      </div>
-
-                      <div class="flex items-center justify-between gap-3">
-                        <span class="text-xs text-gray-500 dark:text-gray-400">
-                          @if (config.running) {
-                            Réentraînement en cours
-                          } @else if (config.manualTriggerRequested) {
-                            Demande en attente du scheduler
-                          } @else {
-                            Prêt
-                          }
-                        </span>
-
-                        <button
-                          type="button"
-                          class="rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-900 dark:text-blue-300 dark:hover:bg-blue-950/30"
-                          [disabled]="!config.enabled || config.running || config.manualTriggerRequested"
-                          (click)="forceRetrainingNow(project)"
-                        >
-                          Lancer maintenant
-                        </button>
-                      </div>
-                    </div>
+                  @if (isRetrainingEnabled(project)) {
+                    <button
+                      type="button"
+                      class="shrink-0 rounded-lg border border-green-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-green-700 transition hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-green-900 dark:bg-gray-900 dark:text-green-300 dark:hover:bg-green-900/20"
+                      [disabled]="isForceNowDisabled(project)"
+                      (click)="forceRetrainingNow(project)"
+                    >
+                      @if (launchingProjectIds.has(project.id)) {
+                        Lancement...
+                      } @else {
+                        Lancer
+                      }
+                    </button>
                   }
                 </div>
 
-                <div class="mt-5 rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
-                  <div class="mb-3 flex items-center justify-between">
-                    <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
-                      Priorité des métriques
-                    </h4>
-                    <span class="text-xs text-gray-500 dark:text-gray-400">
-                      {{ getProjectTypeLabel(project.projectType) }}
-                    </span>
-                  </div>
-
-                  <div class="space-y-3">
-                    <div class="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 dark:bg-gray-900">
-                      <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                        Priorité 1
-                      </span>
-                      <span class="text-sm font-semibold text-gray-900 dark:text-white">
-                        {{ formatMetric(project.primaryMetric1) }}
+                @if (isRetrainingEnabled(project) && (getRunningExperimentLabel(getProjectRetrainingConfig(project)) !== '-' || getRunningJobLabel(getProjectRetrainingConfig(project)) !== '-')) {
+                  <div class="mt-3 space-y-1.5 rounded-2xl border border-gray-100 bg-gray-50 px-3 py-2.5 text-[11px] dark:border-gray-800 dark:bg-white/[0.03]">
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="font-medium text-gray-500 dark:text-gray-400">Expérience en cours</span>
+                      <span class="truncate font-semibold text-gray-900 dark:text-white">
+                        #{{ getRunningExperimentLabel(getProjectRetrainingConfig(project)) }}
                       </span>
                     </div>
-
-                    <div class="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 dark:bg-gray-900">
-                      <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                        Priorité 2
-                      </span>
-                      <span class="text-sm font-semibold text-gray-900 dark:text-white">
-                        {{ formatMetric(project.primaryMetric2) }}
-                      </span>
-                    </div>
-
-                    <div class="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 dark:bg-gray-900">
-                      <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                        Priorité 3
-                      </span>
-                      <span class="text-sm font-semibold text-gray-900 dark:text-white">
-                        {{ formatMetric(project.primaryMetric3) }}
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="font-medium text-gray-500 dark:text-gray-400">Job Kubernetes</span>
+                      <span class="truncate font-mono font-semibold text-gray-900 dark:text-white" [title]="getRunningJobLabel(getProjectRetrainingConfig(project))">
+                        {{ getRunningJobLabel(getProjectRetrainingConfig(project)) }}
                       </span>
                     </div>
                   </div>
-                </div>
+                }
 
-                <div class="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <div class="mt-5 grid grid-cols-3 gap-2">
                   <button
                     type="button"
                     (click)="openEditForm(project)"
-                    class="rounded-xl border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.05]"
+                    class="inline-flex items-center justify-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.05]"
                   >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                    </svg>
                     Modifier
                   </button>
 
                   <button
                     type="button"
                     (click)="deleteProject(project)"
-                    class="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-100 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
+                    class="inline-flex items-center justify-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
                   >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                    </svg>
                     Supprimer
                   </button>
 
                   <a
                     [routerLink]="['/upload-training']"
                     [queryParams]="{ projectId: project.id }"
-                    class="rounded-xl bg-blue-600 px-3 py-2 text-center text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 hover:shadow-md"
+                    class="inline-flex items-center justify-center gap-1.5 rounded-xl bg-brand-500 px-3 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-brand-600 hover:shadow-md"
                   >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                    </svg>
                     Training
                   </a>
                 </div>

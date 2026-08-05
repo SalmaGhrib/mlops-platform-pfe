@@ -19,7 +19,10 @@ import {
   RetrainingConfigResponse,
   RetrainingFrequencyType,
   RetrainingService,
-  RetrainingStrategy
+  RetrainingStrategy,
+  ManualRetrainingResponse,
+  ProjectRetrainingStatusResponse,
+  isRetrainingNonTerminalStatus
 } from '../../core/services/retraining.service';
 
 type DataType = 'TABULAR' | 'TEXT' | 'IMAGE';
@@ -60,6 +63,8 @@ export class MyProjectsComponent implements OnInit {
   loading = false;
   saving = false;
   loadingMetrics = false;
+  pollingStatuses = new Set<number>();
+  launchingProjectIds = new Set<number>();
 
   errorMessage = '';
   successMessage = '';
@@ -85,6 +90,53 @@ export class MyProjectsComponent implements OnInit {
   ngOnInit(): void {
     this.loadProjects();
     this.loadMetricOptions('classification');
+  }
+
+  private refreshProjectStatus(projectId: number): void {
+    if (!projectId || this.pollingStatuses.has(projectId)) {
+      return;
+    }
+
+    this.pollingStatuses.add(projectId);
+
+    this.retrainingService.getProjectStatus(projectId).subscribe({
+      next: (status: ProjectRetrainingStatusResponse) => {
+        const config = this.retrainingConfigs[projectId] ?? null;
+        if (config) {
+          this.retrainingConfigs[projectId] = {
+            ...config,
+            enabled: status?.enabled ?? config.enabled,
+            running: status?.running ?? config.running,
+            manualTriggerRequested: status?.manualTriggerRequested ?? config.manualTriggerRequested,
+            lastDecisionReason: status?.lastDecisionReason ?? config.lastDecisionReason,
+            lastTriggerReason: status?.lastTriggerReason ?? config.lastTriggerReason,
+            nextRetrainingAt: status?.nextRetrainingAt ?? config.nextRetrainingAt,
+            lastRetrainingAt: status?.lastRetrainingAt ?? config.lastRetrainingAt,
+          } as RetrainingConfigResponse;
+        }
+
+        const stillActive =
+          status?.running === true || status?.activeExperimentExists === true;
+
+        this.scheduleStatusPoll(projectId, stillActive ? 5000 : 0);
+      },
+      error: () => {
+        this.scheduleStatusPoll(projectId, 0);
+      }
+    });
+  }
+
+  private scheduleStatusPoll(projectId: number, delayMs: number): void {
+    this.pollingStatuses.delete(projectId);
+
+    if (delayMs <= 0) {
+      return;
+    }
+
+    setTimeout(() => {
+      this.pollingStatuses.delete(projectId);
+      this.refreshProjectStatus(projectId);
+    }, delayMs);
   }
 
   private getDefaultProjectForm(): ProjectFormModel {
@@ -165,6 +217,7 @@ export class MyProjectsComponent implements OnInit {
       next: (config: RetrainingConfigResponse) => {
         this.retrainingConfigs[projectId] =
           this.normalizeRetrainingConfig(config);
+        this.refreshProjectStatus(projectId);
       },
       error: () => {
         this.retrainingConfigs[projectId] = null;
@@ -818,25 +871,78 @@ export class MyProjectsComponent implements OnInit {
       return;
     }
 
-    if (config.running) {
+    if (config.running || config.manualTriggerRequested) {
       this.errorMessage =
-        'Un réentraînement est déjà en cours pour ce projet.';
+        'Un réentraînement est déjà en cours ou déjà demandé pour ce projet.';
       return;
     }
 
+    this.launchingProjectIds.add(project.id);
+    this.errorMessage = '';
+    this.successMessage = '';
+
     this.retrainingService.forceNow(project.id).subscribe({
-      next: (updatedConfig: RetrainingConfigResponse) => {
-        this.retrainingConfigs[project.id] =
-          this.normalizeRetrainingConfig(updatedConfig);
-        this.successMessage =
-          'La demande de réentraînement a été enregistrée. '
-          + 'Le scheduler va la traiter.';
+      next: (response: ManualRetrainingResponse) => {
+        this.launchingProjectIds.delete(project.id);
+
+        const success = response?.success === true;
+        const nonTerminal = isRetrainingNonTerminalStatus(response?.status);
+
+        const updatedConfig = this.normalizeRetrainingConfig({
+          ...(config as RetrainingConfigResponse),
+          projectId: project.id,
+          enabled: config.enabled,
+          running: success && nonTerminal,
+          manualTriggerRequested: false,
+          lastTriggerReason: 'MANUAL',
+          lastDecisionReason:
+            response?.message ||
+            (success
+              ? 'Réentraînement manuel lancé.'
+              : 'Échec du lancement manuel.'),
+          nextRetrainingAt: null,
+          experimentId: response?.experimentId ?? null,
+          jobName: response?.jobName ?? null,
+          kubeflowRunName: response?.jobName ?? null
+        } as RetrainingConfigResponse);
+
+        this.retrainingConfigs[project.id] = updatedConfig;
+
+        if (success) {
+          this.successMessage =
+            response?.message || 'Réentraînement lancé avec succès.';
+          this.refreshProjectStatus(project.id);
+        } else {
+          this.errorMessage =
+            response?.message || 'Impossible de lancer le réentraînement.';
+          this.refreshProjectStatus(project.id);
+        }
       },
       error: (error) => {
-        this.errorMessage = this.getBackendErrorMessage(
-          error,
-          'Impossible de demander le réentraînement maintenant.'
-        );
+        this.launchingProjectIds.delete(project.id);
+
+        const status = error?.status;
+        const backendCode = error?.error?.code;
+
+        let message: string;
+        if (
+          status === 409 ||
+          backendCode === 'RETRAINING_ALREADY_RUNNING'
+        ) {
+          message =
+            'Un réentraînement est déjà en cours pour ce projet.';
+        } else if (status === 401 || status === 403) {
+          message =
+            'Session expirée. Reconnectez-vous puis réessayez.';
+        } else {
+          message = this.getBackendErrorMessage(
+            error,
+            'Impossible de demander le réentraînement maintenant.'
+          );
+        }
+
+        this.errorMessage = message;
+        this.refreshProjectStatus(project.id);
       }
     });
   }
@@ -1181,6 +1287,52 @@ export class MyProjectsComponent implements OnInit {
     }
 
     return config.lastDecisionReason || config.lastTriggerReason || 'Aucune décision récente.';
+  }
+
+  isForceNowDisabled(project: MlProjectResponse): boolean {
+    if (this.launchingProjectIds.has(project.id)) {
+      return true;
+    }
+
+    const config = this.retrainingConfigs[project.id] ?? null;
+
+    return (
+      !config?.enabled ||
+      config.running === true ||
+      config.manualTriggerRequested === true
+    );
+  }
+
+  getRunningExperimentLabel(
+    config: RetrainingConfigResponse | null
+  ): string {
+    if (!config) {
+      return '-';
+    }
+
+    if (config.running && config.id != null) {
+      return String(config.id);
+    }
+
+    return '-';
+  }
+
+  getRunningJobLabel(config: RetrainingConfigResponse | null): string {
+    if (!config) {
+      return '-';
+    }
+
+    const jobName = config.jobName;
+    if (jobName) {
+      return jobName;
+    }
+
+    const k8sName = config.kubeflowRunName;
+    if (k8sName) {
+      return k8sName;
+    }
+
+    return '-';
   }
 
   getMonitoringFlagLabel(enabled: boolean | null | undefined): string {

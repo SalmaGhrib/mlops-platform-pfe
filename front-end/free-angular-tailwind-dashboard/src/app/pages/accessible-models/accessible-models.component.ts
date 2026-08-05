@@ -304,26 +304,14 @@ export class AccessibleModelsComponent implements OnInit {
   getAccessDescription(model: AccessibleModel): string {
     switch (model.visibility) {
       case 'PUBLIC_API':
-        return 'Ce modèle est public via API. Toute application possédant la clé API peut appeler l’endpoint externe.';
+        return 'Ce modèle est exposé via le SMART MODEL GATEWAY. Le propriétaire doit vous fournir une clé API (jamais affichée ici) pour appeler l’endpoint externe.';
       case 'SHARED':
-        return 'Ce modèle est partagé avec vous. Vous êtes autorisé à l’utiliser.';
+        return 'Ce modèle est partagé avec vous dans la plateforme. L’accès externe utilise une clé API fournie par le propriétaire (X-API-KEY).';
       case 'PRIVATE':
         return 'Ce modèle est privé.';
       default:
         return 'Mode d’accès non défini.';
     }
-  }
-
-  maskApiKey(apiKey?: string | null): string {
-    if (!apiKey) {
-      return 'Aucune clé API disponible';
-    }
-
-    if (apiKey.length <= 14) {
-      return apiKey;
-    }
-
-    return `${apiKey.substring(0, 8)}********${apiKey.substring(apiKey.length - 5)}`;
   }
 
   copyToClipboard(value?: string | null, label = 'Valeur'): void {
@@ -352,9 +340,9 @@ export class AccessibleModelsComponent implements OnInit {
 
   buildCurlExample(model: AccessibleModel): string {
     const endpoint = this.getExternalEndpoint(model);
-    const apiKey = model.apiKey || 'VOTRE_CLE_API';
+    const apiKey = 'VOTRE_CLE_API';
 
-    return `curl -X POST "${endpoint}" \\
+    return `curl.exe -X POST "${endpoint}" \\
   -H "Content-Type: application/json" \\
   -H "X-API-KEY: ${apiKey}" \\
   -d '{

@@ -11,6 +11,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
@@ -33,6 +36,7 @@ public class AutoProductionDeploymentReconcilerService {
     private final MlExperimentRepository mlExperimentRepository;
     private final ModelDeploymentService modelDeploymentService;
     private final ModelArtifactStandardizerService modelArtifactStandardizerService;
+    private final PlatformTransactionManager transactionManager;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -50,11 +54,13 @@ public class AutoProductionDeploymentReconcilerService {
     public AutoProductionDeploymentReconcilerService(
             MlExperimentRepository mlExperimentRepository,
             ModelDeploymentService modelDeploymentService,
-            ModelArtifactStandardizerService modelArtifactStandardizerService
+            ModelArtifactStandardizerService modelArtifactStandardizerService,
+            PlatformTransactionManager transactionManager
     ) {
         this.mlExperimentRepository = mlExperimentRepository;
         this.modelDeploymentService = modelDeploymentService;
         this.modelArtifactStandardizerService = modelArtifactStandardizerService;
+        this.transactionManager = transactionManager;
     }
 
     @Scheduled(
@@ -62,7 +68,7 @@ public class AutoProductionDeploymentReconcilerService {
             initialDelayString = "${app.mlops.production-reconciler.initial-delay-ms:20000}"
     )
     @SchedulerLock(
-            name = "mlopsLifecycleCoordinator",
+            name = "autoProductionDeploymentReconciler",
             lockAtMostFor = "PT10M",
             lockAtLeastFor = "PT2S"
     )
@@ -284,39 +290,46 @@ public class AutoProductionDeploymentReconcilerService {
             String registeredModelName,
             String productionVersion
     ) {
-        List<MlExperiment> sameModelExperiments =
-                mlExperimentRepository
-                        .findByProjectAndRegisteredModelNameOrderByCreatedAtDesc(
-                                winner.getProject(),
-                                registeredModelName
-                        );
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        template.setTimeout(30);
 
-        for (MlExperiment experiment : sameModelExperiments) {
-            boolean selected = experiment.getId() != null
-                    && experiment.getId().equals(winner.getId());
+        template.executeWithoutResult(status -> {
+            List<MlExperiment> sameModelExperiments =
+                    mlExperimentRepository
+                            .findByProjectAndRegisteredModelNameOrderByCreatedAtDesc(
+                                    winner.getProject(),
+                                    registeredModelName
+                            );
 
-            experiment.setRegisteredModelName(registeredModelName);
-            experiment.setModelName(registeredModelName);
-            experiment.setProduction(selected);
-            experiment.setProductionVersion(
-                    selected ? productionVersion : null
-            );
+            for (MlExperiment experiment : sameModelExperiments) {
+                boolean selected = experiment.getId() != null
+                        && experiment.getId().equals(winner.getId());
 
-            if (selected) {
-                experiment.setErrorMessage(null);
-                experiment.setMessage(
-                        appendSafeMessage(
-                                experiment.getMessage(),
-                                "Automatically promoted as best global-score "
-                                        + "Production model. version="
-                                        + productionVersion
-                        )
+                experiment.setRegisteredModelName(registeredModelName);
+                experiment.setModelName(registeredModelName);
+                experiment.setProduction(selected);
+                experiment.setProductionVersion(
+                        selected ? productionVersion : null
                 );
-            }
-        }
 
-        mlExperimentRepository.saveAll(sameModelExperiments);
-        mlExperimentRepository.flush();
+                if (selected) {
+                    experiment.setErrorMessage(null);
+                    experiment.setMessage(
+                            appendSafeMessage(
+                                    experiment.getMessage(),
+                                    "Automatically promoted as best global-score "
+                                            + "Production model. version="
+                                            + productionVersion
+                            )
+                    );
+                }
+            }
+
+            mlExperimentRepository.saveAll(sameModelExperiments);
+            mlExperimentRepository.flush();
+        });
     }
 
     private void deployCandidate(MlExperiment candidate) {

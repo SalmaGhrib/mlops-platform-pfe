@@ -1,0 +1,14 @@
+.git
+node_modules
+front-end
+k8s
+kube-prometheus
+kubeflow
+mysql
+migrations
+*.sql
+*.log
+backend-running.jar
+backend-retraining-debug.log
+mini-mlops/generated-serving-images
+mini-mlops/pipelines

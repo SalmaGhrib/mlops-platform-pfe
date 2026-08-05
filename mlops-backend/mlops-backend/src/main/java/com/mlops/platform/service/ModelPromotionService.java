@@ -355,48 +355,58 @@ public class ModelPromotionService {
             return;
         }
 
-        for (String metricName : selectedMetrics) {
+        String primaryMetric = null;
+        Double primaryMetricValue = null;
+        double[] configuredWeights = {0.50d, 0.30d, 0.20d};
+        double weightedSum = 0.0d;
+        double appliedWeight = 0.0d;
+
+        for (int index = 0;
+             index < selectedMetrics.size() && index < configuredWeights.length;
+             index++) {
+
+            String metricName = selectedMetrics.get(index);
             if (metricName == null || metricName.isBlank()) {
                 continue;
             }
 
-            Double value =
-                    getMetricValueCompatible(
-                            metricValues,
-                            metricName
-                    );
-
-            if (value == null) {
+            Double value = getMetricValueCompatible(metricValues, metricName);
+            if (value == null || !Double.isFinite(value)) {
                 continue;
             }
 
-            experiment.setPrimaryMetric(metricName);
-            experiment.setPrimaryMetricValue(value);
-            experiment.setDirection(
-                    inferDirection(metricName)
-            );
-            experiment.setGlobalScore(
-                    normalizeMetricScore(
-                            metricName,
-                            value
-                    )
-            );
+            Double normalizedScore = normalizeMetricScore(metricName, value);
+            if (normalizedScore == null || !Double.isFinite(normalizedScore)) {
+                continue;
+            }
+
+            if (primaryMetric == null) {
+                primaryMetric = metricName;
+                primaryMetricValue = value;
+            }
+
+            double weight = configuredWeights[index];
+            weightedSum += normalizedScore * weight;
+            appliedWeight += weight;
+        }
+
+        if (primaryMetric == null || appliedWeight <= 0.0d) {
+            String fallbackMetric = project != null
+                    ? cleanMetric(project.getPrimaryMetric1())
+                    : null;
+            experiment.setPrimaryMetric(fallbackMetric);
+            experiment.setPrimaryMetricValue(null);
+            experiment.setDirection(fallbackMetric != null
+                    ? inferDirection(fallbackMetric)
+                    : "max");
+            experiment.setGlobalScore(null);
             return;
         }
 
-        String fallbackMetric =
-                project != null
-                        ? cleanMetric(project.getPrimaryMetric1())
-                        : null;
-
-        experiment.setPrimaryMetric(fallbackMetric);
-        experiment.setPrimaryMetricValue(null);
-        experiment.setDirection(
-                fallbackMetric != null
-                        ? inferDirection(fallbackMetric)
-                        : "max"
-        );
-        experiment.setGlobalScore(null);
+        experiment.setPrimaryMetric(primaryMetric);
+        experiment.setPrimaryMetricValue(primaryMetricValue);
+        experiment.setDirection(inferDirection(primaryMetric));
+        experiment.setGlobalScore(roundDouble(weightedSum / appliedWeight, 6));
     }
 
     private int compareExperimentsByPriority(
@@ -424,67 +434,39 @@ public class ModelPromotionService {
                         ? selectedMetrics
                         : getSelectedProjectMetrics(project);
 
+        int scoreComparison = compareNullableScores(
+                candidate.getGlobalScore(),
+                currentBest.getGlobalScore()
+        );
+        if (scoreComparison != 0) {
+            return scoreComparison;
+        }
+
+        /* Départage déterministe par ordre de priorité uniquement si égalité. */
         for (String metricName : priorities) {
-            if (metricName == null
-                    || metricName.isBlank()) {
+            if (metricName == null || metricName.isBlank()) {
                 continue;
             }
 
-            Double candidateValue =
-                    getMetricValueCompatible(
-                            candidateMetrics,
-                            metricName
-                    );
-            Double bestValue =
-                    getMetricValueCompatible(
-                            bestMetrics,
-                            metricName
-                    );
+            Double candidateValue = getMetricValueCompatible(candidateMetrics, metricName);
+            Double bestValue = getMetricValueCompatible(bestMetrics, metricName);
 
-            if (candidateValue == null
-                    && bestValue == null) {
+            if (candidateValue == null && bestValue == null) {
                 continue;
             }
-
-            if (candidateValue != null
-                    && bestValue == null) {
+            if (candidateValue != null && bestValue == null) {
                 return 1;
             }
-
             if (candidateValue == null) {
                 return -1;
             }
 
-            int comparison;
-
-            if ("min".equalsIgnoreCase(
-                    inferDirection(metricName))) {
-                comparison =
-                        Double.compare(
-                                bestValue,
-                                candidateValue
-                        );
-            } else {
-                comparison =
-                        Double.compare(
-                                candidateValue,
-                                bestValue
-                        );
-            }
-
+            int comparison = "min".equalsIgnoreCase(inferDirection(metricName))
+                    ? Double.compare(bestValue, candidateValue)
+                    : Double.compare(candidateValue, bestValue);
             if (comparison != 0) {
                 return comparison;
             }
-        }
-
-        int scoreComparison =
-                compareNullableScores(
-                        candidate.getGlobalScore(),
-                        currentBest.getGlobalScore()
-                );
-
-        if (scoreComparison != 0) {
-            return scoreComparison;
         }
 
         int versionComparison =

@@ -2,6 +2,8 @@ import { CommonModule } from '@angular/common';
 import { Component, OnInit } from '@angular/core';
 import { catchError, finalize, forkJoin, map, of } from 'rxjs';
 import {
+  ModelApiKeyItem,
+  ModelApiKeyStats,
   ModelDeploymentResponse,
   ModelRegistryItem,
   ModelRegistryService
@@ -403,6 +405,450 @@ export class ModelRegistryComponent implements OnInit {
     }
 
     return `${apiKey.substring(0, 12)}********${apiKey.substring(apiKey.length - 6)}`;
+  }
+
+  /*
+   * =========================================================
+   * SMART MODEL GATEWAY
+   * =========================================================
+   */
+
+  gatewayOpen: { [deploymentId: number]: boolean } = {};
+  gatewayKeys: { [deploymentId: number]: ModelApiKeyItem[] } = {};
+  gatewayStats: { [deploymentId: number]: ModelApiKeyStats } = {};
+  gatewayLoading: { [deploymentId: number]: boolean } = {};
+  gatewayNewName: { [deploymentId: number]: string } = {};
+  gatewayNewQuota: { [deploymentId: number]: number | null } = {};
+  gatewayNewKey: { [deploymentId: number]: string | null } = {};
+  gatewayNewExpiry: { [deploymentId: number]: string } = {};
+  gatewayKeyModalDeploymentId: number | null = null;
+
+  isGatewayOpen(deploymentId?: number | null): boolean {
+    return deploymentId != null && this.gatewayOpen[deploymentId] === true;
+  }
+
+  isGatewayLoading(deploymentId?: number | null): boolean {
+    return deploymentId != null && this.gatewayLoading[deploymentId] === true;
+  }
+
+  toggleGateway(model: ModelRegistryItem): void {
+    const deploymentId = model?.activeDeploymentId;
+
+    if (!deploymentId) {
+      return;
+    }
+
+    if (this.gatewayOpen[deploymentId]) {
+      this.gatewayOpen[deploymentId] = false;
+      return;
+    }
+
+    this.gatewayOpen[deploymentId] = true;
+    this.loadGateway(model);
+  }
+
+  loadGateway(model: ModelRegistryItem): void {
+    const deploymentId = model?.activeDeploymentId;
+
+    if (!deploymentId) {
+      return;
+    }
+
+    this.gatewayLoading[deploymentId] = true;
+    this.errorMessage = '';
+    this.successMessage = '';
+
+    this.modelRegistryService.getApiKeys(deploymentId).subscribe({
+      next: (keys) => {
+        this.gatewayKeys[deploymentId] = keys || [];
+        this.gatewayLoading[deploymentId] = false;
+      },
+      error: (error) => {
+        this.gatewayKeys[deploymentId] = [];
+        this.gatewayLoading[deploymentId] = false;
+        this.errorMessage = this.extractErrorMessage(
+          error,
+          'Impossible de charger les clés API.'
+        );
+      }
+    });
+
+    this.modelRegistryService.getApiKeyStats(deploymentId).subscribe({
+      next: (stats) => {
+        this.gatewayStats[deploymentId] = stats;
+      },
+      error: () => {
+        this.gatewayStats[deploymentId] = {};
+      }
+    });
+  }
+
+  getGatewayKeys(model: ModelRegistryItem): ModelApiKeyItem[] {
+    const deploymentId = model?.activeDeploymentId;
+    return deploymentId != null ? (this.gatewayKeys[deploymentId] || []) : [];
+  }
+
+  getGatewayStats(model: ModelRegistryItem): ModelApiKeyStats | null {
+    const deploymentId = model?.activeDeploymentId;
+    return deploymentId != null ? (this.gatewayStats[deploymentId] || null) : null;
+  }
+
+  getGatewayKeysCount(model: ModelRegistryItem): number {
+    return this.getGatewayKeys(model).length;
+  }
+
+  getLastUsedLabel(model: ModelRegistryItem): string {
+    const keys = this.getGatewayKeys(model);
+
+    if (!keys || keys.length === 0) {
+      return 'Aucune utilisation';
+    }
+
+    let latest: string | null = null;
+
+    for (const key of keys) {
+      const used = key?.lastUsedAt;
+      if (used && (!latest || new Date(used).getTime() > new Date(latest).getTime())) {
+        latest = used;
+      }
+    }
+
+    return latest ? this.formatDate(latest) : 'Aucune utilisation';
+  }
+
+  getProductionVersion(model: ModelRegistryItem): string {
+    return model?.['modelVersion'] || model?.['model_version'] || '—';
+  }
+
+  getGatewayNewName(deploymentId?: number | null): string {
+    return deploymentId != null ? (this.gatewayNewName[deploymentId] || '') : '';
+  }
+
+  getGatewayNewQuota(deploymentId?: number | null): number | null {
+    return deploymentId != null ? (this.gatewayNewQuota[deploymentId] ?? null) : null;
+  }
+
+  getGatewayNewExpiry(deploymentId?: number | null): string {
+    return deploymentId != null ? (this.gatewayNewExpiry[deploymentId] || '') : '';
+  }
+
+  isModelPrivate(model: ModelRegistryItem): boolean {
+    if (!model) {
+      return true;
+    }
+
+    const visibility = model.visibility || model['visibilityValue'] || '';
+
+    if (String(visibility).toUpperCase() === 'PRIVATE') {
+      return true;
+    }
+
+    return !this.isApiEnabled(model) && !model.visibility;
+  }
+
+  parseGatewayQuota(value: any): number | null {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    const raw = String(value).trim();
+
+    if (raw === '') {
+      return null;
+    }
+
+    const parsed = Number(raw);
+
+    return !isNaN(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  formatGatewayExpiry(value: string): string | null {
+    const raw = String(value || '').trim();
+
+    if (!raw) {
+      return null;
+    }
+
+    const dateOnly = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+    if (dateOnly) {
+      return `${dateOnly[1]}-${dateOnly[2]}-${dateOnly[3]}T00:00:00`;
+    }
+
+    const expiry = new Date(raw);
+
+    if (isNaN(expiry.getTime())) {
+      return null;
+    }
+
+    const pad = (n: number) => String(n).padStart(2, '0');
+
+    return `${expiry.getFullYear()}-${pad(expiry.getMonth() + 1)}-${pad(expiry.getDate())}T00:00:00`;
+  }
+
+  createGatewayKey(model: ModelRegistryItem): void {
+    const deploymentId = model?.activeDeploymentId;
+
+    if (!deploymentId) {
+      this.errorMessage = 'Aucun déploiement actif pour créer une clé API.';
+      return;
+    }
+
+    if (this.isModelPrivate(model)) {
+      this.errorMessage = 'Ce modèle est privé : la création de clé API est désactivée.';
+      return;
+    }
+
+    const name = this.gatewayNewName[deploymentId] || '';
+    const quota = this.gatewayNewQuota[deploymentId];
+    const expiryValue = this.gatewayNewExpiry[deploymentId] || '';
+
+    const body: {
+      name?: string | null;
+      dailyQuota?: number | null;
+      expiresAt?: string | null;
+    } = {};
+
+    if (name.trim()) {
+      body.name = name.trim();
+    }
+
+    if (quota != null && quota > 0) {
+      body.dailyQuota = quota;
+    }
+
+    if (expiryValue) {
+      const formatted = this.formatGatewayExpiry(expiryValue);
+      if (formatted) {
+        body.expiresAt = formatted;
+      }
+    }
+
+    this.errorMessage = '';
+    this.successMessage = '';
+    this.gatewayLoading[deploymentId] = true;
+
+    this.modelRegistryService.createApiKey(deploymentId, body).subscribe({
+      next: (key) => {
+        this.gatewayLoading[deploymentId] = false;
+
+        if (key?.apiKey) {
+          this.gatewayNewKey[deploymentId] = key.apiKey;
+          this.gatewayKeyModalDeploymentId = deploymentId;
+        } else {
+          this.successMessage = 'Clé API créée avec succès.';
+          this.clearSuccessAfterDelay();
+        }
+
+        const keys = this.gatewayKeys[deploymentId] || [];
+        this.gatewayKeys[deploymentId] = [key, ...keys];
+
+        this.gatewayNewName[deploymentId] = '';
+        this.gatewayNewQuota[deploymentId] = null;
+        this.gatewayNewExpiry[deploymentId] = '';
+
+        this.clearSuccessAfterDelay();
+      },
+      error: (error) => {
+        this.gatewayLoading[deploymentId] = false;
+        this.errorMessage = this.extractErrorMessage(
+          error,
+          'Impossible de créer la clé API.'
+        );
+      }
+    });
+  }
+
+  getGatewayNewKey(model: ModelRegistryItem): string | null {
+    const deploymentId = model?.activeDeploymentId;
+    return deploymentId != null ? (this.gatewayNewKey[deploymentId] || null) : null;
+  }
+
+  isKeyModalOpen(deploymentId?: number | null): boolean {
+    return deploymentId != null && this.gatewayKeyModalDeploymentId === deploymentId;
+  }
+
+  /*
+   * Ferme la fenêtre de révélation : la clé complète n'est plus jamais affichée ensuite.
+   * Seul le préfixe masqué reste visible dans la liste.
+   */
+  closeGatewayKeyModal(model: ModelRegistryItem): void {
+    const deploymentId = model?.activeDeploymentId;
+
+    if (deploymentId != null) {
+      this.gatewayKeyModalDeploymentId = null;
+      this.gatewayNewKey[deploymentId] = null;
+      this.successMessage =
+        'Clé API créée. Copiez-la maintenant : elle ne sera plus affichée après la fermeture de cette fenêtre.';
+      this.clearSuccessAfterDelay();
+    }
+  }
+
+  copyGatewayKey(model: ModelRegistryItem): void {
+    const deploymentId = model?.activeDeploymentId;
+    const key = deploymentId != null ? (this.gatewayNewKey[deploymentId] || null) : null;
+
+    if (!key) {
+      return;
+    }
+
+    this.copyToClipboard(key, 'Clé API copiée.');
+  }
+
+  copyPublicEndpoint(model: ModelRegistryItem): void {
+    if (!model?.registeredModelName) {
+      return;
+    }
+
+    const url = this.modelRegistryService.getExternalPredictionEndpoint(
+      model.registeredModelName
+    );
+
+    const fullUrl = `${this.modelRegistryService.getPublicBaseUrlForCopy() || this.getDefaultBaseUrl()}${url}`;
+
+    this.copyToClipboard(fullUrl, 'Endpoint public copié.');
+  }
+
+  copyCurl(model: ModelRegistryItem): void {
+    if (!model?.registeredModelName) {
+      return;
+    }
+
+    const curl = this.modelRegistryService.buildCurlForModel(
+      model.registeredModelName,
+      null
+    );
+
+    this.copyToClipboard(curl, 'Commande cURL copiée.');
+  }
+
+  maskGatewayKey(key: ModelApiKeyItem): string {
+    if (key?.maskedKey) {
+      return key.maskedKey;
+    }
+
+    if (key?.keyPrefix) {
+      return `${key.keyPrefix}••••••`;
+    }
+
+    return 'clé-api-••••••';
+  }
+
+  isKeyEnabled(key: ModelApiKeyItem): boolean {
+    return key?.enabled === true && !key?.revokedAt;
+  }
+
+  isKeyExpired(key: ModelApiKeyItem): boolean {
+    if (!key?.expiresAt) {
+      return false;
+    }
+
+    const expiry = new Date(key.expiresAt);
+    return !isNaN(expiry.getTime()) && expiry.getTime() < Date.now();
+  }
+
+  toggleKeyEnabled(key: ModelApiKeyItem, model: ModelRegistryItem): void {
+    const deploymentId = model?.activeDeploymentId;
+
+    if (!deploymentId || !key?.id) {
+      return;
+    }
+
+    const currentlyEnabled = this.isKeyEnabled(key);
+
+    const observable = currentlyEnabled
+      ? this.modelRegistryService.disableApiKey(key.id)
+      : this.modelRegistryService.enableApiKey(key.id);
+
+    observable.subscribe({
+      next: (updated) => {
+        const keys = this.gatewayKeys[deploymentId] || [];
+        this.gatewayKeys[deploymentId] = keys.map((item) =>
+          item.id === updated.id ? updated : item
+        );
+      },
+      error: (error) => {
+        this.errorMessage = this.extractErrorMessage(
+          error,
+          'Impossible de modifier la clé API.'
+        );
+      }
+    });
+  }
+
+  revokeKey(key: ModelApiKeyItem, model: ModelRegistryItem): void {
+    const deploymentId = model?.activeDeploymentId;
+
+    if (!deploymentId || !key?.id) {
+      return;
+    }
+
+    const confirmed = confirm(
+      'Révoquer cette clé API ? Elle deviendra immédiatement inutilisable.'
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    this.modelRegistryService.revokeApiKey(key.id).subscribe({
+      next: () => {
+        const keys = this.gatewayKeys[deploymentId] || [];
+        this.gatewayKeys[deploymentId] = keys.map((item) => {
+          if (item.id !== key.id) {
+            return item;
+          }
+          return {
+            ...item,
+            enabled: false,
+            revokedAt: new Date().toISOString()
+          };
+        });
+      },
+      error: (error) => {
+        this.errorMessage = this.extractErrorMessage(
+          error,
+          'Impossible de révoquer la clé API.'
+        );
+      }
+    });
+  }
+
+  formatQuota(quota?: number | null): string {
+    if (quota == null) {
+      return 'Illimité';
+    }
+    return `${quota} req/jour`;
+  }
+
+  formatKeyStatus(key: ModelApiKeyItem): string {
+    if (this.isKeyExpired(key)) {
+      return 'Expirée';
+    }
+    if (key?.revokedAt) {
+      return 'Révoquée';
+    }
+    if (this.isKeyEnabled(key)) {
+      return 'Active';
+    }
+    return 'Désactivée';
+  }
+
+  formatLastUsed(lastUsedAt?: string | null): string {
+    if (!lastUsedAt) {
+      return 'Jamais utilisée';
+    }
+    return this.formatDate(lastUsedAt);
+  }
+
+  private getDefaultBaseUrl(): string {
+    return 'http://128.251.112.197';
+  }
+
+  getPublicBaseUrlForDisplay(registeredModelName: string): string {
+    const cleanName = encodeURIComponent(registeredModelName || '');
+    const base = this.modelRegistryService.getPublicBaseUrlForCopy() || this.getDefaultBaseUrl();
+    return `${base}/api/external/models/${cleanName}/predict`;
   }
 
   getModelDataType(model: ModelRegistryItem): string {

@@ -77,7 +77,10 @@ configuration.setAllowedOrigins(
 
         configuration.setExposedHeaders(List.of(
                 "Authorization",
-                "Content-Type"
+                "Content-Type",
+                "X-RateLimit-Limit",
+                "X-RateLimit-Remaining",
+                "X-RateLimit-Reset"
         ));
 
         configuration.setAllowCredentials(true);

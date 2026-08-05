@@ -35,8 +35,7 @@ spec:
       containers:
         - name: mlops-backend
 
-          image: acrmlopssalmav2.azurecr.io/mlops-backend:imageserve
-          imagePullPolicy: Always
+          image: acrmlopssalmav2.azurecr.io/mlops-backend:sync-timeout-20260805-02
 
           ports:
             - name: http

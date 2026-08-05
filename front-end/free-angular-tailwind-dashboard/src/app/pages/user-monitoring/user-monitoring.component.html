@@ -1,0 +1,581 @@
+<div class="monitoring-page">
+  <div class="page-header">
+    <div>
+      <span class="eyebrow">Mon Monitoring</span>
+      <h1>Dashboard de monitoring</h1>
+      <p>
+        Suivi des expériences, déploiements, réentraînement intelligent,
+        alertes de performance et data drift sur vos propres projets.
+      </p>
+    </div>
+
+    <div class="header-actions">
+      <button class="refresh-btn" (click)="refresh()">Actualiser</button>
+    </div>
+  </div>
+
+  <div *ngIf="loading" class="state-box">
+    <span class="mlops-spinner text-brand-600 dark:text-brand-400"></span>
+    Chargement du dashboard...
+  </div>
+
+  <div *ngIf="errorMessage && !loading" class="state-box error">
+    <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+    </svg>
+    {{ errorMessage }}
+  </div>
+
+  <ng-container *ngIf="!loading && !errorMessage">
+    <!-- Project focus -->
+    <div class="project-focus" *ngIf="projectDashboard as project">
+      <div class="focus-header">
+        <div class="focus-title">
+          <span class="card-icon kpi-blue">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="focus-eyebrow">Projet sélectionné</span>
+            <h2 class="focus-name">{{ project.projectName }}</h2>
+            <p class="focus-desc" *ngIf="project.description">{{ project.description }}</p>
+          </div>
+        </div>
+
+        <div class="focus-select-wrap">
+          <span class="focus-select-label">Choisir un projet</span>
+          <select
+            [(ngModel)]="selectedProjectId"
+            (change)="onProjectChange()"
+            class="project-select focus-select"
+          >
+            <option [ngValue]="null" disabled>
+              Sélectionnez un projet
+            </option>
+            <option
+              *ngFor="let projectOption of projects; trackBy: trackByProject"
+              [ngValue]="projectOption.id"
+            >
+              {{ projectOption.name }}
+            </option>
+          </select>
+        </div>
+      </div>
+
+      <div class="project-kpi-grid">
+        <div class="project-kpi">
+          <span class="pkpi-icon kpi-teal">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3v18h18"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 14l4-4 3 3 5-6"/>
+            </svg>
+          </span>
+          <div>
+            <span class="pkpi-label">Santé du projet</span>
+            <strong class="pkpi-value" [ngClass]="healthTextClass(project.healthScore)">
+              {{ project.healthScore ?? 0 }}<small>/100</small>
+            </strong>
+          </div>
+        </div>
+
+        <div class="project-kpi">
+          <span class="pkpi-icon kpi-purple">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="pkpi-label">Version production</span>
+            <strong class="pkpi-value">{{ project.currentProductionVersion || '-' }}</strong>
+          </div>
+        </div>
+
+        <div class="project-kpi">
+          <span class="pkpi-icon kpi-green">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="pkpi-label">Meilleur score global</span>
+            <strong class="pkpi-value">{{ project.bestGlobalScore ?? '-' }}</strong>
+          </div>
+        </div>
+
+        <div class="project-kpi">
+          <span class="pkpi-icon kpi-yellow">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="pkpi-label">Prochain réentraînement</span>
+            <strong class="pkpi-value" *ngIf="project.retrainingEnabled && project.nextRetrainingAt">
+              {{ formatShortDate(project.nextRetrainingAt) }}
+            </strong>
+            <strong class="pkpi-value pkpi-muted" *ngIf="!project.retrainingEnabled">Non planifié</strong>
+          </div>
+        </div>
+
+        <div class="project-kpi">
+          <span class="pkpi-icon kpi-red">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3v-6"/>
+            </svg>
+          </span>
+          <div>
+            <span class="pkpi-label">Data drift</span>
+            <strong class="pkpi-value" [ngClass]="driftTextClass(project.dataDriftScorePercent)">
+              {{ project.dataDriftScorePercent ?? 0 }}<small>%</small>
+            </strong>
+          </div>
+        </div>
+
+        <div class="project-kpi">
+          <span class="pkpi-icon kpi-indigo">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="pkpi-label">Latence prédiction</span>
+            <strong class="pkpi-value">{{ project.averagePredictionLatencyMs ?? 0 }}<small> ms</small></strong>
+          </div>
+        </div>
+
+        <div class="project-kpi">
+          <span class="pkpi-icon kpi-green">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="pkpi-label">Succès prédictions</span>
+            <strong class="pkpi-value">{{ project.predictionSuccessRate ?? 0 }}<small>%</small></strong>
+          </div>
+        </div>
+
+        <div class="project-kpi">
+          <span class="pkpi-icon kpi-cyan">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6-2a3 3 0 10-3-3 3 3 0 003 3zm-9 4c-1.657 0-3 1.343-3 3v2h6v-2c0-1.657-1.343-3-3-3z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="pkpi-label">Prédictions récentes</span>
+            <strong class="pkpi-value">{{ project.recentPredictionCount ?? 0 }}</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Global view -->
+    <div class="global-card">
+      <div class="card-heading">
+        <span class="card-icon kpi-blue">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+          </svg>
+        </span>
+        <h3>Vue globale — tous les projets</h3>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <span class="kpi-icon kpi-blue">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="kpi-label">Total projets</span>
+            <strong>{{ asNumber(summary?.totalProjects) }}</strong>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-icon kpi-green">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="kpi-label">Succès des runs</span>
+            <strong>{{ asPercent(summary?.runSuccessRate) }}</strong>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-icon kpi-red">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="kpi-label">Échecs des runs</span>
+            <strong>{{ asPercent(runFailureRate) }}</strong>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-icon kpi-teal">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="kpi-label">Succès déploiements</span>
+            <strong>{{ asPercent(summary?.deploymentSuccessRate) }}</strong>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-icon kpi-yellow">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="kpi-label">Échecs déploiements</span>
+            <strong>{{ asPercent(deploymentFailureRate) }}</strong>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-icon kpi-indigo">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+            </svg>
+          </span>
+          <div>
+            <span class="kpi-label">Modèles standard</span>
+            <strong>{{ asNumber(standardModelCount) }}</strong>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-icon kpi-purple">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/>
+            </svg>
+          </span>
+          <div>
+            <span class="kpi-label">Modèles dockerisés</span>
+            <strong>{{ asNumber(dockerizedModelCount) }}</strong>
+          </div>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-icon kpi-cyan">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+            </svg>
+          </span>
+          <div>
+            <span class="kpi-label">Alertes actives</span>
+            <strong>{{ asNumber(summary?.activeAlerts) }}</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="chart-grid">
+      <div class="chart-card">
+        <apx-chart
+          [series]="healthChart.series!"
+          [chart]="healthChart.chart!"
+          [labels]="healthChart.labels!"
+          [legend]="healthChart.legend!"
+          [dataLabels]="healthChart.dataLabels!"
+          [plotOptions]="healthChart.plotOptions!"
+          [stroke]="healthChart.stroke!"
+          [responsive]="healthChart.responsive!"
+          [title]="healthChart.title!"
+        ></apx-chart>
+      </div>
+
+      <div class="chart-card">
+        <apx-chart
+          [series]="runSuccessChart.series!"
+          [chart]="runSuccessChart.chart!"
+          [labels]="runSuccessChart.labels!"
+          [legend]="runSuccessChart.legend!"
+          [dataLabels]="runSuccessChart.dataLabels!"
+          [plotOptions]="runSuccessChart.plotOptions!"
+          [stroke]="runSuccessChart.stroke!"
+          [responsive]="runSuccessChart.responsive!"
+          [title]="runSuccessChart.title!"
+        ></apx-chart>
+      </div>
+
+      <div class="chart-card">
+        <apx-chart
+          [series]="deploymentSuccessChart.series!"
+          [chart]="deploymentSuccessChart.chart!"
+          [labels]="deploymentSuccessChart.labels!"
+          [legend]="deploymentSuccessChart.legend!"
+          [dataLabels]="deploymentSuccessChart.dataLabels!"
+          [plotOptions]="deploymentSuccessChart.plotOptions!"
+          [stroke]="deploymentSuccessChart.stroke!"
+          [responsive]="deploymentSuccessChart.responsive!"
+          [title]="deploymentSuccessChart.title!"
+        ></apx-chart>
+      </div>
+
+      <div class="chart-card">
+        <apx-chart
+          [series]="predictionSuccessChart.series!"
+          [chart]="predictionSuccessChart.chart!"
+          [labels]="predictionSuccessChart.labels!"
+          [legend]="predictionSuccessChart.legend!"
+          [dataLabels]="predictionSuccessChart.dataLabels!"
+          [plotOptions]="predictionSuccessChart.plotOptions!"
+          [stroke]="predictionSuccessChart.stroke!"
+          [responsive]="predictionSuccessChart.responsive!"
+          [title]="predictionSuccessChart.title!"
+        ></apx-chart>
+      </div>
+    </div>
+
+    <div class="chart-grid two-columns">
+      <div class="chart-card">
+        <apx-chart
+          [series]="runsDistributionChart.series!"
+          [chart]="runsDistributionChart.chart!"
+          [labels]="runsDistributionChart.labels!"
+          [legend]="runsDistributionChart.legend!"
+          [dataLabels]="runsDistributionChart.dataLabels!"
+          [plotOptions]="runsDistributionChart.plotOptions!"
+          [stroke]="runsDistributionChart.stroke!"
+          [responsive]="runsDistributionChart.responsive!"
+          [title]="runsDistributionChart.title!"
+        ></apx-chart>
+      </div>
+
+      <div class="chart-card">
+        <apx-chart
+          [series]="deploymentsDistributionChart.series!"
+          [chart]="deploymentsDistributionChart.chart!"
+          [labels]="deploymentsDistributionChart.labels!"
+          [legend]="deploymentsDistributionChart.legend!"
+          [dataLabels]="deploymentsDistributionChart.dataLabels!"
+          [plotOptions]="deploymentsDistributionChart.plotOptions!"
+          [stroke]="deploymentsDistributionChart.stroke!"
+          [responsive]="deploymentsDistributionChart.responsive!"
+          [title]="deploymentsDistributionChart.title!"
+        ></apx-chart>
+      </div>
+    </div>
+
+    <!-- Project details -->
+    <div class="details-grid" *ngIf="projectDashboard as project">
+      <div class="details-card">
+        <div class="card-heading">
+          <span class="card-icon kpi-blue">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+            </svg>
+          </span>
+          <h3>Détails du projet</h3>
+        </div>
+
+        <div class="details-list">
+          <div><span>Projet :</span> <strong>{{ project.projectName }}</strong></div>
+          <div><span>Type de données :</span> <strong>{{ project.dataType }}</strong></div>
+          <div><span>Type de projet :</span> <strong>{{ project.projectType }}</strong></div>
+          <div><span>Mode runtime :</span> <strong>{{ project.runtimeMode }}</strong></div>
+          <div><span>Créé le :</span> <strong>{{ formatDate(project.createdAt) }}</strong></div>
+        </div>
+      </div>
+
+      <div class="details-card">
+        <div class="card-heading">
+          <span class="card-icon kpi-green">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+          </span>
+          <h3>Production & qualité</h3>
+        </div>
+
+        <div class="details-list">
+          <div>
+            <span>Version production :</span>
+            <strong>{{ project.currentProductionVersion || '-' }}</strong>
+          </div>
+          <div>
+            <span>Modèle production :</span>
+            <strong>{{ project.currentProductionModel || '-' }}</strong>
+          </div>
+          <div>
+            <span>Best global score :</span>
+            <strong>{{ project.bestGlobalScore ?? '-' }}</strong>
+          </div>
+          <div>
+            <span>Prediction latency :</span>
+            <strong>{{ project.averagePredictionLatencyMs ?? 0 }} ms</strong>
+          </div>
+          <div>
+            <span>Prediction error rate :</span>
+            <strong>{{ project.predictionErrorRatePercent ?? 0 }}%</strong>
+          </div>
+          <div>
+            <span>Data drift :</span>
+            <strong>{{ project.dataDriftScorePercent ?? 0 }}%</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="details-card">
+        <div class="card-heading">
+          <span class="card-icon kpi-purple">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+          </span>
+          <h3>Réentraînement intelligent</h3>
+        </div>
+
+        <div class="details-list">
+          <div>
+            <span>Activé :</span>
+            <strong>{{ project.retrainingEnabled ? 'Oui' : 'Non' }}</strong>
+          </div>
+          <div>
+            <span>Stratégie :</span>
+            <strong>{{ project.retrainingStrategy || '-' }}</strong>
+          </div>
+          <div>
+            <span>Dernier retraining :</span>
+            <strong>{{ formatDate(project.lastRetrainingAt) }}</strong>
+          </div>
+          <div>
+            <span>Prochain retraining :</span>
+            <strong>{{ formatDate(project.nextRetrainingAt) }}</strong>
+          </div>
+          <div>
+            <span>Dernier monitoring :</span>
+            <strong>{{ formatDate(project.lastMonitoringCheckAt) }}</strong>
+          </div>
+          <div>
+            <span>Dernière décision :</span>
+            <strong>{{ project.lastDecisionReason || '-' }}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="details-card">
+        <div class="card-heading">
+          <span class="card-icon kpi-yellow">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+            </svg>
+          </span>
+          <h3>Surveillance</h3>
+        </div>
+
+        <div class="details-list">
+          <div>
+            <span>Failure monitoring :</span>
+            <strong>{{ project.failureMonitoringEnabled ? 'Activé' : 'Désactivé' }}</strong>
+          </div>
+          <div>
+            <span>Performance monitoring :</span>
+            <strong>{{ project.performanceMonitoringEnabled ? 'Activé' : 'Désactivé' }}</strong>
+          </div>
+          <div>
+            <span>Data drift monitoring :</span>
+            <strong>{{ project.dataDriftMonitoringEnabled ? 'Activé' : 'Désactivé' }}</strong>
+          </div>
+          <div>
+            <span>Recent predictions :</span>
+            <strong>{{ project.recentPredictionCount }}</strong>
+          </div>
+          <div>
+            <span>Prediction success rate :</span>
+            <strong>{{ project.predictionSuccessRate ?? 0 }}%</strong>
+          </div>
+          <div>
+            <span>Dernière prédiction :</span>
+            <strong>{{ formatDate(project.lastPredictionAt) }}</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- alerts & activity -->
+    <div class="bottom-grid" *ngIf="projectDashboard as project">
+      <div class="table-card">
+        <div class="card-heading">
+          <span class="card-icon kpi-red">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+          </span>
+          <h3>Alertes</h3>
+          <span *ngIf="project.alerts?.length" class="heading-count alert-count">
+            {{ project.alerts.length }}
+          </span>
+        </div>
+
+        <div *ngIf="!project.alerts?.length" class="empty-state">
+          <span class="empty-icon">✓</span>
+          <span>Aucune alerte active pour le moment.</span>
+        </div>
+
+        <div *ngFor="let alert of project.alerts" class="row-item">
+          <div class="row-icon-box" [ngClass]="severityClass(alert.severity)">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+          </div>
+          <div class="row-body">
+            <div class="row-title">{{ alert.title }}</div>
+            <div class="row-subtitle">{{ alert.message }}</div>
+          </div>
+          <div class="row-meta">
+            <span [class]="badgeClass(alert.severity)">
+              {{ alert.severity }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="card-heading">
+          <span class="card-icon kpi-indigo">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </span>
+          <h3>Activité récente</h3>
+        </div>
+
+        <div *ngIf="!project.activities?.length" class="empty-state">
+          <span class="empty-icon">↗</span>
+          <span>Aucune activité récente.</span>
+        </div>
+
+        <div *ngFor="let activity of project.activities" class="row-item">
+          <div class="row-icon-box" [ngClass]="activityStatusClass(activity.status)">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+            </svg>
+          </div>
+          <div class="row-body">
+            <div class="row-title">{{ activity.title }}</div>
+            <div class="row-subtitle">{{ activity.description }}</div>
+          </div>
+          <div class="row-meta">
+            <span [class]="badgeClass(activity.status)">
+              {{ activity.status }}
+            </span>
+            <small>{{ formatDate(activity.date) }}</small>
+          </div>
+        </div>
+      </div>
+    </div>
+  </ng-container>
+</div>

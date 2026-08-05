@@ -1,6 +1,6 @@
 <div class="space-y-6">
   <!-- Header -->
-  <div class="dashboard-panel">
+  <div class="dashboard-panel dashboard-header">
     <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
       <div>
         <span class="inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
@@ -20,24 +20,33 @@
         <button
           type="button"
           (click)="loadMonitoringSummary()"
-          class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          class="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 hover:shadow-md"
         >
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
           Actualiser
         </button>
 
         <button
           type="button"
           (click)="openGrafana()"
-          class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+          class="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.05]"
         >
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+          </svg>
           Ouvrir Grafana
         </button>
 
         <button
           type="button"
           (click)="openPrometheus()"
-          class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+          class="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.05]"
         >
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9z"/>
+          </svg>
           Targets Prometheus
         </button>
       </div>
@@ -47,8 +56,9 @@
   <!-- Loading -->
   <div
     *ngIf="loading"
-    class="dashboard-panel text-sm text-gray-500 dark:text-gray-400"
+    class="dashboard-panel flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400"
   >
+    <span class="mlops-spinner text-brand-600 dark:text-brand-400"></span>
     Chargement des métriques de monitoring...
   </div>
 
@@ -61,6 +71,7 @@
   </div>
 
   <ng-container *ngIf="summary && !loading">
+    <div class="mlops-fade-in space-y-6">
     <!-- Main gauges -->
     <div class="grid grid-cols-1 gap-5 xl:grid-cols-4">
       <!-- Global Health -->
@@ -166,73 +177,129 @@
     <!-- KPI Cards -->
     <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
       <div class="metric-card">
-        <p class="metric-label">Total Deployments</p>
-        <h3 class="metric-value">{{ summary.totalDeployments }}</h3>
-        <p class="metric-help">Déploiements enregistrés.</p>
+        <div class="metric-icon kpi-purple">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Total Deployments</p>
+          <h3 class="metric-value">{{ summary.totalDeployments }}</h3>
+          <p class="metric-help">Déploiements enregistrés.</p>
+        </div>
       </div>
 
       <div class="metric-card">
-        <p class="metric-label">Active Production Models</p>
-        <h3 class="metric-value">{{ summary.activeProductionModels }}</h3>
-        <p class="metric-help">Modèles actifs en production.</p>
+        <div class="metric-icon kpi-blue">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Active Production Models</p>
+          <h3 class="metric-value">{{ summary.activeProductionModels }}</h3>
+          <p class="metric-help">Modèles actifs en production.</p>
+        </div>
       </div>
 
       <div class="metric-card">
-        <p class="metric-label">Completed Runs</p>
-        <h3 class="metric-value text-green-600 dark:text-green-400">
-          {{ summary.completedRuns }}
-        </h3>
-        <p class="metric-help">Runs terminés avec succès.</p>
+        <div class="metric-icon kpi-green">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Completed Runs</p>
+          <h3 class="metric-value text-green-600 dark:text-green-400">
+            {{ summary.completedRuns }}
+          </h3>
+          <p class="metric-help">Runs terminés avec succès.</p>
+        </div>
       </div>
 
       <div class="metric-card">
-        <p class="metric-label">Failed Runs</p>
-        <h3 class="metric-value text-red-600 dark:text-red-400">
-          {{ summary.failedRuns }}
-        </h3>
-        <p class="metric-help">Runs échoués à analyser.</p>
+        <div class="metric-icon kpi-red">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Failed Runs</p>
+          <h3 class="metric-value text-red-600 dark:text-red-400">
+            {{ summary.failedRuns }}
+          </h3>
+          <p class="metric-help">Runs échoués à analyser.</p>
+        </div>
       </div>
     </div>
 
     <!-- Second KPI Cards -->
     <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
       <div class="metric-card">
-        <p class="metric-label">Successful Deployments</p>
-        <h3 class="metric-value text-green-600 dark:text-green-400">
-          {{ summary.successfulDeployments }}
-        </h3>
-        <p class="metric-help">Déploiements terminés avec succès.</p>
+        <div class="metric-icon kpi-teal">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Successful Deployments</p>
+          <h3 class="metric-value text-green-600 dark:text-green-400">
+            {{ summary.successfulDeployments }}
+          </h3>
+          <p class="metric-help">Déploiements terminés avec succès.</p>
+        </div>
       </div>
 
       <div class="metric-card">
-        <p class="metric-label">Failed Deployments</p>
-        <h3 class="metric-value text-red-600 dark:text-red-400">
-          {{ summary.failedDeployments }}
-        </h3>
-        <p class="metric-help">Déploiements échoués.</p>
+        <div class="metric-icon kpi-red">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Failed Deployments</p>
+          <h3 class="metric-value text-red-600 dark:text-red-400">
+            {{ summary.failedDeployments }}
+          </h3>
+          <p class="metric-help">Déploiements échoués.</p>
+        </div>
       </div>
 
       <div class="metric-card">
-        <p class="metric-label">Running Runs</p>
-        <h3 class="metric-value text-blue-600 dark:text-blue-400">
-          {{ summary.runningRuns }}
-        </h3>
-        <p class="metric-help">Runs actuellement en cours.</p>
+        <div class="metric-icon kpi-blue">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Running Runs</p>
+          <h3 class="metric-value text-brand-600 dark:text-brand-400">
+            {{ summary.runningRuns }}
+          </h3>
+          <p class="metric-help">Runs actuellement en cours.</p>
+        </div>
       </div>
 
       <div class="metric-card">
-        <p class="metric-label">Average Backend Latency</p>
-        <h3
-          class="metric-value"
-          [ngClass]="{
-            'text-green-600 dark:text-green-400': getLatencyStatus() === 'GOOD',
-            'text-yellow-600 dark:text-yellow-400': getLatencyStatus() === 'WARNING',
-            'text-red-600 dark:text-red-400': getLatencyStatus() === 'CRITICAL'
-          }"
-        >
-          {{ summary.averageBackendLatencyMs }} ms
-        </h3>
-        <p class="metric-help">Latence moyenne exposée par Prometheus.</p>
+        <div class="metric-icon kpi-yellow">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Average Backend Latency</p>
+          <h3
+            class="metric-value"
+            [ngClass]="{
+              'text-green-600 dark:text-green-400': getLatencyStatus() === 'GOOD',
+              'text-yellow-600 dark:text-yellow-400': getLatencyStatus() === 'WARNING',
+              'text-red-600 dark:text-red-400': getLatencyStatus() === 'CRITICAL'
+            }"
+          >
+            {{ summary.averageBackendLatencyMs }} ms
+          </h3>
+          <p class="metric-help">Latence moyenne exposée par Prometheus.</p>
+        </div>
       </div>
     </div>
 
@@ -287,12 +354,12 @@
             <div>
               <div class="mb-2 flex justify-between text-sm">
                 <span class="text-gray-600 dark:text-gray-400">Running</span>
-                <strong class="text-blue-600 dark:text-blue-400">
+                <strong class="text-brand-600 dark:text-brand-400">
                   {{ summary.runningRuns }} / {{ getRunRunningPercent() }}%
                 </strong>
               </div>
               <div class="progress-track">
-                <div class="progress-fill bg-blue-500" [style.width.%]="getRunRunningPercent()"></div>
+                <div class="progress-fill bg-brand-500" [style.width.%]="getRunRunningPercent()"></div>
               </div>
             </div>
           </div>
@@ -531,12 +598,12 @@
       <div>
         <div class="mb-2 flex justify-between text-sm">
           <span class="text-gray-600 dark:text-gray-400">Standard Runtime</span>
-          <strong class="text-blue-600 dark:text-blue-400">
+          <strong class="text-brand-600 dark:text-brand-400">
             {{ summary.standardRunsCount }} / {{ getStandardRunsPercent() }}%
           </strong>
         </div>
         <div class="progress-track">
-          <div class="progress-fill bg-blue-500" [style.width.%]="getStandardRunsPercent()"></div>
+          <div class="progress-fill bg-brand-500" [style.width.%]="getStandardRunsPercent()"></div>
         </div>
       </div>
 
@@ -562,7 +629,7 @@
     <div class="mt-6 space-y-5">
       <div class="runtime-metric-box">
         <p class="runtime-label">Nombre de runs</p>
-        <h3 class="runtime-value text-blue-600 dark:text-blue-400">
+        <h3 class="runtime-value text-brand-600 dark:text-brand-400">
           {{ summary.standardRunsCount }}
         </h3>
       </div>
@@ -616,37 +683,59 @@
     <!-- Kubernetes health cards -->
     <div class="grid grid-cols-1 gap-5 md:grid-cols-3">
       <div class="metric-card">
-        <p class="metric-label">Unavailable Model Deployments</p>
-        <h3
-          class="metric-value"
-          [ngClass]="summary.unavailableModelDeployments > 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'"
-        >
-          {{ summary.unavailableModelDeployments }}
-        </h3>
-        <p class="metric-help">
-          Déploiements Kubernetes avec 0 replica disponible.
-        </p>
+        <div class="metric-icon kpi-red">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 010 12.728m-12.728 0a9 9 0 010-12.728m9.9 2.828a5 5 0 010 7.07M7.757 15.535a5 5 0 010-7.07m3.03 2.829a2 2 0 010 2.828"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Unavailable Model Deployments</p>
+          <h3
+            class="metric-value"
+            [ngClass]="summary.unavailableModelDeployments > 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'"
+          >
+            {{ summary.unavailableModelDeployments }}
+          </h3>
+          <p class="metric-help">
+            Déploiements Kubernetes avec 0 replica disponible.
+          </p>
+        </div>
       </div>
 
       <div class="metric-card">
-        <p class="metric-label">Running Runs</p>
-        <h3 class="metric-value text-blue-600 dark:text-blue-400">
-          {{ summary.runningRuns }}
-        </h3>
-        <p class="metric-help">
-          Runs actuellement marqués en cours.
-        </p>
+        <div class="metric-icon kpi-blue">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Running Runs</p>
+          <h3 class="metric-value text-brand-600 dark:text-brand-400">
+            {{ summary.runningRuns }}
+          </h3>
+          <p class="metric-help">
+            Runs actuellement marqués en cours.
+          </p>
+        </div>
       </div>
 
       <div class="metric-card">
-        <p class="metric-label">Deployments In Progress</p>
-        <h3 class="metric-value text-yellow-600 dark:text-yellow-400">
-          {{ summary.deploymentsInProgress }}
-        </h3>
-        <p class="metric-help">
-          Déploiements encore en cours.
-        </p>
+        <div class="metric-icon kpi-yellow">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Deployments In Progress</p>
+          <h3 class="metric-value text-yellow-600 dark:text-yellow-400">
+            {{ summary.deploymentsInProgress }}
+          </h3>
+          <p class="metric-help">
+            Déploiements encore en cours.
+          </p>
+        </div>
       </div>
+    </div>
     </div>
   </ng-container>
 </div>

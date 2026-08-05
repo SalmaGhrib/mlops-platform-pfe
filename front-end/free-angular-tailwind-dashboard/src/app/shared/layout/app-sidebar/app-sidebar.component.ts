@@ -1,27 +1,32 @@
 import { CommonModule } from '@angular/common';
 import {
+  ChangeDetectorRef,
   Component,
   ElementRef,
+  OnDestroy,
+  OnInit,
   QueryList,
   ViewChildren,
-  ChangeDetectorRef,
-  OnInit,
-  OnDestroy,
 } from '@angular/core';
 import { NavigationEnd, Router, RouterModule } from '@angular/router';
 import { combineLatest, Subscription } from 'rxjs';
 
-import { SidebarService } from '../../services/sidebar.service';
-import { SafeHtmlPipe } from '../../pipe/safe-html.pipe';
-import { SidebarWidgetComponent } from './app-sidebar-widget.component';
 import { AuthService } from '../../../core/services/auth.service';
+import { SafeHtmlPipe } from '../../pipe/safe-html.pipe';
+import { SidebarService } from '../../services/sidebar.service';
+import { SidebarWidgetComponent } from './app-sidebar-widget.component';
 
 type NavItem = {
   name: string;
   icon: string;
   path?: string;
   new?: boolean;
-  subItems?: { name: string; path: string; pro?: boolean; new?: boolean }[];
+  subItems?: {
+    name: string;
+    path: string;
+    pro?: boolean;
+    new?: boolean;
+  }[];
 };
 
 type NavGroup = {
@@ -32,14 +37,20 @@ type NavGroup = {
 @Component({
   selector: 'app-sidebar',
   standalone: true,
-  imports: [CommonModule, RouterModule, SafeHtmlPipe, SidebarWidgetComponent],
+  imports: [
+    CommonModule,
+    RouterModule,
+    SafeHtmlPipe,
+    SidebarWidgetComponent,
+  ],
   templateUrl: './app-sidebar.component.html',
 })
 export class AppSidebarComponent implements OnInit, OnDestroy {
-  openSubmenu: string | null | number = null;
-  subMenuHeights: { [key: string]: number } = {};
+  openSubmenu: string | null = null;
+  subMenuHeights: Record<string, number> = {};
 
-  @ViewChildren('subMenu') subMenuRefs!: QueryList<ElementRef>;
+  @ViewChildren('subMenu')
+  subMenuRefs!: QueryList<ElementRef<HTMLElement>>;
 
   readonly isExpanded$;
   readonly isMobileOpen$;
@@ -47,13 +58,13 @@ export class AppSidebarComponent implements OnInit, OnDestroy {
 
   isAdmin = false;
 
-  private subscription: Subscription = new Subscription();
+  private readonly subscription = new Subscription();
 
   constructor(
     public sidebarService: SidebarService,
-    private router: Router,
-    private cdr: ChangeDetectorRef,
-    private authService: AuthService
+    private readonly router: Router,
+    private readonly cdr: ChangeDetectorRef,
+    private readonly authService: AuthService
   ) {
     this.isExpanded$ = this.sidebarService.isExpanded$;
     this.isMobileOpen$ = this.sidebarService.isMobileOpen$;
@@ -61,7 +72,30 @@ export class AppSidebarComponent implements OnInit, OnDestroy {
   }
 
   get navGroups(): NavGroup[] {
-    const groups: NavGroup[] = [
+    const accountItems: NavItem[] = [
+      {
+        icon: this.profileIcon,
+        name: 'My Profile',
+        path: '/profile',
+      },
+    ];
+
+    if (this.isAdmin) {
+      accountItems.push(
+        {
+          icon: this.usersIcon,
+          name: 'Gestion des Utilisateurs',
+          path: '/users-management',
+        },
+        {
+          icon: this.monitoringIcon,
+          name: 'Monitoring Admin',
+          path: '/admin-monitoring',
+        }
+      );
+    }
+
+    return [
       {
         title: '',
         items: [
@@ -91,16 +125,6 @@ export class AppSidebarComponent implements OnInit, OnDestroy {
         title: 'MLOPS',
         items: [
           {
-            icon: this.pipelineIcon,
-            name: 'Pipeline Runs',
-            path: '/pipeline-runs',
-          },
-          {
-            icon: this.experimentIcon,
-            name: 'Experiments',
-            path: '/experiments',
-          },
-          {
             icon: this.registryIcon,
             name: 'Model Registry',
             path: '/model-registry',
@@ -120,36 +144,18 @@ export class AppSidebarComponent implements OnInit, OnDestroy {
             name: 'Prediction Test',
             path: '/prediction-test',
           },
+          {
+            icon: this.monitoringIcon,
+            name: 'My Monitoring',
+            path: '/my-monitoring',
+          },
         ],
       },
       {
         title: 'ACCOUNT',
-        items: [
-          {
-            icon: this.profileIcon,
-            name: 'My Profile',
-            path: '/profile',
-          },
-        ],
+        items: accountItems,
       },
     ];
-
-    if (this.isAdmin) {
-      groups[3].items.push(
-        {
-          icon: this.usersIcon,
-          name: 'Gestion des Utilisateurs',
-          path: '/users-management',
-        },
-        {
-          icon: this.monitoringIcon,
-          name: 'Monitoring',
-          path: '/admin-monitoring',
-        }
-      );
-    }
-
-    return groups;
   }
 
   ngOnInit(): void {
@@ -165,7 +171,7 @@ export class AppSidebarComponent implements OnInit, OnDestroy {
       this.router.events.subscribe((event) => {
         if (event instanceof NavigationEnd) {
           this.refreshRole();
-          this.setActiveMenuFromRoute(this.router.url);
+          this.setActiveMenuFromRoute(event.urlAfterRedirects);
         }
       })
     );
@@ -194,11 +200,13 @@ export class AppSidebarComponent implements OnInit, OnDestroy {
       return false;
     }
 
+    const currentUrl = this.router.url.split('?')[0].split('#')[0];
+
     if (path === '/') {
-      return this.router.url === '/';
+      return currentUrl === '/';
     }
 
-    return this.router.url === path || this.router.url.startsWith(path + '/');
+    return currentUrl === path || currentUrl.startsWith(`${path}/`);
   }
 
   toggleSubmenu(groupIndex: number, itemIndex: number): void {
@@ -207,27 +215,29 @@ export class AppSidebarComponent implements OnInit, OnDestroy {
     if (this.openSubmenu === key) {
       this.openSubmenu = null;
       this.subMenuHeights[key] = 0;
-    } else {
-      this.openSubmenu = key;
-
-      setTimeout(() => {
-        const el = document.getElementById(key);
-        if (el) {
-          this.subMenuHeights[key] = el.scrollHeight;
-          this.cdr.detectChanges();
-        }
-      });
+      return;
     }
+
+    this.openSubmenu = key;
+
+    setTimeout(() => {
+      const element = document.getElementById(key);
+
+      if (element) {
+        this.subMenuHeights[key] = element.scrollHeight;
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   onSidebarMouseEnter(): void {
-    this.isExpanded$
-      .subscribe((expanded) => {
-        if (!expanded) {
-          this.sidebarService.setHovered(true);
-        }
-      })
-      .unsubscribe();
+    const subscription = this.isExpanded$.subscribe((expanded) => {
+      if (!expanded) {
+        this.sidebarService.setHovered(true);
+      }
+    });
+
+    subscription.unsubscribe();
   }
 
   onSubmenuClick(): void {
@@ -242,26 +252,33 @@ export class AppSidebarComponent implements OnInit, OnDestroy {
   }
 
   private setActiveMenuFromRoute(currentUrl: string): void {
+    const cleanUrl = currentUrl.split('?')[0].split('#')[0];
+
     this.navGroups.forEach((group, groupIndex) => {
       group.items.forEach((nav, itemIndex) => {
-        if (nav.subItems) {
-          const hasActiveSubItem = nav.subItems.some((subItem) =>
-            currentUrl.startsWith(subItem.path)
-          );
-
-          if (hasActiveSubItem) {
-            this.openSubmenu = `${groupIndex}-${itemIndex}`;
-
-            setTimeout(() => {
-              const el = document.getElementById(`${groupIndex}-${itemIndex}`);
-              if (el) {
-                this.subMenuHeights[`${groupIndex}-${itemIndex}`] =
-                  el.scrollHeight;
-                this.cdr.detectChanges();
-              }
-            });
-          }
+        if (!nav.subItems?.length) {
+          return;
         }
+
+        const hasActiveSubItem = nav.subItems.some((subItem) =>
+          cleanUrl.startsWith(subItem.path)
+        );
+
+        if (!hasActiveSubItem) {
+          return;
+        }
+
+        const key = `${groupIndex}-${itemIndex}`;
+        this.openSubmenu = key;
+
+        setTimeout(() => {
+          const element = document.getElementById(key);
+
+          if (element) {
+            this.subMenuHeights[key] = element.scrollHeight;
+            this.cdr.detectChanges();
+          }
+        });
       });
     });
   }
@@ -281,18 +298,6 @@ export class AppSidebarComponent implements OnInit, OnDestroy {
   private uploadIcon = `
     <svg width="1em" height="1em" viewBox="0 0 24 24" fill="none">
       <path d="M12 3L17 8H14V14H10V8H7L12 3ZM5 18H19V20H5V18Z" fill="currentColor"/>
-    </svg>
-  `;
-
-  private pipelineIcon = `
-    <svg width="1em" height="1em" viewBox="0 0 24 24" fill="none">
-      <path d="M4 6H20V8H4V6ZM4 11H20V13H4V11ZM4 16H20V18H4V16Z" fill="currentColor"/>
-    </svg>
-  `;
-
-  private experimentIcon = `
-    <svg width="1em" height="1em" viewBox="0 0 24 24" fill="none">
-      <path d="M7 3H17V5H16V10L20 18C20.7 19.3 19.8 21 18.3 21H5.7C4.2 21 3.3 19.3 4 18L8 10V5H7V3ZM10 5V10.5L6 19H18L14 10.5V5H10Z" fill="currentColor"/>
     </svg>
   `;
 

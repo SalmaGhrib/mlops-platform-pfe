@@ -15,5 +15,13 @@ import { ThemeToggleTwoComponent } from '../../components/common/theme-toggle-tw
   styles: ``
 })
 export class AuthPageLayoutComponent {
-
+  readonly workflowLabels: string[] = [
+    'Créer',
+    'Entraîner',
+    'Comparer',
+    'Enregistrer',
+    'Déployer',
+    'Tester',
+    'Monitorer',
+  ];
 }

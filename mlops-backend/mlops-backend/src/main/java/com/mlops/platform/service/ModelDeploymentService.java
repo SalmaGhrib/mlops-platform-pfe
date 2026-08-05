@@ -11,6 +11,8 @@ import com.mlops.platform.entity.ModelDeploymentShare;
 import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.entity.User;
+import com.mlops.platform.exception.GatewayException;
+import org.springframework.http.HttpStatus;
 import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.MlProjectRepository;
 import com.mlops.platform.repository.ModelDeploymentRepository;
@@ -18,7 +20,10 @@ import com.mlops.platform.repository.ModelDeploymentShareRepository;
 import com.mlops.platform.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import java.time.LocalDateTime;
 import java.security.SecureRandom;
 import java.nio.file.Files;
@@ -102,6 +107,7 @@ public class ModelDeploymentService {
     private final ModelArtifactStandardizerService modelArtifactStandardizerService;
     private final SecureRandom secureRandom = new SecureRandom();
     private final NotificationService notificationService;
+    private final PlatformTransactionManager transactionManager;
 
     @Value("${custom.predict.api.url:http://localhost:8000}")
     private String predictApiUrl;
@@ -128,7 +134,8 @@ public class ModelDeploymentService {
             MlflowTrackingClientService mlflowTrackingClientService,
             MlProjectRepository mlProjectRepository,
             ModelArtifactStandardizerService modelArtifactStandardizerService,
-            NotificationService notificationService
+            NotificationService notificationService,
+            PlatformTransactionManager transactionManager
     ) {
         this.modelDeploymentRepository = modelDeploymentRepository;
         this.mlExperimentRepository = mlExperimentRepository;
@@ -140,6 +147,7 @@ public class ModelDeploymentService {
         this.mlProjectRepository = mlProjectRepository;
         this.modelArtifactStandardizerService = modelArtifactStandardizerService;
          this.notificationService = notificationService;
+        this.transactionManager = transactionManager;
     }
 
 @Transactional
@@ -1168,7 +1176,6 @@ private String appendDeploymentMessage(String oldMessage, String addition) {
 }
 
 
-@Transactional
 public void reconcileDeploymentsWithKubernetes() {
     List<ModelDeployment> deployments = modelDeploymentRepository.findAll();
 
@@ -1176,20 +1183,41 @@ public void reconcileDeploymentsWithKubernetes() {
         return;
     }
 
+    /*
+     * Phase B : les vérifications Kubernetes se font HORS transaction
+     * (une par déploiement, avec cache local du résultat).
+     */
+    Map<Long, Boolean> readyByDeploymentId = new LinkedHashMap<>();
+
     for (ModelDeployment deployment : deployments) {
         if (deployment == null || deployment.getId() == null) {
             continue;
         }
 
-        /*
-         * Candidate DEPLOYING devenue prête : switch blue/green ici.
-         */
-        if (DeploymentStatus.DEPLOYING.equals(deployment.getDeploymentStatus())
-                || DeploymentStatus.OUT_OF_SYNC.equals(deployment.getDeploymentStatus())) {
-            boolean readyInKubernetes = isDeploymentReallyReadyInKubernetes(deployment);
+        readyByDeploymentId.put(
+                deployment.getId(),
+                isDeploymentReallyReadyInKubernetes(deployment)
+        );
+    }
+
+    /*
+     * Phase C : chaque écriture est appliquée dans sa propre transaction
+     * courte REQUIRES_NEW. Un déploiement ne bloque plus jamais les autres.
+     */
+    for (ModelDeployment deployment : deployments) {
+        if (deployment == null || deployment.getId() == null) {
+            continue;
+        }
+
+        boolean readyInKubernetes =
+                Boolean.TRUE.equals(readyByDeploymentId.get(deployment.getId()));
+        DeploymentStatus status = deployment.getDeploymentStatus();
+
+        if (DeploymentStatus.DEPLOYING.equals(status)
+                || DeploymentStatus.OUT_OF_SYNC.equals(status)) {
 
             if (!readyInKubernetes) {
-                if (DeploymentStatus.DEPLOYING.equals(deployment.getDeploymentStatus())) {
+                if (DeploymentStatus.DEPLOYING.equals(status)) {
                     System.out.println("[DEPLOY_SYNC] Candidate deployment still not ready. "
                             + "model=" + deployment.getRegisteredModelName()
                             + ", version=" + deployment.getModelVersion()
@@ -1197,6 +1225,36 @@ public void reconcileDeploymentsWithKubernetes() {
                 }
                 continue;
             }
+
+            applyPromoteReadyInNewTransaction(deployment.getId());
+            continue;
+        }
+
+        if (DeploymentStatus.DEPLOYED.equals(status)
+                && Boolean.TRUE.equals(deployment.getActive())) {
+
+            if (!readyInKubernetes) {
+                applyMarkOutOfSyncInNewTransaction(
+                        deployment.getId(),
+                        "MySQL marked this model as DEPLOYED, but Kubernetes Deployment/Service are missing or not ready."
+                );
+            }
+        }
+    }
+}
+
+private void applyPromoteReadyInNewTransaction(Long deploymentId) {
+    TransactionTemplate template = new TransactionTemplate(transactionManager);
+    template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+    template.setTimeout(60);
+
+    try {
+        template.executeWithoutResult(status -> {
+            ModelDeployment deployment = modelDeploymentRepository.findById(deploymentId)
+                    .orElseThrow(() -> new RuntimeException(
+                            "Deployment not found for promotion. deploymentId=" + deploymentId
+                    ));
 
             ModelDeployment deployed = promoteReadyDeployment(
                     deployment,
@@ -1208,34 +1266,40 @@ public void reconcileDeploymentsWithKubernetes() {
                     + "model=" + deployed.getRegisteredModelName()
                     + ", version=" + deployed.getModelVersion()
                     + ", deploymentId=" + deployed.getId());
+        });
+    } catch (Exception e) {
+        System.out.println("[DEPLOY_SYNC] Promotion failed. deploymentId=" + deploymentId
+                + ", reason=" + e.getMessage());
+    }
+}
 
-            continue;
-        }
+private void applyMarkOutOfSyncInNewTransaction(Long deploymentId, String message) {
+    TransactionTemplate template = new TransactionTemplate(transactionManager);
+    template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+    template.setTimeout(30);
 
-        /*
-         * Version active marquée DEPLOYED mais plus prête dans Kubernetes.
-         */
-        if (DeploymentStatus.DEPLOYED.equals(deployment.getDeploymentStatus())
-                && Boolean.TRUE.equals(deployment.getActive())) {
+    try {
+        template.executeWithoutResult(status -> {
+            ModelDeployment deployment = modelDeploymentRepository.findById(deploymentId)
+                    .orElseThrow(() -> new RuntimeException(
+                            "Deployment not found for OUT_OF_SYNC. deploymentId=" + deploymentId
+                    ));
 
-            boolean readyInKubernetes = isDeploymentReallyReadyInKubernetes(deployment);
+            markDeploymentOutOfSync(deployment, message);
 
-            if (!readyInKubernetes) {
-                markDeploymentOutOfSync(
-                        deployment,
-                        "MySQL marked this model as DEPLOYED, but Kubernetes Deployment/Service are missing or not ready."
-                );
-
-                System.out.println("[DEPLOY_SYNC] OUT_OF_SYNC: Kubernetes resources missing for "
-                        + deployment.getRegisteredModelName()
-                        + " v"
-                        + deployment.getModelVersion()
-                        + " deployment="
-                        + deployment.getDeploymentName()
-                        + " service="
-                        + deployment.getServiceName());
-            }
-        }
+            System.out.println("[DEPLOY_SYNC] OUT_OF_SYNC: Kubernetes resources missing for "
+                    + deployment.getRegisteredModelName()
+                    + " v"
+                    + deployment.getModelVersion()
+                    + " deployment="
+                    + deployment.getDeploymentName()
+                    + " service="
+                    + deployment.getServiceName());
+        });
+    } catch (Exception e) {
+        System.out.println("[DEPLOY_SYNC] OUT_OF_SYNC failed. deploymentId=" + deploymentId
+                + ", reason=" + e.getMessage());
     }
 }
 
@@ -2203,6 +2267,13 @@ private boolean isCustomDockerRuntimeMode(String runtimeMode) {
                 .orElseThrow(() -> new RuntimeException("Déploiement introuvable avec id = " + deploymentId));
     }
 
+    /*
+     * Variante publique utilisée par le SMART MODEL GATEWAY.
+     */
+    public ModelDeployment findDeploymentOrThrowPublic(Long deploymentId) {
+        return findDeploymentOrThrow(deploymentId);
+    }
+
     private String sanitizeName(String value) {
         if (value == null || value.isBlank()) {
             return "unknown";
@@ -2847,6 +2918,64 @@ public List<ModelDeploymentResponse> getVisibleDeploymentsForUser(User currentUs
         return project.getOwner() != null
                 && project.getOwner().getId() != null
                 && project.getOwner().getId().equals(currentUser.getId());
+    }
+
+    /*
+     * Vérifie que l'utilisateur est le propriétaire du déploiement.
+     * Utilisé par le SMART MODEL GATEWAY pour les opérations owner-only.
+     */
+    public boolean isDeploymentOwnedByUser(Long deploymentId, User currentUser) {
+        ModelDeployment deployment = findDeploymentOrThrow(deploymentId);
+        return isDeploymentOwner(deployment, currentUser);
+    }
+
+    /*
+     * Résout le déploiement Kubernetes actif et prêt pour une clé SMART.
+     *
+     * Règles :
+     * - PRIVATE : accès externe refusé (403).
+     * - SHARED / PUBLIC_API : une clé API valide suffit à l'appel externe.
+     *   Le partage reste une notion interne à la plateforme (X-USER-EMAIL supprimé).
+     *
+     * Réutilise la logique existante de résolution du déploiement actif.
+     */
+    public ModelDeployment findGatewayDeploymentForExternalApiOrThrow(
+            Long deploymentId
+    ) {
+        ModelDeployment deployment = findDeploymentOrThrow(deploymentId);
+
+        DeploymentVisibility visibility = deployment.getVisibility();
+
+        if (visibility == null) {
+            visibility = DeploymentVisibility.PRIVATE;
+        }
+
+        if (DeploymentVisibility.PRIVATE.equals(visibility)) {
+            throw new GatewayException(
+                    HttpStatus.FORBIDDEN,
+                    "EXTERNAL_ACCESS_DISABLED",
+                    "Ce modèle est privé et ne peut pas être utilisé via l'API externe."
+            );
+        }
+
+        if (!hasText(deployment.getRegisteredModelName())) {
+            throw new GatewayException(
+                    HttpStatus.NOT_FOUND,
+                    "MODEL_NOT_FOUND",
+                    "Modèle introuvable pour cette clé API."
+            );
+        }
+
+        ModelDeployment activeDeployment = findKubernetesReadyActiveDeployment(
+                        deployment.getRegisteredModelName().trim()
+                )
+                .orElseThrow(() -> new GatewayException(
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "MODEL_NOT_DEPLOYED",
+                        "Aucun déploiement Kubernetes actif et prêt trouvé pour ce modèle."
+                ));
+
+        return activeDeployment;
     }
 
     private boolean isDeploymentSharedWithUser(ModelDeployment deployment, User currentUser) {

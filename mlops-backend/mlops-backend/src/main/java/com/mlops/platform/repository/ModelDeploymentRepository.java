@@ -4,6 +4,7 @@ import com.mlops.platform.entity.DeploymentStatus;
 import com.mlops.platform.entity.DeploymentVisibility;
 import com.mlops.platform.entity.ModelDeployment;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -11,6 +12,19 @@ import java.util.Optional;
 
 @Repository
 public interface ModelDeploymentRepository extends JpaRepository<ModelDeployment, Long> {
+
+    /**
+     * Liste des registered model names référencés par les déploiements
+     * (Phase A du reconcile de cohérence, sans charger toutes les entités).
+     */
+    @Query("""
+        SELECT DISTINCT d.registeredModelName
+        FROM ModelDeployment d
+        WHERE d.registeredModelName IS NOT NULL
+          AND d.registeredModelName <> ''
+        """)
+    List<String> findDistinctRegisteredModelNames();
+
 
     /*
      * Anciennes méthodes conservées pour ne pas casser ton code existant.

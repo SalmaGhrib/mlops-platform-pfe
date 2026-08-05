@@ -1,4 +1,4 @@
-<div class="space-y-6">
+<div class="space-y-6 mlops-fade-in">
   <div class="overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-white/[0.03]">
 
     <div class="border-b border-gray-100 bg-gradient-to-r from-blue-50 via-white to-indigo-50 px-6 py-6 dark:border-gray-800 dark:from-blue-950/20 dark:via-transparent dark:to-indigo-950/20">
@@ -33,25 +33,38 @@
 
     <div class="p-6">
       @if (errorMessage) {
-        <div class="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
-          {{ errorMessage }}
+        <div class="mb-5 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+          <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+          </svg>
+          <span>{{ errorMessage }}</span>
         </div>
       }
 
       @if (successMessage) {
-        <div class="mb-5 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700 dark:border-green-900/50 dark:bg-green-900/20 dark:text-green-300">
-          {{ successMessage }}
+        <div class="mb-5 flex items-start gap-3 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700 dark:border-green-900/50 dark:bg-green-900/20 dark:text-green-300">
+          <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          <span>{{ successMessage }}</span>
         </div>
       }
 
       @if (loading) {
-        <div class="rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4 text-sm font-medium text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300">
+        <div class="flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4 text-sm font-medium text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300">
+          <span class="mlops-spinner text-blue-600 dark:text-blue-300"></span>
           Chargement du Model Registry...
         </div>
       }
 
       @if (!loading && models.length === 0) {
         <div class="rounded-3xl border border-dashed border-gray-300 bg-gray-50 p-10 text-center dark:border-gray-700 dark:bg-gray-900/40">
+          <div class="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300">
+            <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+          </div>
+
           <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
             Aucun modèle enregistré
           </h3>
@@ -65,49 +78,70 @@
       @if (!loading && models.length > 0) {
         <div class="grid grid-cols-1 gap-5">
           @for (model of models; track trackModel($index, model)) {
-            <div class="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-gray-800 dark:bg-gray-900/60">
+            <div class="card-hover rounded-3xl border border-gray-200 bg-white p-5 shadow-sm hover:border-gray-300 hover:shadow-md dark:border-gray-800 dark:bg-gray-900/60 dark:hover:border-gray-700">
 
               <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <div class="flex flex-wrap items-center gap-2">
-                    <h3 class="text-lg font-bold text-gray-900 dark:text-white">
-                      {{ model.registeredModelName || '-' }}
-                    </h3>
-
-                    <span
-                      class="rounded-full px-3 py-1 text-xs font-bold"
-                      [ngClass]="getProductionBadgeClass(model)"
-                    >
-                      @if (model.hasProduction) {
-                        Production v{{ model.productionVersion || '-' }}
-                      } @else {
-                        Pas de production
-                      }
-                    </span>
-
-                    <span
-                      class="rounded-full px-3 py-1 text-xs font-bold"
-                      [ngClass]="getDeploymentBadgeClass(model)"
-                    >
-                      {{ getDeploymentLabel(model) }}
-                    </span>
-
-                    @if (isDeploymentDeployed(model)) {
-                      <span
-                        class="rounded-full px-3 py-1 text-xs font-bold"
-                        [ngClass]="isApiEnabled(model) ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"
-                      >
-                        {{ isApiEnabled(model) ? 'PUBLIC_API' : 'PRIVATE' }}
-                      </span>
-                    }
+                <div class="flex items-start gap-3">
+                  <div
+                    class="mt-0.5 flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-white shadow-sm"
+                    [ngClass]="isDeploymentDeployed(model)
+                      ? 'bg-gradient-to-br from-green-500 to-emerald-600 shadow-green-500/20'
+                      : model.hasProduction
+                        ? 'bg-gradient-to-br from-blue-500 to-indigo-600 shadow-blue-500/20'
+                        : 'bg-gradient-to-br from-gray-400 to-gray-500 shadow-gray-400/20'"
+                  >
+                    <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                    </svg>
                   </div>
 
-                  <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
-                    Projet :
-                    <span class="font-semibold text-gray-700 dark:text-gray-300">
-                      {{ model.projectName || '-' }}
-                    </span>
-                  </p>
+                  <div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <h3 class="text-lg font-bold text-gray-900 dark:text-white">
+                        {{ model.registeredModelName || '-' }}
+                      </h3>
+
+                      <span
+                        class="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold"
+                        [ngClass]="getProductionBadgeClass(model)"
+                      >
+                        @if (model.hasProduction) {
+                          <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                          </svg>
+                          Production v{{ model.productionVersion || '-' }}
+                        } @else {
+                          Pas de production
+                        }
+                      </span>
+
+                      <span
+                        class="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold"
+                        [ngClass]="getDeploymentBadgeClass(model)"
+                      >
+                        @if (isDeploymentDeployed(model)) {
+                          <span class="h-1.5 w-1.5 rounded-full bg-green-500 mlops-pulse"></span>
+                        }
+                        {{ getDeploymentLabel(model) }}
+                      </span>
+
+                      @if (isDeploymentDeployed(model)) {
+                        <span
+                          class="rounded-full px-3 py-1 text-xs font-bold"
+                          [ngClass]="isApiEnabled(model) ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"
+                        >
+                          {{ isApiEnabled(model) ? 'PUBLIC_API' : 'PRIVATE' }}
+                        </span>
+                      }
+                    </div>
+
+                    <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                      Projet :
+                      <span class="font-semibold text-gray-700 dark:text-gray-300">
+                        {{ model.projectName || '-' }}
+                      </span>
+                    </p>
+                  </div>
                 </div>
 
                 <div class="flex flex-col gap-3 lg:items-end">
@@ -261,6 +295,309 @@
                   </p>
                 </div>
               </div>
+
+              @if (model.activeDeploymentId) {
+                <div class="mt-6 rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50/70 via-white to-blue-50/50 p-5 dark:border-indigo-900/40 dark:from-indigo-950/20 dark:via-gray-900/40 dark:to-blue-950/10">
+
+                  <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <div class="flex items-center gap-2">
+                        <span class="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-3 py-1 text-xs font-bold text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                          SMART MODEL GATEWAY
+                        </span>
+                        <span class="rounded-full bg-white px-3 py-1 text-xs font-semibold text-gray-600 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-800">
+                          API publique sécurisée
+                        </span>
+                      </div>
+
+                      <p class="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-400">
+                        Clés API hashées (jamais en clair), quota journalier et suivi d'usage pour exposer ce modèle à une application externe.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      (click)="toggleGateway(model)"
+                      class="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-indigo-700"
+                    >
+                      @if (isGatewayOpen(model.activeDeploymentId)) {
+                        Masquer les clés API
+                      } @else {
+                        Gérer les clés API
+                      }
+                      <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        @if (isGatewayOpen(model.activeDeploymentId)) {
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>
+                        } @else {
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        }
+                      </svg>
+                    </button>
+                  </div>
+
+                  @if (isGatewayOpen(model.activeDeploymentId)) {
+
+                    @if (isGatewayLoading(model.activeDeploymentId)) {
+                      <div class="mt-4 flex items-center gap-3 rounded-xl bg-white px-4 py-3 text-sm font-medium text-gray-600 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-800">
+                        <span class="mlops-spinner text-indigo-600 dark:text-indigo-300"></span>
+                        Chargement des clés API...
+                      </div>
+                    }
+
+                    @if (getGatewayStats(model); as stats) {
+                      <div class="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                        <div class="rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Accès externe</p>
+                          <p class="mt-1 text-lg font-bold" [ngClass]="isModelPrivate(model) ? 'text-gray-400 dark:text-gray-500' : 'text-green-700 dark:text-green-300'">
+                            {{ isModelPrivate(model) ? 'Désactivé' : 'Activé' }}
+                          </p>
+                        </div>
+                        <div class="rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Version de production</p>
+                          <p class="mt-1 truncate text-lg font-bold text-gray-900 dark:text-white">{{ getProductionVersion(model) }}</p>
+                        </div>
+                        <div class="rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Clés API</p>
+                          <p class="mt-1 text-lg font-bold text-gray-900 dark:text-white">{{ getGatewayKeysCount(model) }}</p>
+                        </div>
+                        <div class="rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Appels aujourd'hui</p>
+                          <p class="mt-1 text-lg font-bold text-gray-900 dark:text-white">{{ stats.totalToday ?? 0 }}</p>
+                        </div>
+                        <div class="rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Taux de succès</p>
+                          <p class="mt-1 text-lg font-bold text-indigo-700 dark:text-indigo-300">{{ (stats.successRate ?? 0) }}%</p>
+                        </div>
+                        <div class="rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Latence moyenne</p>
+                          <p class="mt-1 text-lg font-bold text-gray-900 dark:text-white">{{ (stats.avgLatencyMs ?? 0) }} ms</p>
+                        </div>
+                        <div class="rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Quota restant</p>
+                          <p class="mt-1 text-lg font-bold text-gray-900 dark:text-white">
+                            {{ stats.dailyQuota != null ? (stats.quotaRemaining ?? 0) + ' / ' + stats.dailyQuota : 'Illimité' }}
+                          </p>
+                        </div>
+                        <div class="rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Dernière utilisation</p>
+                          <p class="mt-1 text-lg font-bold text-gray-900 dark:text-white">{{ getLastUsedLabel(model) }}</p>
+                        </div>
+                      </div>
+                    }
+
+                    <div class="mt-4 flex flex-col gap-3 lg:flex-row">
+                      <div class="flex-1 rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                        <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Endpoint public (stable)</p>
+                        <div class="mt-1 flex items-center gap-2">
+                          <code class="flex-1 truncate rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-800 dark:bg-gray-950 dark:text-gray-200">
+                            {{ model.registeredModelName ? getPublicBaseUrlForDisplay(model.registeredModelName) : '-' }}
+                          </code>
+                          <button
+                            type="button"
+                            (click)="copyPublicEndpoint(model)"
+                            class="rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-bold text-gray-700 transition hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                          >
+                            Copier
+                          </button>
+                        </div>
+                      </div>
+
+                      <div class="flex-1 rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                        <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Exemple cURL</p>
+                        <div class="mt-1 flex items-center gap-2">
+                          <code class="flex-1 truncate rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-800 dark:bg-gray-950 dark:text-gray-200">
+                            curl.exe -X POST .../api/external/models/{{ model.registeredModelName }}/predict
+                          </code>
+                          <button
+                            type="button"
+                            (click)="copyCurl(model)"
+                            class="rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-bold text-gray-700 transition hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                          >
+                            Copier
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="mt-4 rounded-xl bg-white p-4 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                      <p class="text-sm font-bold text-gray-900 dark:text-white">
+                        Créer une nouvelle clé API
+                      </p>
+
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        Nommez la clé pour votre application externe, définissez un quota journalier et une expiration facultative.
+                        La clé complète ne sera affichée qu'une seule fois.
+                      </p>
+
+                      @if (isModelPrivate(model)) {
+                        <div class="mt-3 flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                          <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                          </svg>
+                          Ce modèle est <strong>privé</strong> : la création de clé API est désactivée.
+                          Passez le modèle en <strong>PUBLIC_API</strong> ou <strong>SHARED</strong> pour exposer l'API.
+                        </div>
+                      }
+
+                      <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <input
+                          type="text"
+                          [value]="getGatewayNewName(model.activeDeploymentId)"
+                          (input)="$any(gatewayNewName)[model.activeDeploymentId] = $any($event.target).value"
+                          [disabled]="isModelPrivate(model)"
+                          placeholder="Nom (ex : application mobile)"
+                          class="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-200"
+                        />
+                        <input
+                          type="number"
+                          min="1"
+                          [value]="getGatewayNewQuota(model.activeDeploymentId) ?? ''"
+                          (input)="$any(gatewayNewQuota)[model.activeDeploymentId] = parseGatewayQuota($any($event.target).value)"
+                          [disabled]="isModelPrivate(model)"
+                          placeholder="Quota / jour (vide = illimité)"
+                          class="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-200"
+                        />
+                        <input
+                          type="date"
+                          [value]="getGatewayNewExpiry(model.activeDeploymentId)"
+                          (input)="$any(gatewayNewExpiry)[model.activeDeploymentId] = $any($event.target).value"
+                          [disabled]="isModelPrivate(model)"
+                          placeholder="Expiration (optionnel)"
+                          class="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-200"
+                        />
+                      </div>
+
+                      <div class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <p class="text-xs text-gray-500 dark:text-gray-400">
+                          L'application externe utilisera cette clé dans le header <span class="font-semibold text-gray-700 dark:text-gray-300">X-API-KEY</span>.
+                        </p>
+                        <button
+                          type="button"
+                          (click)="createGatewayKey(model)"
+                          [disabled]="isModelPrivate(model) || isGatewayLoading(model.activeDeploymentId)"
+                          class="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Générer la clé
+                        </button>
+                      </div>
+                    </div>
+
+                    @if (isKeyModalOpen(model.activeDeploymentId)) {
+                      @if (getGatewayNewKey(model); as newKey) {
+                        <div class="fixed inset-0 z-[100] flex items-center justify-center bg-gray-950/60 p-4 backdrop-blur-sm">
+                          <div class="w-full max-w-xl rounded-2xl border border-emerald-300 bg-white p-6 shadow-2xl dark:border-emerald-800 dark:bg-gray-900">
+                            <div class="flex items-start gap-3">
+                              <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300">
+                                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                </svg>
+                              </div>
+                              <div class="min-w-0">
+                                <h3 class="text-base font-bold text-gray-900 dark:text-white">
+                                  Clé API créée avec succès
+                                </h3>
+                                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                                  Copiez cette clé maintenant. Elle ne sera plus affichée après la fermeture de cette fenêtre.
+                                </p>
+                              </div>
+                            </div>
+
+                            <div class="mt-4 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900/50 dark:bg-emerald-950/30">
+                              <code class="flex-1 break-all select-all text-xs font-bold text-emerald-800 dark:text-emerald-300">
+                                {{ newKey }}
+                              </code>
+                              <button
+                                type="button"
+                                (click)="copyGatewayKey(model)"
+                                class="shrink-0 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-700"
+                              >
+                                Copier
+                              </button>
+                            </div>
+
+                            <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">
+                              Seul le préfixe masqué sera conservé dans la liste des clés. Cette clé reste soumise à son quota et à sa date d'expiration.
+                            </p>
+
+                            <div class="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                              <button
+                                type="button"
+                                (click)="closeGatewayKeyModal(model)"
+                                class="rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-bold text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
+                              >
+                                J'ai copié la clé
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      }
+                    }
+
+                    @if (getGatewayKeys(model).length > 0) {
+                      <div class="mt-4 overflow-hidden rounded-xl bg-white ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                        <div class="border-b border-gray-100 px-4 py-3 dark:border-gray-800">
+                          <p class="text-sm font-bold text-gray-900 dark:text-white">
+                            Clés API ({{ getGatewayKeys(model).length }})
+                          </p>
+                        </div>
+
+                        <div class="divide-y divide-gray-100 dark:divide-gray-800">
+                          @for (key of getGatewayKeys(model); track key.id) {
+                            <div class="flex flex-col gap-3 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+                              <div class="min-w-0">
+                                <div class="flex flex-wrap items-center gap-2">
+                                  <span class="text-sm font-bold text-gray-900 dark:text-white">{{ key.name || 'Clé API' }}</span>
+                                  <span
+                                    class="rounded-full px-2.5 py-0.5 text-xs font-bold"
+                                    [ngClass]="isKeyEnabled(key) && !isKeyExpired(key)
+                                      ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+                                      : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'"
+                                  >
+                                    {{ formatKeyStatus(key) }}
+                                  </span>
+                                </div>
+                                <code class="mt-1 block truncate text-xs font-semibold text-gray-600 dark:text-gray-400">
+                                  {{ maskGatewayKey(key) }}
+                                </code>
+                                <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
+                                  <span>Quota : {{ formatQuota(key.dailyQuota) }}</span>
+                                  <span>Utilisé aujourd'hui : {{ key.requestsToday ?? 0 }}</span>
+                                  <span>Total : {{ key.totalRequests ?? 0 }}</span>
+                                  <span>Dernière utilisation : {{ formatLastUsed(key.lastUsedAt) }}</span>
+                                  @if (key.expiresAt) {
+                                    <span>Expire le : {{ formatDate(key.expiresAt) }}</span>
+                                  }
+                                </div>
+                              </div>
+
+                              <div class="flex shrink-0 flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  (click)="toggleKeyEnabled(key, model)"
+                                  class="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-bold text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
+                                >
+                                  {{ isKeyEnabled(key) ? 'Désactiver' : 'Réactiver' }}
+                                </button>
+                                <button
+                                  type="button"
+                                  (click)="revokeKey(key, model)"
+                                  class="rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-bold text-red-700 transition hover:bg-red-100 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/40"
+                                >
+                                  Révoquer
+                                </button>
+                              </div>
+                            </div>
+                          }
+                        </div>
+                      </div>
+                    } @else {
+                      <p class="mt-4 rounded-xl bg-white px-4 py-3 text-sm text-gray-500 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:text-gray-400 dark:ring-gray-800">
+                        Aucune clé API. Cliquez sur « Générer la clé » pour exposer ce modèle.
+                      </p>
+                    }
+                  }
+                </div>
+              }
 
             </div>
           }

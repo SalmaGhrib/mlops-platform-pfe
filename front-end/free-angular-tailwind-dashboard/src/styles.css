@@ -199,6 +199,40 @@ layer(base);
   @apply bg-brand-50 text-brand-500 dark:bg-brand-500/[0.12] dark:text-brand-400;
 }
 
+.menu-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%) scaleY(0);
+  height: 60%;
+  width: 3px;
+  border-radius: 999px;
+  background: #465fff;
+  transition: transform 0.2s ease;
+}
+
+.menu-item-active::before {
+  transform: translateY(-50%) scaleY(1);
+}
+
+.menu-dropdown-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%) scaleY(0);
+  height: 55%;
+  width: 3px;
+  border-radius: 999px;
+  background: #465fff;
+  transition: transform 0.2s ease;
+}
+
+.menu-dropdown-item-active::before {
+  transform: translateY(-50%) scaleY(1);
+}
+
 @utility menu-item-inactive {
   @apply text-gray-700 hover:bg-gray-100 group-hover:text-gray-700 dark:text-gray-300 dark:hover:bg-white/5 dark:hover:text-gray-300;
 }
@@ -864,4 +898,139 @@ pre[class*="language-"] {
 }
 pre[class*="language-"].line-numbers {
   padding-left: 2.8em !important;
+}
+
+/* ============================================================
+   Plateforme MLOps — Améliorations UI globales
+   ============================================================ */
+
+/* Scrollbar fine et harmonisée (light + dark) */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-gray-300);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-gray-400);
+}
+.dark ::-webkit-scrollbar-thumb {
+  background-color: var(--color-gray-700);
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-gray-600);
+}
+
+/* Sélection de texte cohérente avec la marque */
+::selection {
+  background-color: var(--color-brand-100);
+  color: var(--color-brand-900);
+}
+.dark ::selection {
+  background-color: rgba(70, 95, 255, 0.35);
+  color: #ffffff;
+}
+
+/* Spinner léger pour les états de chargement */
+@keyframes mlops-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.mlops-spinner {
+  display: inline-block;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 9999px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: mlops-spin 0.7s linear infinite;
+  flex-shrink: 0;
+  vertical-align: -0.2em;
+}
+
+/* Point "pulsant" pour les états live / running */
+@keyframes mlops-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+}
+
+.mlops-pulse {
+  animation: mlops-pulse 1.6s ease-in-out infinite;
+}
+
+/* Fade-in pour le contenu routé */
+@keyframes mlops-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.mlops-fade-in {
+  animation: mlops-fade-in 0.4s ease-out both;
+}
+
+/* Cartes : hover harmonisé (léger lift + ombre) */
+.card-hover {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+}
+
+/* Contrôles file : curseur pointeur cohérent */
+input[type="file"]::file-selector-button {
+  cursor: pointer;
+}
+
+/* Zones d'upload : drop-zone pointillée avec hover */
+.mlops-file-drop {
+  border: 2px dashed #d1d5db;
+  background: #f9fafb;
+  border-radius: 1rem;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+.dark .mlops-file-drop {
+  border-color: #374151;
+  background: rgba(255, 255, 255, 0.03);
+}
+.mlops-file-drop:hover {
+  border-color: #465fff;
+  background: #eef4ff;
+}
+.dark .mlops-file-drop:hover {
+  border-color: #7592ff;
+  background: rgba(70, 95, 255, 0.08);
+}
+.mlops-file-drop input[type="file"] {
+  width: 100%;
+  padding: 0.8rem 0.9rem;
+  outline: none;
+}
+
+/* Liens : focus clair et cohérent */
+a:focus-visible {
+  outline: 2px solid var(--color-brand-500);
+  outline-offset: 2px;
+  border-radius: 4px;
 }

@@ -1,7 +1,6 @@
-<p>verify-email works!</p>
-<div class="min-h-screen bg-gray-50 px-4 py-12 dark:bg-gray-950">
+<div class="mlops-fade-in min-h-screen bg-gray-50 px-4 py-12 dark:bg-gray-950">
   <div class="mx-auto flex min-h-[70vh] max-w-xl items-center justify-center">
-    <div class="w-full rounded-2xl border border-gray-200 bg-white p-8 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
+    <div class="w-full rounded-2xl border border-gray-200 bg-white p-8 text-center shadow-lg shadow-gray-200/60 dark:border-gray-800 dark:bg-gray-900 dark:shadow-none">
       
       @if (loading) {
         <div>
@@ -22,7 +21,9 @@
       @if (!loading && successMessage) {
         <div>
           <div class="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400">
-            ✓
+            <svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
           </div>
 
           <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
@@ -36,7 +37,7 @@
           <div class="mt-8">
             <a
               routerLink="/signin"
-              class="inline-flex w-full items-center justify-center rounded-lg bg-blue-600 px-5 py-3 text-sm font-medium text-white hover:bg-blue-700 sm:w-auto"
+              class="inline-flex w-full items-center justify-center rounded-lg bg-brand-500 px-5 py-3 text-sm font-medium text-white hover:bg-brand-600 sm:w-auto"
             >
               Se connecter
             </a>
@@ -47,7 +48,9 @@
       @if (!loading && errorMessage) {
         <div>
           <div class="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400">
-            !
+            <svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            </svg>
           </div>
 
           <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
@@ -68,7 +71,7 @@
 
             <a
               routerLink="/signin"
-              class="inline-flex items-center justify-center rounded-lg bg-blue-600 px-5 py-3 text-sm font-medium text-white hover:bg-blue-700"
+              class="inline-flex items-center justify-center rounded-lg bg-brand-500 px-5 py-3 text-sm font-medium text-white hover:bg-brand-600"
             >
               Aller à la connexion
             </a>

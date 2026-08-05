@@ -1,136 +1,188 @@
 package com.mlops.platform.controller;
 
+import com.mlops.platform.entity.ModelApiKey;
 import com.mlops.platform.entity.ModelDeployment;
-import com.mlops.platform.service.ModelDeploymentService;
+import com.mlops.platform.exception.GatewayException;
+import com.mlops.platform.service.ModelGatewayService;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
+/*
+ * SMART MODEL GATEWAY — endpoint externe stable.
+ *
+ * POST /api/external/models/{registeredModelName}/predict
+ * POST /api/external/models/{registeredModelName}/predict-image
+ *
+ * Header obligatoire : X-API-KEY (la clé identifie modèle, propriétaire, quota et usage).
+ *
+ * Codes d'erreur :
+ * - 401 MISSING_API_KEY / INVALID_API_KEY
+ * - 403 KEY_DISABLED / KEY_NOT_FOR_MODEL / EXTERNAL_ACCESS_DISABLED
+ * - 404 MODEL_NOT_FOUND
+ * - 410 KEY_REVOKED / KEY_EXPIRED
+ * - 429 QUOTA_EXCEEDED
+ * - 503 MODEL_NOT_DEPLOYED
+ *
+ * Le URL Kubernetes interne du modèle n'est JAMAIS exposée dans la réponse.
+ */
 @RestController
 @RequestMapping("/api/external")
 @CrossOrigin(origins = "*")
 public class ExternalPredictionController {
 
-    private final ModelDeploymentService modelDeploymentService;
+    private final ModelGatewayService modelGatewayService;
     private final RestTemplate restTemplate;
 
-    public ExternalPredictionController(ModelDeploymentService modelDeploymentService) {
-        this.modelDeploymentService = modelDeploymentService;
+    public ExternalPredictionController(ModelGatewayService modelGatewayService) {
+        this.modelGatewayService = modelGatewayService;
         this.restTemplate = new RestTemplate();
     }
 
-    /*
-     * Endpoint externe sécurisé.
-     *
-     * Exemple :
-     * POST /api/external/models/{registeredModelName}/predict
-     *
-     * Headers :
-     * X-API-KEY: mlops_xxxxx
-     *
-     * Pour les modèles SHARED :
-     * X-USER-EMAIL: user@email.com
-     *
-     * Règles :
-     * - PUBLIC_API : clé API valide suffit.
-     * - SHARED : clé API valide + X-USER-EMAIL autorisé.
-     * - PRIVATE : accès externe refusé.
-     *
-     * Formats acceptés :
-     *
-     * TABULAR simple :
-     * {
-     *   "feature_1": 1.2,
-     *   "feature_2": 0.4
-     * }
-     *
-     * TABULAR avancé :
-     * {
-     *   "rows": [
-     *     {
-     *       "feature_1": 1.2,
-     *       "feature_2": 0.4
-     *     }
-     *   ]
-     * }
-     *
-     * TABULAR data :
-     * {
-     *   "data": [
-     *     [1.2, 0.4, 3.1]
-     *   ]
-     * }
-     *
-     * TEXT / NLP :
-     * {
-     *   "text": "le service est excellent et rapide"
-     * }
-     *
-     * IMAGE JSON :
-     * {
-     *   "imageBase64": "..."
-     * }
-     */
     @PostMapping("/models/{registeredModelName}/predict")
     public ResponseEntity<?> predictExternal(
             @PathVariable String registeredModelName,
             @RequestHeader(value = "X-API-KEY", required = false) String apiKey,
-            @RequestHeader(value = "X-USER-EMAIL", required = false) String userEmail,
             @RequestBody(required = false) Map<String, Object> requestBody
     ) {
+        return handlePrediction(registeredModelName, apiKey, requestBody, null);
+    }
+
+    @PostMapping("/models/{registeredModelName}/predict-image")
+    public ResponseEntity<?> predictImageExternal(
+            @PathVariable String registeredModelName,
+            @RequestHeader(value = "X-API-KEY", required = false) String apiKey,
+            @RequestBody(required = false) Map<String, Object> requestBody
+    ) {
+        return handlePrediction(registeredModelName, apiKey, requestBody, "IMAGE");
+    }
+
+    private ResponseEntity<?> handlePrediction(
+            String registeredModelName,
+            String apiKey,
+            Map<String, Object> requestBody,
+            String forcedFormat
+    ) {
+        String requestId = UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        long start = System.currentTimeMillis();
+
+        /*
+         * 1. AUTHENTIFICATION — validation de la clé SMART.
+         */
+        ModelApiKey key;
+
+        try {
+            key = modelGatewayService.validateApiKey(apiKey, registeredModelName);
+        } catch (GatewayException e) {
+            long latency = System.currentTimeMillis() - start;
+
+            System.out.println("[SMART_GATEWAY_AUTH] requestId=" + requestId
+                    + " modelName=" + registeredModelName
+                    + " status=" + e.getStatus().value()
+                    + " code=" + e.getCode()
+                    + " latencyMs=" + latency);
+
+            return ResponseEntity.status(e.getStatus()).body(errorResponse(e.getCode(), e.getMessage()));
+        }
+
+        /*
+         * 2. RÉSOLUTION DU DÉPLOIEMENT ACTIF (403 / 404 / 503).
+         */
         ModelDeployment deployment;
 
         try {
-            deployment = modelDeploymentService.findDeploymentForExternalApiOrThrow(
-                    registeredModelName,
-                    apiKey,
-                    userEmail
-            );
-        } catch (Exception e) {
-            HttpStatus status = resolveAccessDeniedStatus(e.getMessage());
+            deployment = modelGatewayService.resolveGatewayDeployment(key);
+        } catch (GatewayException e) {
+            long latency = System.currentTimeMillis() - start;
 
-            return ResponseEntity.status(status).body(
-                    errorResponse("EXTERNAL_PREDICTION_DENIED", e.getMessage())
-            );
+            recordAndLog(key, null, registeredModelName, e.getStatus().value(), e.getCode(), latency, null);
+
+            System.out.println("[SMART_GATEWAY_ROUTE] requestId=" + requestId
+                    + " keyId=" + key.getId()
+                    + " modelName=" + registeredModelName
+                    + " status=" + e.getStatus().value()
+                    + " code=" + e.getCode()
+                    + " latencyMs=" + latency);
+
+            return ResponseEntity.status(e.getStatus()).body(errorResponse(e.getCode(), e.getMessage()));
+        }
+
+        /*
+         * 3. QUOTA journalier (compteur atomique).
+         */
+        ModelGatewayService.QuotaResult quota = modelGatewayService.reserveQuota(key.getId());
+
+        if (!quota.isAllowed()) {
+            long latency = System.currentTimeMillis() - start;
+
+            recordAndLog(key, deployment, registeredModelName, 429, "QUOTA_EXCEEDED", latency, null);
+
+            System.out.println("[SMART_GATEWAY_QUOTA] requestId=" + requestId
+                    + " keyId=" + key.getId()
+                    + " modelName=" + registeredModelName
+                    + " requestsToday=" + quota.getRemaining()
+                    + " dailyQuota=" + quota.getLimit()
+                    + " latencyMs=" + latency);
+
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .headers(rateLimitHeaders(quota))
+                    .body(errorResponse(
+                            "QUOTA_EXCEEDED",
+                            "Quota journalier dépassé. Réessayez demain."
+                    ));
+        }
+
+        if (requestBody == null || requestBody.isEmpty()) {
+            long latency = System.currentTimeMillis() - start;
+
+            recordAndLog(key, deployment, registeredModelName, 400, "EMPTY_REQUEST_BODY", latency, null);
+
+            return ResponseEntity.badRequest().body(errorResponse(
+                    "EMPTY_REQUEST_BODY",
+                    "Le body JSON est obligatoire pour lancer une prédiction."
+            ));
         }
 
         String predictionEndpoint = deployment.getPredictionEndpoint();
 
         if (predictionEndpoint == null || predictionEndpoint.isBlank()) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
-                    errorResponse(
-                            "PREDICTION_ENDPOINT_MISSING",
-                            "Aucun endpoint de prédiction n'est disponible pour ce modèle."
-                    )
-            );
+            long latency = System.currentTimeMillis() - start;
+
+            recordAndLog(key, deployment, registeredModelName, 400, "PREDICTION_ENDPOINT_MISSING", latency, null);
+
+            return ResponseEntity.badRequest().body(errorResponse(
+                    "PREDICTION_ENDPOINT_MISSING",
+                    "Aucun endpoint de prédiction n'est disponible pour ce modèle."
+            ));
         }
 
-        if (requestBody == null || requestBody.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
-                    errorResponse(
-                            "EMPTY_REQUEST_BODY",
-                            "Le body JSON est obligatoire pour lancer une prédiction."
-                    )
-            );
-        }
-
+        /*
+         * 4. APPEL AU MODEL SERVER.
+         */
         try {
-            Map<String, Object> normalizedBody = normalizeRequestBodyForModel(
+            String endpointType = detectRequestFormat(predictionEndpoint, requestBody, forcedFormat);
+
+            HttpEntity<?> entity = buildEntityForModelServer(
+                    deployment,
                     predictionEndpoint,
-                    requestBody
+                    requestBody,
+                    forcedFormat,
+                    endpointType
             );
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
-
-            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(normalizedBody, headers);
 
             ResponseEntity<String> modelResponse = restTemplate.exchange(
                     predictionEndpoint,
@@ -139,19 +191,39 @@ public class ExternalPredictionController {
                     String.class
             );
 
+            long latency = System.currentTimeMillis() - start;
+            int status = modelResponse.getStatusCode().value();
+            boolean ok = modelResponse.getStatusCode().is2xxSuccessful();
+
+            recordAndLog(
+                    key,
+                    deployment,
+                    registeredModelName,
+                    status,
+                    ok ? null : "MODEL_SERVER_ERROR",
+                    latency,
+                    endpointType
+            );
+
             Map<String, Object> response = new LinkedHashMap<>();
-            response.put("status", "success");
+            response.put("status", ok ? "success" : "error");
             response.put("registeredModelName", deployment.getRegisteredModelName());
             response.put("modelVersion", deployment.getModelVersion());
             response.put("deploymentId", deployment.getId());
-            response.put("predictionEndpoint", predictionEndpoint);
-            response.put("requestFormat", detectRequestFormat(predictionEndpoint, requestBody, normalizedBody));
+            response.put("requestId", requestId);
+            response.put("requestFormat", endpointType);
             response.put("modelResponse", modelResponse.getBody());
             response.put("timestamp", LocalDateTime.now().toString());
 
-            return ResponseEntity.status(modelResponse.getStatusCode()).body(response);
+            return ResponseEntity.status(modelResponse.getStatusCode())
+                    .headers(rateLimitHeaders(quota))
+                    .body(response);
 
         } catch (HttpStatusCodeException e) {
+            long latency = System.currentTimeMillis() - start;
+
+            recordAndLog(key, deployment, registeredModelName, 502, "MODEL_SERVER_ERROR", latency, null);
+
             Map<String, Object> error = errorResponse(
                     "MODEL_SERVER_ERROR",
                     "Erreur retournée par le serveur du modèle."
@@ -162,11 +234,15 @@ public class ExternalPredictionController {
             error.put("registeredModelName", deployment.getRegisteredModelName());
             error.put("modelVersion", deployment.getModelVersion());
             error.put("deploymentId", deployment.getId());
-            error.put("predictionEndpoint", predictionEndpoint);
+            error.put("requestId", requestId);
 
             return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(error);
 
         } catch (Exception e) {
+            long latency = System.currentTimeMillis() - start;
+
+            recordAndLog(key, deployment, registeredModelName, 500, "EXTERNAL_PREDICTION_FAILED", latency, null);
+
             Map<String, Object> error = errorResponse(
                     "EXTERNAL_PREDICTION_FAILED",
                     e.getMessage()
@@ -175,23 +251,87 @@ public class ExternalPredictionController {
             error.put("registeredModelName", deployment.getRegisteredModelName());
             error.put("modelVersion", deployment.getModelVersion());
             error.put("deploymentId", deployment.getId());
-            error.put("predictionEndpoint", predictionEndpoint);
+            error.put("requestId", requestId);
 
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
         }
     }
 
     /*
+     * Enregistre une ligne d'usage + log [SMART_GATEWAY_REQUEST].
+     * Ne doit JAMAIS bloquer la prédiction ni propager d'exception.
+     */
+    private void recordAndLog(
+            ModelApiKey key,
+            ModelDeployment deployment,
+            String registeredModelName,
+            int statusCode,
+            String errorCode,
+            long latencyMs,
+            String endpointType
+    ) {
+        Long modelId = deployment == null ? key.getDeploymentId() : deployment.getId();
+        String modelVersion = deployment == null ? null : deployment.getModelVersion();
+        String modelName = registeredModelName == null ? null : registeredModelName.trim();
+        boolean success = statusCode >= 200 && statusCode < 300 && errorCode == null;
+
+        System.out.println("[SMART_GATEWAY_REQUEST] keyId=" + key.getId()
+                + " modelName=" + modelName
+                + " modelVersion=" + modelVersion
+                + " status=" + statusCode
+                + " code=" + errorCode
+                + " latencyMs=" + latencyMs);
+
+        try {
+            modelGatewayService.recordUsage(
+                    key.getId(),
+                    modelId,
+                    modelName,
+                    modelVersion,
+                    statusCode,
+                    latencyMs,
+                    success,
+                    endpointType,
+                    errorCode
+            );
+        } catch (Exception e) {
+            System.out.println("[SMART_GATEWAY_USAGE] recordAndLog failed: " + e.getMessage());
+        }
+    }
+
+    private HttpHeaders rateLimitHeaders(ModelGatewayService.QuotaResult quota) {
+        HttpHeaders headers = new HttpHeaders();
+
+        if (quota.getLimit() != null) {
+            headers.set("X-RateLimit-Limit", String.valueOf(quota.getLimit()));
+            headers.set("X-RateLimit-Remaining", String.valueOf(quota.getRemaining()));
+        }
+
+        LocalDateTime reset = LocalDate.now().plusDays(1).atStartOfDay();
+        headers.set(
+                "X-RateLimit-Reset",
+                reset.atOffset(ZoneOffset.UTC).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+        );
+
+        return headers;
+    }
+
+    /*
      * Normalisation automatique du body selon l'endpoint réel du modèle.
-     *
-     * Objectif :
-     * - ne pas obliger l'utilisateur externe à connaître le format interne FastAPI
-     * - garder la compatibilité avec les anciens formats déjà fonctionnels
      */
     private Map<String, Object> normalizeRequestBodyForModel(
             String predictionEndpoint,
-            Map<String, Object> originalBody
+            Map<String, Object> originalBody,
+            String forcedFormat
     ) {
+        if ("IMAGE".equals(forcedFormat)) {
+            return normalizeImageBody(originalBody);
+        }
+
+        if ("TEXT".equals(forcedFormat)) {
+            return normalizeTextBody(originalBody);
+        }
+
         String endpoint = predictionEndpoint == null
                 ? ""
                 : predictionEndpoint.trim().toLowerCase();
@@ -208,16 +348,7 @@ public class ExternalPredictionController {
     }
 
     /*
-     * TABULAR :
-     *
-     * Si l'utilisateur envoie déjà :
-     * {"rows":[...]} ou {"data":[...]}
-     * on garde tel quel.
-     *
-     * Sinon :
-     * {"feature_1":1.2,"feature_2":0.4}
-     * devient :
-     * {"rows":[{"feature_1":1.2,"feature_2":0.4}]}
+     * TABULAR : on garde {"rows":[...]} / {"data":[...]}, sinon on enveloppe.
      */
     private Map<String, Object> normalizeTabularBody(Map<String, Object> originalBody) {
         if (originalBody.containsKey("rows") || originalBody.containsKey("data")) {
@@ -233,9 +364,6 @@ public class ExternalPredictionController {
                 continue;
             }
 
-            /*
-             * On évite d'envoyer des champs de métadonnées comme features.
-             */
             if (isMetadataKey(key)) {
                 continue;
             }
@@ -255,16 +383,6 @@ public class ExternalPredictionController {
         return normalized;
     }
 
-    /*
-     * TEXT / NLP :
-     *
-     * Format recommandé :
-     * {"text":"..."}
-     *
-     * On garde aussi les formats déjà avancés :
-     * {"texts":[...]}
-     * {"data":...}
-     */
     private Map<String, Object> normalizeTextBody(Map<String, Object> originalBody) {
         if (originalBody.containsKey("text")
                 || originalBody.containsKey("texts")
@@ -272,11 +390,6 @@ public class ExternalPredictionController {
             return originalBody;
         }
 
-        /*
-         * Petit confort :
-         * si le client envoie {"input":"..."} ou {"message":"..."},
-         * on transforme en {"text":"..."}.
-         */
         Object input = firstExistingValue(originalBody, "input", "message", "sentence", "content");
 
         if (input != null) {
@@ -290,17 +403,6 @@ public class ExternalPredictionController {
         );
     }
 
-    /*
-     * IMAGE :
-     *
-     * Pour l'API externe JSON, on accepte les bodies déjà préparés.
-     * Exemples possibles :
-     * {"imageBase64":"..."}
-     * {"image":"..."}
-     * {"data":"..."}
-     *
-     * Si ton FastAPI image attend un nom précis, on pourra l'adapter ici.
-     */
     private Map<String, Object> normalizeImageBody(Map<String, Object> originalBody) {
         if (originalBody.containsKey("imageBase64")
                 || originalBody.containsKey("image")
@@ -361,8 +463,16 @@ public class ExternalPredictionController {
     private String detectRequestFormat(
             String predictionEndpoint,
             Map<String, Object> originalBody,
-            Map<String, Object> normalizedBody
+            String forcedFormat
     ) {
+        if ("IMAGE".equals(forcedFormat)) {
+            return "IMAGE";
+        }
+
+        if ("TEXT".equals(forcedFormat)) {
+            return "TEXT";
+        }
+
         String endpoint = predictionEndpoint == null
                 ? ""
                 : predictionEndpoint.trim().toLowerCase();
@@ -379,55 +489,104 @@ public class ExternalPredictionController {
             return "TABULAR_ALREADY_WRAPPED";
         }
 
-        if (normalizedBody != null && normalizedBody.containsKey("rows")) {
-            return "TABULAR_SIMPLE_JSON_WRAPPED_TO_ROWS";
-        }
-
-        return "UNKNOWN";
+        return "TABULAR_SIMPLE_JSON_WRAPPED_TO_ROWS";
     }
 
-    private HttpStatus resolveAccessDeniedStatus(String message) {
-        if (message == null || message.isBlank()) {
-            return HttpStatus.UNAUTHORIZED;
+    /*
+     * Construit le corps de la requête envoyée au model server :
+     * - IMAGE  : multipart (image_file + model_name + model_alias),
+     *            comme l'exige le FastAPI généré par ModelServingImageBuildService.
+     * - sinon  : JSON normalisé (TEXT / TABULAR).
+     */
+    private HttpEntity<?> buildEntityForModelServer(
+            ModelDeployment deployment,
+            String predictionEndpoint,
+            Map<String, Object> requestBody,
+            String forcedFormat,
+            String endpointType
+    ) {
+        if ("IMAGE".equals(endpointType)) {
+            return buildImageMultipartEntity(deployment, requestBody);
         }
 
-        String clean = message.toLowerCase();
+        Map<String, Object> normalizedBody = normalizeRequestBodyForModel(
+                predictionEndpoint,
+                requestBody,
+                forcedFormat
+        );
 
-        /*
-         * 401 : problème d'authentification
-         * - clé manquante
-         * - clé invalide
-         * - email obligatoire absent
-         */
-        if (clean.contains("api key")
-                || clean.contains("clé")
-                || clean.contains("manquante")
-                || clean.contains("invalide")
-                || clean.contains("x-user-email est obligatoire")
-                || clean.contains("user email")
-                || clean.contains("email is required")) {
-            return HttpStatus.UNAUTHORIZED;
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+
+        return new HttpEntity<>(normalizedBody, headers);
+    }
+
+    /*
+     * IMAGE -> multipart avec l'image décodée depuis le base64 reçu.
+     * Compatible avec le /predict-image généré (UploadFile + Form).
+     */
+    private HttpEntity<MultiValueMap<String, Object>> buildImageMultipartEntity(
+            ModelDeployment deployment,
+            Map<String, Object> requestBody
+    ) {
+        Object raw = firstExistingValue(requestBody, "imageBase64", "image", "data", "file", "base64", "image_base64");
+
+        if (raw == null) {
+            raw = firstExistingValue(requestBody, "content");
         }
 
-        /*
-         * 403 : utilisateur authentifié mais non autorisé
-         * - modèle privé
-         * - utilisateur non autorisé
-         * - modèle non public/partagé
-         */
-        if (clean.contains("pas autorisé")
-                || clean.contains("non autorisé")
-                || clean.contains("not authorized")
-                || clean.contains("forbidden")
-                || clean.contains("privé")
-                || clean.contains("private")
-                || clean.contains("shared")
-                || clean.contains("partagé")
-                || clean.contains("n'est pas exposé")) {
-            return HttpStatus.FORBIDDEN;
+        if (raw == null) {
+            throw new IllegalArgumentException(
+                    "Format image invalide. Envoyez par exemple {\"imageBase64\":\"...\"}."
+            );
         }
 
-        return HttpStatus.UNAUTHORIZED;
+        String data = String.valueOf(raw).trim();
+
+        if (data.contains(",")) {
+            String[] parts = data.split(",", 2);
+            if (parts[0].contains("base64")) {
+                data = parts[1];
+            }
+        }
+
+        byte[] imageBytes;
+
+        try {
+            imageBytes = Base64.getDecoder().decode(data);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(
+                    "imageBase64 invalide : le contenu n'est pas du base64 valide."
+            );
+        }
+
+        if (imageBytes.length == 0) {
+            throw new IllegalArgumentException("imageBase64 invalide : image vide.");
+        }
+
+        MultiValueMap<String, Object> form = new LinkedMultiValueMap<>();
+
+        String modelName = deployment == null ? null : deployment.getRegisteredModelName();
+
+        if (modelName == null || modelName.isBlank()) {
+            throw new IllegalArgumentException("Nom de modèle introuvable pour la requête image.");
+        }
+
+        form.add("model_name", modelName.trim());
+        form.add("model_alias", "production");
+        form.add("image_file", new ByteArrayResource(imageBytes) {
+            @Override
+            public String getFilename() {
+                return "input.png";
+            }
+        });
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+
+        return new HttpEntity<>(form, headers);
     }
 
     private Map<String, Object> errorResponse(String code, String message) {

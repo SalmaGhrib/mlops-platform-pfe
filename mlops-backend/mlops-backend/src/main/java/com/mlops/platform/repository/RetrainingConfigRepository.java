@@ -174,6 +174,34 @@ public interface RetrainingConfigRepository
     );
 
     /**
+     * Claim atomique pour un lancement manuel (force-now).
+     *
+     * Deux requêtes concurrentes ne peuvent pas réserver la même
+     * configuration : la condition running=false rend le claim exclusif.
+     */
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
+    @Query("""
+        update RetrainingConfig c
+           set c.running = true,
+               c.manualTriggerRequested = false,
+               c.lastTriggerReason = 'MANUAL',
+               c.updatedAt = :now
+         where c.id = :id
+           and c.enabled = true
+           and c.running = false
+        """)
+    int claimManualRetraining(
+            @Param("id")
+            Long id,
+
+            @Param("now")
+            LocalDateTime now
+    );
+
+    /**
      * Libération après création réussie d'un nouveau run.
      */
     @Modifying(

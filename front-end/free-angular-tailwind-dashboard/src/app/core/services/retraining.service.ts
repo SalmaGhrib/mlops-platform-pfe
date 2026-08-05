@@ -52,6 +52,44 @@ export interface RetrainingConfigResponse {
   lastTriggerReason?: string | null;
   lastDecisionReason?: string | null;
   lastMonitoringCheckAt?: string | null;
+  experimentId?: number | null;
+  jobName?: string | null;
+  kubeflowRunName?: string | null;
+}
+
+export interface ManualRetrainingResponse {
+  success: boolean;
+  projectId: number;
+  experimentId: number | null;
+  jobName: string | null;
+  status: string | null;
+  trigger: string | null;
+  message: string | null;
+  code: string | null;
+}
+
+export interface ProjectRetrainingStatusResponse {
+  projectId: number;
+  enabled: boolean;
+  running: boolean;
+  manualTriggerRequested: boolean;
+  activeExperimentExists: boolean;
+  status: string;
+  message: string;
+  nextRetrainingAt: string | null;
+  lastRetrainingAt: string | null;
+  lastDecisionReason: string | null;
+  lastTriggerReason: string | null;
+}
+
+const RETRAINING_TERMINAL_STATUSES = ['COMPLETED', 'FAILED', 'CANCELLED', 'TIMED_OUT'];
+
+export function isRetrainingTerminalStatus(status: string | null | undefined): boolean {
+  return !!status && RETRAINING_TERMINAL_STATUSES.includes(String(status).toUpperCase());
+}
+
+export function isRetrainingNonTerminalStatus(status: string | null | undefined): boolean {
+  return !!status && !isRetrainingTerminalStatus(status);
 }
 
 @Injectable({
@@ -121,10 +159,21 @@ export class RetrainingService {
     );
   }
 
-  forceNow(projectId: number): Observable<RetrainingConfigResponse> {
-    return this.http.post<RetrainingConfigResponse>(
+  forceNow(projectId: number): Observable<ManualRetrainingResponse> {
+    return this.http.post<ManualRetrainingResponse>(
       `${this.apiUrl}/projects/${projectId}/force-now`,
       {},
+      {
+        headers: this.getAuthHeaders(),
+      }
+    );
+  }
+
+  getProjectStatus(
+    projectId: number
+  ): Observable<ProjectRetrainingStatusResponse> {
+    return this.http.get<ProjectRetrainingStatusResponse>(
+      `${this.apiUrl}/projects/${projectId}/status`,
       {
         headers: this.getAuthHeaders(),
       }

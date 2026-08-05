@@ -304,7 +304,19 @@ public class MlProjectService {
                 "update"
         );
 
-        return mapToResponse(updatedProject);
+        /*
+         * Le formulaire général peut aussi modifier projectType et les priorités.
+         * Le commit du projet est déjà terminé : on peut donc recalculer tous les
+         * anciens runs puis réévaluer Production sans garder une transaction DB
+         * ouverte pendant les appels MLflow/Kubernetes.
+         */
+        refreshProjectMetricScoresAndLifecycle(updatedProject, "general-update");
+
+        MlProject refreshedProject = mlProjectRepository
+                .findById(updatedProject.getId())
+                .orElse(updatedProject);
+
+        return mapToResponse(refreshedProject);
     }
 
     /**
@@ -470,6 +482,60 @@ public class MlProjectService {
         );
 
         return updatedProject;
+    }
+
+    private void refreshProjectMetricScoresAndLifecycle(
+            MlProject project,
+            String source
+    ) {
+        if (project == null || project.getId() == null) {
+            return;
+        }
+
+        String registeredModelName = buildRegisteredModelName(project);
+
+        try {
+            mlExperimentService.recalculateGlobalScoresForProject(
+                    project,
+                    registeredModelName
+            );
+
+            if (Boolean.TRUE.equals(project.getAutoPromoteBestModel())) {
+                autoModelLifecycleService.evaluateAndAutoPromoteAndDeploy(
+                        project,
+                        registeredModelName
+                );
+
+                /*
+                 * La promotion modifie productionVersion/isProduction. Une passe
+                 * finale garantit que les DTO et les lignes de métriques affichent
+                 * immédiatement les nouvelles valeurs.
+                 */
+                mlExperimentService.recalculateGlobalScoresForProject(
+                        project,
+                        registeredModelName
+                );
+            }
+
+            System.out.println("[PROJECT_METRICS] Refresh completed. source="
+                    + source
+                    + ", projectId="
+                    + project.getId()
+                    + ", model="
+                    + registeredModelName);
+
+        } catch (Exception error) {
+            /*
+             * La modification du projet reste commitée. Le scheduler distribué
+             * pourra reprendre le recalcul ; l'utilisateur reçoit une trace claire.
+             */
+            System.err.println("[PROJECT_METRICS] Refresh failed. source="
+                    + source
+                    + ", projectId="
+                    + project.getId()
+                    + ", reason="
+                    + error.getMessage());
+        }
     }
 
     // =========================================================

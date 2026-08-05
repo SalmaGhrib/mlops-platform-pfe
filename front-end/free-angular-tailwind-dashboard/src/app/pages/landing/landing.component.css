@@ -1,0 +1,64 @@
+.hero-gradient {
+  background-image: linear-gradient(
+    135deg,
+    #2a31d8 0%,
+    #465fff 45%,
+    #0ba5ec 100%
+  );
+}
+
+:host-context(.dark) .hero-gradient {
+  background-image: linear-gradient(
+    135deg,
+    #161950 0%,
+    #252dae 50%,
+    #065986 100%
+  );
+}
+
+.bg-grid-pattern {
+  background-image: linear-gradient(
+      to right,
+      rgba(255, 255, 255, 0.07) 1px,
+      transparent 1px
+    ),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 42px 42px;
+}
+
+.hero-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(70px);
+  pointer-events: none;
+}
+
+.text-gradient {
+  background-image: linear-gradient(90deg, #7592ff 0%, #7cd4fd 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.card-hover {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-4px);
+}
+
+.landing-fade-in {
+  animation: landing-fade-in 0.6s ease-out both;
+}
+
+@keyframes landing-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

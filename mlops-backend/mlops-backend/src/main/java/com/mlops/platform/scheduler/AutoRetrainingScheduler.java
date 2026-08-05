@@ -165,34 +165,18 @@ public class AutoRetrainingScheduler {
         Long projectId = config.getProjectId();
         LocalDateTime claimTime = utcNow();
 
-        try {
-            int claimed =
-                    executeInNewTransaction(
-                            () ->
-                                    retrainingConfigRepository
-                                            .claimDueConfig(
-                                                    configId,
-                                                    claimTime
-                                            )
-                    );
+            try {
+                int claimed = autoRetrainingService.tryValidateAndClaimInNewTransaction(configId);
 
-            System.out.println(
-                    "[AUTO_RETRAINING] Claim configId="
-                            + configId
-                            + ", projectId="
-                            + projectId
-                            + ", result="
-                            + claimed
-            );
+                System.out.println("[AUTO_RETRAINING] Claim configId=" + configId + ", projectId=" + projectId + ", result=" + claimed);
 
-            if (claimed != 1) {
-                return;
-            }
+                if (claimed != 1) {
+                    return;
+                }
 
-            autoRetrainingService
-                    .processClaimedConfig(configId);
+                autoRetrainingService.processClaimedConfig(configId);
 
-        } catch (Exception processingError) {
+            } catch (Exception processingError) {
             System.err.println(
                     "[AUTO_RETRAINING] Failed configId="
                             + configId

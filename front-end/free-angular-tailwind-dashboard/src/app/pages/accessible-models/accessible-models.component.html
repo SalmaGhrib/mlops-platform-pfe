@@ -23,11 +23,17 @@
       {{ errorMessage }}
     </div>
 
-    <div *ngIf="loading" class="state-box">
+    <div *ngIf="loading" class="state-box loading-state">
+      <span class="mlops-spinner text-brand-600 dark:text-brand-400"></span>
       Chargement des modèles accessibles...
     </div>
 
     <div *ngIf="!loading && models.length === 0 && !errorMessage" class="empty-box">
+      <div class="empty-icon">
+        <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </div>
       <h3>Aucun modèle accessible</h3>
       <p>
         Aucun modèle public ou partagé avec vous n’est disponible pour le moment.
@@ -101,30 +107,14 @@
         </div>
 
         <div class="endpoint-section">
-          <label>Clé API</label>
+          <label>Clé API (SMART GATEWAY)</label>
 
           <div class="copy-row">
-            <code>X-API-KEY: {{ maskApiKey(model.apiKey) }}</code>
+            <code>X-API-KEY: mlops_live_&lt;votre_cle_api&gt;</code>
 
             <button
               type="button"
-              [disabled]="!model.apiKey"
-              (click)="copyToClipboard(model.apiKey, 'Clé API')"
-            >
-              Copier
-            </button>
-          </div>
-        </div>
-
-        <div class="endpoint-section">
-          <label>Endpoint interne Kubernetes</label>
-
-          <div class="copy-row">
-            <code>{{ model.predictionEndpoint }}</code>
-
-            <button
-              type="button"
-              (click)="copyToClipboard(model.predictionEndpoint, 'Endpoint interne')"
+              (click)="copyToClipboard('mlops_live_<votre_cle_api>', 'Clé API placeholder')"
             >
               Copier
             </button>

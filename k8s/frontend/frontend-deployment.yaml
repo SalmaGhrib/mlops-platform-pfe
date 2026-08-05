@@ -29,7 +29,7 @@ spec:
       containers:
         - name: mlops-frontend
 
-          image: acrmlopssalmav2.azurecr.io/mlops-frontend:retraining-display-fix-v2
+          image: acrmlopssalmav2.azurecr.io/mlops-frontend:frontend-ui-20260804-01
           imagePullPolicy: Always
 
           ports:

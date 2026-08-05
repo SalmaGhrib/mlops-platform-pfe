@@ -43,8 +43,9 @@ COPY mlops-backend/mlops-backend/target/mlops-backend-0.0.1-SNAPSHOT.jar \
 COPY mlops-backend/scripts/standardize_model_artifact.py \
      /app/scripts/standardize_model_artifact.py
 
-# Fichiers nécessaires aux builds Kaniko et au platform runner
-COPY mini-mlops /app/mini-mlops
+# Fichiers utilisés par Kaniko et le platform runner
+COPY mini-mlops \
+     /app/mini-mlops
 
 RUN chmod +x /app/scripts/standardize_model_artifact.py \
     && test -f /app/app.jar \

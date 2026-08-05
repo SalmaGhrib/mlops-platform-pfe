@@ -556,4 +556,22 @@ export class PredictionTestComponent implements OnInit {
       return String(value);
     }
   }
+
+  formatFileSize(bytes: number | null | undefined): string {
+    if (bytes === null || bytes === undefined || Number.isNaN(Number(bytes))) {
+      return '-';
+    }
+
+    const size = Number(bytes);
+
+    if (size < 1024) {
+      return `${size} octets`;
+    }
+
+    if (size < 1024 * 1024) {
+      return `${(size / 1024).toFixed(1)} Ko`;
+    }
+
+    return `${(size / (1024 * 1024)).toFixed(1)} Mo`;
+  }
 }

@@ -4,13 +4,16 @@
   >
     <ng-content></ng-content>
     <div
-      class="items-center hidden w-full h-full lg:w-1/2 bg-brand-950 dark:bg-white/5 lg:grid relative"
+      class="relative items-center hidden w-full h-full overflow-hidden lg:w-1/2 bg-brand-950 dark:bg-gray-950 lg:grid"
     >
+      <!-- Decorative elements -->
+      <div class="absolute -top-24 -right-24 h-80 w-80 rounded-full bg-brand-500/30 blur-[90px]"></div>
+      <div class="absolute -bottom-24 -left-24 h-80 w-80 rounded-full bg-blue-light-500/20 blur-[90px]"></div>
+
       <div class="flex items-center justify-center z-1">
-        <!-- ===== Common Grid Shape Start ===== -->
         <app-grid-shape />
-        <div class="flex flex-col items-center max-w-xs">
-          <a routerLink="/" class="block mb-4">
+        <div class="flex flex-col items-center max-w-md px-6 text-center">
+          <a routerLink="/" class="block mb-6">
             <img
               width="231"
               height="48"
@@ -18,14 +21,72 @@
               alt="Logo"
             />
           </a>
-          <h2 class="text-center text-lg font-semibold text-white">
-            Bienvenue sur notre plateforme MLOps
+
+          <span class="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-white">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+            Plateforme MLOps
+          </span>
+
+          <h2 class="mt-5 text-2xl font-bold leading-tight text-white sm:text-3xl">
+            Pilotez tout le cycle de vie de vos modèles Machine Learning
           </h2>
-          <p class="mt-3 text-center text-sm text-gray-400 dark:text-white/60">
-            Entraînez des modèles, suivez les expériences, gérez les versions,
-            déployez le meilleur modèle et surveillez les performances dans un
-            environnement unifié.
+          <p class="mt-3 text-sm text-gray-400 dark:text-white/60">
+            Entraînement, suivi des expériences, registre de modèles, déploiement,
+            tests de prédiction et monitoring — le tout centralisé dans une
+            interface unique et moderne.
           </p>
+
+          <!-- Key points -->
+          <ul class="mt-8 w-full max-w-sm space-y-3 text-left">
+            <li class="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+              <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-500/30 text-white">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+              </span>
+              <span class="text-sm font-medium text-white">Entraînement & suivi des expériences</span>
+            </li>
+            <li class="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+              <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-500/30 text-white">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/>
+                </svg>
+              </span>
+              <span class="text-sm font-medium text-white">Registre & versionnement des modèles</span>
+            </li>
+            <li class="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+              <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-500/30 text-white">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"/>
+                </svg>
+              </span>
+              <span class="text-sm font-medium text-white">Déploiement REST / batch & tests de prédiction</span>
+            </li>
+            <li class="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+              <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-500/30 text-white">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+              </span>
+              <span class="text-sm font-medium text-white">Monitoring utilisateur & admin en continu</span>
+            </li>
+          </ul>
+
+          <!-- Workflow strip -->
+          <div class="mt-8 flex flex-wrap items-center justify-center gap-2">
+            @for (step of workflowLabels; track $index) {
+              <span class="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs font-medium text-white">
+                {{ step }}
+              </span>
+              @if (!$last) {
+                <svg class="h-3.5 w-3.5 text-brand-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
+                </svg>
+              }
+            }
+          </div>
         </div>
       </div>
     </div>
