@@ -1,5 +1,6 @@
 package com.mlops.platform.service;
 
+import com.mlops.platform.entity.RetrainingState;
 import com.mlops.platform.repository.RetrainingConfigRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -66,12 +67,16 @@ public class RetrainingSchedulerPersistenceService {
             Long configId,
             LocalDateTime lastRetrainingAt,
             LocalDateTime nextRetrainingAt,
+            String sourceModelVersion,
+            Long experimentId,
             LocalDateTime updatedAt
     ) {
         return retrainingConfigRepository.releaseAfterSuccess(
                 configId,
                 lastRetrainingAt,
                 nextRetrainingAt,
+                sourceModelVersion,
+                experimentId,
                 updatedAt
         );
     }
@@ -92,5 +97,31 @@ public class RetrainingSchedulerPersistenceService {
                 decisionReason,
                 updatedAt
         );
+    }
+
+    @Transactional(
+            propagation = Propagation.REQUIRES_NEW,
+            timeout = 10
+    )
+    public int releaseAfterCooldown(
+            Long configId,
+            LocalDateTime nextRetrainingAt,
+            LocalDateTime cooldownUntil,
+            LocalDateTime updatedAt
+    ) {
+        return retrainingConfigRepository.releaseAfterCooldown(
+                configId,
+                nextRetrainingAt,
+                cooldownUntil,
+                updatedAt
+        );
+    }
+
+    @Transactional(
+            propagation = Propagation.REQUIRES_NEW,
+            timeout = 10
+    )
+    public int releaseExpiredCooldowns(LocalDateTime now) {
+        return retrainingConfigRepository.releaseExpiredCooldowns(now);
     }
 }

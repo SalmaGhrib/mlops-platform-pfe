@@ -41,7 +41,7 @@ data:
   # HikariCP
   # ============================================================
 
-  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "5"
+  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "12"
   SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
   SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT: "30000"
   SPRING_DATASOURCE_HIKARI_VALIDATION_TIMEOUT: "5000"
@@ -56,7 +56,11 @@ data:
 
   APP_UPLOAD_DIR: "/app/uploads"
   APP_UPLOADS_PVC_ENABLED: "true"
-  APP_UPLOADS_PVC_NAME: "backend-uploads-pvc"
+  # MEME PVC RWX que le backend (backend-deployment.yaml monte backend-uploads-rwx-pvc
+  # sur /app/uploads). Les Pods d'entraînement DOIVENT monter ce même volume,
+  # sinon les datasets sauvegardés par le backend ne sont pas visibles
+  # dans le Job Kubernetes (erreur "dataset path not found").
+  APP_UPLOADS_PVC_NAME: "backend-uploads-rwx-pvc"
   APP_UPLOADS_MOUNT_PATH: "/app/uploads"
 
   # ============================================================
@@ -183,16 +187,20 @@ data:
   # Réentraînement automatique
   # ============================================================
 
-  APP_RETRAINING_SCHEDULER_ENABLED: "false"
+  APP_RETRAINING_SCHEDULER_ENABLED: "true"
   APP_RETRAINING_SCHEDULER_INITIAL_DELAY_MS: "30000"
   APP_RETRAINING_SCHEDULER_DELAY_MS: "30000"
   APP_RETRAINING_SCHEDULER_STUCK_TIMEOUT_MINUTES: "30"
+
+  # Seuil d'échecs consécutifs avant cooldown
+  RETRAINING_MAX_CONSECUTIVE_FAILURES: "3"
+  RETRAINING_COOLDOWN_HOURS: "24"
 
   # ============================================================
   # Monitoring intelligent
   # ============================================================
 
-  APP_MONITORING_ALERTS_ENABLED: "false"
+  APP_MONITORING_ALERTS_ENABLED: "true"
   APP_MONITORING_ALERTS_INITIAL_DELAY_MS: "30000"
   APP_MONITORING_ALERTS_DELAY_MS: "60000"
 
@@ -213,7 +221,7 @@ data:
   # Nettoyage des notifications
   # ============================================================
 
-  APP_NOTIFICATIONS_CLEANUP_ENABLED: "false"
+  APP_NOTIFICATIONS_CLEANUP_ENABLED: "true"
   APP_NOTIFICATIONS_CLEANUP_INITIAL_DELAY_MS: "60000"
   APP_NOTIFICATIONS_CLEANUP_DELAY_MS: "900000"
 

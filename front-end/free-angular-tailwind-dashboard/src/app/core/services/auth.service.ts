@@ -1,7 +1,11 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
 import { BehaviorSubject, Observable, tap } from 'rxjs';
 import { Router } from '@angular/router';
+import {
+  SearchPageResponse,
+  SmartSearchParams
+} from '../../shared/components/common/smart-search/smart-search.types';
 
 export interface RegisterRequest {
   firstName: string;
@@ -93,6 +97,7 @@ export class AuthService {
   private readonly TOKEN_KEY = 'mlops_token';
   private readonly USER_KEY = 'mlops_user';
   private readonly ROLE_KEY = 'mlops_user_role';
+  private readonly EXPIRES_KEY = 'mlops_expires_at';
 
   private authStateSubject = new BehaviorSubject<boolean>(this.isLoggedIn());
   authState$ = this.authStateSubject.asObservable();
@@ -114,7 +119,8 @@ export class AuthService {
 
   const loginPayload = {
     email: data.email.trim(),
-    password: data.password
+    password: data.password,
+    rememberMe: data.rememberMe
   };
 
   return this.http.post<LoginResponse>(`${this.authApiUrl}/login`, loginPayload).pipe(
@@ -149,9 +155,16 @@ export class AuthService {
     storage.setItem(this.TOKEN_KEY, response.token);
     storage.setItem(this.ROLE_KEY, normalizedRole);
     storage.setItem(this.USER_KEY, JSON.stringify(user));
+    storage.setItem(this.EXPIRES_KEY, this.computeExpiresAt(rememberMe));
 
     this.authStateSubject.next(true);
     this.roleSubject.next(normalizedRole);
+  }
+
+  private computeExpiresAt(rememberMe: boolean): string {
+    const now = Date.now();
+    const durationMs = rememberMe ? 7 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+    return new Date(now + durationMs).toISOString();
   }
 
   verifyEmail(token: string): Observable<{ message: string }> {
@@ -162,11 +175,14 @@ export class AuthService {
 
   saveToken(token: string, rememberMe: boolean): void {
     this.removeKeyFromBothStorages(this.TOKEN_KEY);
+    this.removeKeyFromBothStorages(this.EXPIRES_KEY);
 
     if (rememberMe) {
       localStorage.setItem(this.TOKEN_KEY, token);
+      localStorage.setItem(this.EXPIRES_KEY, this.computeExpiresAt(true));
     } else {
       sessionStorage.setItem(this.TOKEN_KEY, token);
+      sessionStorage.setItem(this.EXPIRES_KEY, this.computeExpiresAt(false));
     }
 
     this.authStateSubject.next(true);
@@ -180,7 +196,26 @@ export class AuthService {
   }
 
   isLoggedIn(): boolean {
-    return !!this.getToken();
+    if (!this.getToken()) {
+      return false;
+    }
+
+    const expiresAt =
+      localStorage.getItem(this.EXPIRES_KEY) ||
+      sessionStorage.getItem(this.EXPIRES_KEY);
+
+    if (!expiresAt) {
+      return true;
+    }
+
+    const parsed = new Date(expiresAt).getTime();
+
+    if (!Number.isFinite(parsed) || parsed <= Date.now()) {
+      this.clearAuthStorage();
+      return false;
+    }
+
+    return true;
   }
 
   saveUserRole(role: string, rememberMe: boolean): void {
@@ -309,6 +344,30 @@ export class AuthService {
     );
   }
 
+  searchUsers(params: SmartSearchParams): Observable<SearchPageResponse<UserResponse>> {
+    let httpParams = new HttpParams();
+
+    if (params.q) {
+      httpParams = httpParams.set('q', params.q);
+    }
+    if (params.status) {
+      httpParams = httpParams.set('status', params.status);
+    }
+    if (params.role) {
+      httpParams = httpParams.set('role', params.role);
+    }
+    httpParams = httpParams.set('page', String(params.page));
+    httpParams = httpParams.set('size', String(params.size));
+
+    return this.http.get<SearchPageResponse<UserResponse>>(
+      `${this.adminUsersApiUrl}/search`,
+      {
+        headers: this.getAuthHeaders(),
+        params: httpParams,
+      }
+    );
+  }
+
   updateUserRole(userId: number, role: string): Observable<UserResponse> {
     return this.http.put<UserResponse>(
       `${this.adminUsersApiUrl}/${userId}/role`,
@@ -386,6 +445,7 @@ export class AuthService {
     this.removeKeyFromBothStorages(this.TOKEN_KEY);
     this.removeKeyFromBothStorages(this.USER_KEY);
     this.removeKeyFromBothStorages(this.ROLE_KEY);
+    this.removeKeyFromBothStorages(this.EXPIRES_KEY);
 
     /*
      * Anciennes clés utilisées avant.

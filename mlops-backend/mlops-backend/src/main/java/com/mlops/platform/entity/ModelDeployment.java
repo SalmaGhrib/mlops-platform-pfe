@@ -70,6 +70,22 @@ public class ModelDeployment {
     @Column(nullable = false)
     private Boolean active = false;
 
+    /*
+     * Blue/green : couleur (blue|green) portée par les pods de ce déploiement.
+     * Le Service stable du modèle (<model>-service) route vers le track actif
+     * via le label serving-track.
+     */
+    @Column(name = "serving_track", length = 10)
+    private String servingTrack;
+
+    /*
+     * Blue/green : nom du Service Kubernetes stable du modèle
+     * (ex. detection-spam-service), indépendant de la version.
+     * Conservé sur chaque ligne pour que le reconciler puisse basculer/rollback.
+     */
+    @Column(name = "stable_service_name", length = 200)
+    private String stableServiceName;
+
     private LocalDateTime deployedAt;
 
     private LocalDateTime createdAt;
@@ -274,6 +290,22 @@ public class ModelDeployment {
 
     public void setActive(Boolean active) {
         this.active = active != null ? active : false;
+    }
+
+    public String getServingTrack() {
+        return servingTrack;
+    }
+
+    public void setServingTrack(String servingTrack) {
+        this.servingTrack = cleanText(servingTrack);
+    }
+
+    public String getStableServiceName() {
+        return stableServiceName;
+    }
+
+    public void setStableServiceName(String stableServiceName) {
+        this.stableServiceName = cleanText(stableServiceName);
     }
 
     public LocalDateTime getDeployedAt() {

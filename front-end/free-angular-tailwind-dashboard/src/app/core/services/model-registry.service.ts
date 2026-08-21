@@ -1,6 +1,10 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Observable, throwError } from 'rxjs';
+import {
+  SearchPageResponse,
+  SmartSearchParams
+} from '../../shared/components/common/smart-search/smart-search.types';
 
 export type DeploymentVisibility = 'PRIVATE' | 'PUBLIC_API' | 'SHARED';
 
@@ -240,6 +244,49 @@ export class ModelRegistryService {
         headers: this.getAuthHeaders()
       }
     );
+  }
+
+  searchMyModels(params: SmartSearchParams): Observable<SearchPageResponse<ModelRegistryItem>> {
+    return this.http.get<SearchPageResponse<ModelRegistryItem>>(
+      `${this.apiUrl}/my-models/search`,
+      {
+        headers: this.getAuthHeaders(),
+        params: this.buildSearchParams(params)
+      }
+    );
+  }
+
+  searchDeployments(
+    scope: string,
+    params: SmartSearchParams
+  ): Observable<SearchPageResponse<ModelDeploymentResponse>> {
+    let httpParams = this.buildSearchParams(params).set('scope', scope);
+
+    return this.http.get<SearchPageResponse<ModelDeploymentResponse>>(
+      `${this.deploymentApiUrl}/search`,
+      {
+        headers: this.getAuthHeaders(),
+        params: httpParams
+      }
+    );
+  }
+
+  private buildSearchParams(params: SmartSearchParams): HttpParams {
+    let httpParams = new HttpParams();
+
+    if (params.q) {
+      httpParams = httpParams.set('q', params.q);
+    }
+    if (params.projectType) {
+      httpParams = httpParams.set('projectType', params.projectType);
+    }
+    if (params.dataType) {
+      httpParams = httpParams.set('dataType', params.dataType);
+    }
+    httpParams = httpParams.set('page', String(params.page));
+    httpParams = httpParams.set('size', String(params.size));
+
+    return httpParams;
   }
 
   syncMyModels(): Observable<ModelRegistryItem[]> {

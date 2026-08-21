@@ -48,6 +48,8 @@ Si **aucun email** n'est renseigné à la création, la clé est affichée **une
 
 ```
 POST http://128.251.112.197/api/external/models/{registeredModelName}/predict
+POST http://128.251.112.197/api/external/models/{registeredModelName}/predict-image
+POST http://128.251.112.197/api/external/models/{registeredModelName}/predict-text
 ```
 
 | Header | Obligatoire | Description |
@@ -55,6 +57,12 @@ POST http://128.251.112.197/api/external/models/{registeredModelName}/predict
 | `X-API-KEY` | Oui | Clé livrée par le lien sécurisé |
 | `X-USER-EMAIL` | Si modèle **SHARED** | Email du client autorisé (liste de partage) |
 | `Content-Type` | Oui | `application/json` |
+
+> **Le client ne fournit JAMAIS `model_name` / `model_alias` dans le body.**
+> Le modèle est identifié par l'URL (`{registeredModelName}`). Le Gateway résout la
+> version active côté backend et injecte automatiquement `model_name` + `model_alias="production"`
+> avant d'appeler le model server, sans écraser les features métier. Toute tentative
+> d'envoyer ces champs est ignorée/écrasée par les valeurs autoritatives du backend.
 
 Formats de body supportés :
 

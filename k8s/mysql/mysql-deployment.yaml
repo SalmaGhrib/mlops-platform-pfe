@@ -59,6 +59,10 @@ spec:
             - --character-set-server=utf8mb4
             - --collation-server=utf8mb4_unicode_ci
 
+            # Standalone (ni réplication ni PITR) : les binlogs inutiles
+            # remplissaient le disque de 32G (39+ fichiers de 1,1G).
+            - --skip-log-bin
+
             # Limite raisonnable pour éviter la saturation.
             - --max-connections=100
 

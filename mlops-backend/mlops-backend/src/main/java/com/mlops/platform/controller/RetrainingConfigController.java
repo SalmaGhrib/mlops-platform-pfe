@@ -4,10 +4,13 @@ import com.mlops.platform.dto.ManualRetrainingResponse;
 import com.mlops.platform.dto.ProjectRetrainingStatusResponse;
 import com.mlops.platform.dto.RetrainingConfigRequest;
 import com.mlops.platform.dto.MlExperimentResponse;
+import com.mlops.platform.dto.RetrainingDryRunResponse;
+import com.mlops.platform.dto.RetrainingSummaryDTO;
 import com.mlops.platform.entity.RetrainingConfig;
 import com.mlops.platform.exception.RetrainingConflictException;
 import com.mlops.platform.service.AutoRetrainingService;
 import com.mlops.platform.service.RetrainingConfigService;
+import com.mlops.platform.service.RetrainingDryRunService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -19,13 +22,16 @@ public class RetrainingConfigController {
 
     private final RetrainingConfigService retrainingConfigService;
     private final AutoRetrainingService autoRetrainingService;
+    private final RetrainingDryRunService retrainingDryRunService;
 
     public RetrainingConfigController(
             RetrainingConfigService retrainingConfigService,
-            AutoRetrainingService autoRetrainingService
+            AutoRetrainingService autoRetrainingService,
+            RetrainingDryRunService retrainingDryRunService
     ) {
         this.retrainingConfigService = retrainingConfigService;
         this.autoRetrainingService = autoRetrainingService;
+        this.retrainingDryRunService = retrainingDryRunService;
     }
 
     /*
@@ -162,6 +168,15 @@ public class RetrainingConfigController {
                     .body(body);
 
         } catch (Exception error) {
+            String message = safeMessage(error.getMessage());
+
+            boolean noSource = message != null
+                    && message.toLowerCase().contains("no valid production source");
+
+            String code = noSource
+                    ? "BLOCKED_NO_SOURCE"
+                    : "RETRAINING_ERROR";
+
             ManualRetrainingResponse body =
                     new ManualRetrainingResponse(
                             false,
@@ -170,8 +185,13 @@ public class RetrainingConfigController {
                             null,
                             "FAILED",
                             "MANUAL",
-                            safeMessage(error.getMessage()),
-                            "RETRAINING_ERROR"
+                            noSource
+                                    ? "Réentraînement impossible : aucun modèle "
+                                    + "Production valide n'a été trouvé. "
+                                    + "Vérifiez qu'un modèle est bien déployé "
+                                    + "en Production."
+                                    : message,
+                            code
                     );
 
             System.err.println(
@@ -179,13 +199,23 @@ public class RetrainingConfigController {
                             + "projectId="
                             + projectId
                             + ", reason="
-                            + safeMessage(error.getMessage())
+                            + message
             );
 
             return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .status(noSource
+                            ? HttpStatus.UNPROCESSABLE_ENTITY
+                            : HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(body);
         }
+    }
+
+    @GetMapping("/dry-run")
+    public ResponseEntity<RetrainingDryRunResponse> dryRun() {
+        RetrainingDryRunResponse response =
+                retrainingDryRunService.diagnose();
+
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/projects/{projectId}/status")
@@ -230,6 +260,69 @@ public class RetrainingConfigController {
         }
 
         return ResponseEntity.ok(config);
+    }
+
+    /**
+     * Résumé unique pour la carte projet (source de vérité persistée).
+     * Le frontend affiche UNIQUEMENT ce DTO : strategy/state/dates viennent
+     * exactement de la base, jamais d'un texte générique reconstruit côté Angular.
+     */
+    @GetMapping("/projects/{projectId}/summary")
+    public ResponseEntity<RetrainingSummaryDTO> getRetrainingSummary(
+            @PathVariable Long projectId
+    ) {
+        RetrainingConfig config = retrainingConfigService.getConfig(projectId);
+
+        if (config == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        RetrainingSummaryDTO summary = new RetrainingSummaryDTO();
+        summary.setProjectId(projectId);
+        summary.setEnabled(config.isEnabled());
+        summary.setStrategy(
+                config.getStrategy() != null ? config.getStrategy().name() : "SCHEDULED_ONLY"
+        );
+        summary.setState(
+                config.getState() != null ? config.getState().name() : "IDLE"
+        );
+        summary.setLastRetrainingAt(
+                config.getLastRetrainingAt() != null
+                        ? config.getLastRetrainingAt().toString()
+                        : null
+        );
+        summary.setNextRetrainingAt(
+                config.getNextRetrainingAt() != null
+                        ? config.getNextRetrainingAt().toString()
+                        : null
+        );
+        summary.setLastMonitoringCheckAt(
+                config.getLastMonitoringCheckAt() != null
+                        ? config.getLastMonitoringCheckAt().toString()
+                        : null
+        );
+        summary.setNextMonitoringCheckAt(
+                config.getNextMonitoringCheckAt() != null
+                        ? config.getNextMonitoringCheckAt().toString()
+                        : null
+        );
+        summary.setLastTriggerReason(config.getLastTriggerReason());
+        summary.setRunning(
+                config.isRunning()
+                        || autoRetrainingService.hasActiveExperimentForProject(projectId)
+        );
+        summary.setCooldownUntil(
+                config.getCooldownUntil() != null
+                        ? config.getCooldownUntil().toString()
+                        : null
+        );
+        summary.setFrequencyLabel(
+                config.getFrequencyType() != null
+                        ? config.getFrequencyType() + "/" + config.getFrequencyValue()
+                        : "WEEK/1"
+        );
+
+        return ResponseEntity.ok(summary);
     }
 
     private String safeMessage(String message) {

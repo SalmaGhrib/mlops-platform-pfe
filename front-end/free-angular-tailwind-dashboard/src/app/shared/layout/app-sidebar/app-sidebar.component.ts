@@ -80,8 +80,10 @@ export class AppSidebarComponent implements OnInit, OnDestroy {
       },
     ];
 
+    const adminItems: NavItem[] = [];
+
     if (this.isAdmin) {
-      accountItems.push(
+      adminItems.push(
         {
           icon: this.usersIcon,
           name: 'Gestion des Utilisateurs',
@@ -95,13 +97,13 @@ export class AppSidebarComponent implements OnInit, OnDestroy {
       );
     }
 
-    return [
+    const groups: NavGroup[] = [
       {
         title: '',
         items: [
           {
             icon: this.dashboardIcon,
-            name: 'Dashboard',
+            name: 'Accueil',
             path: '/',
           },
         ],
@@ -151,11 +153,21 @@ export class AppSidebarComponent implements OnInit, OnDestroy {
           },
         ],
       },
-      {
-        title: 'ACCOUNT',
-        items: accountItems,
-      },
     ];
+
+    if (adminItems.length > 0) {
+      groups.push({
+        title: 'ADMINISTRATION',
+        items: adminItems,
+      });
+    }
+
+    groups.push({
+      title: 'COMPTE',
+      items: accountItems,
+    });
+
+    return groups;
   }
 
   ngOnInit(): void {

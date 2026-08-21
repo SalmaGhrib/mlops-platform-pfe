@@ -2017,8 +2017,16 @@ private ModelVersionInfo findModelVersionInfoByRegisteredModelGet(
                 versionDto.getRunId()
         );
 
+        /*
+         * IMPORTANT : ne jamais écraser le message existant (il peut contenir
+         * l'historique de standardisation). On ajoute seulement une ligne.
+         * Un écrasement cassait l'idempotence du standardizer.
+         */
         experiment.setMessage(
-                "Synchronisation MLflow Registry terminée pour un run réussi."
+                appendSafeMessage(
+                        experiment.getMessage(),
+                        "Synchronisation MLflow Registry terminée pour un run réussi."
+                )
         );
         experiment.setErrorMessage(null);
 
@@ -3239,6 +3247,40 @@ private List<MlflowModelVersionDto> getLatestVersionsFromRegisteredModel(String 
         }
 
         return uri;
+    }
+
+    private String appendSafeMessage(String oldMessage, String addition) {
+        String base = oldMessage == null ? "" : oldMessage.trim();
+
+        if (addition == null || addition.isBlank()) {
+            return limitMessage(base, 3000);
+        }
+
+        if (base.contains(addition)) {
+            return limitMessage(base, 3000);
+        }
+
+        String result = base.isBlank() ? addition : base + " " + addition;
+
+        return limitMessage(result, 3000);
+    }
+
+    private String limitMessage(String value, int maxLength) {
+        if (value == null) {
+            return null;
+        }
+
+        String cleaned = value
+                .replace("\u0000", "")
+                .replace("\r", " ")
+                .replace("\n", " ")
+                .trim();
+
+        if (cleaned.length() <= maxLength) {
+            return cleaned;
+        }
+
+        return cleaned.substring(0, Math.max(0, maxLength - 16)) + "... [truncated]";
     }
 
     private String escapeMlflowFilterValue(String value) {

@@ -63,6 +63,16 @@ export interface UserMonitoringAlertItem {
   source: string;
 }
 
+export interface UserMonitoringAlert {
+  id: number;
+  alertType: string;
+  severity: string;
+  title: string;
+  message: string;
+  targetType: string;
+  createdAt: string;
+}
+
 export interface UserMonitoringActivityItem {
   date: string | null;
   title: string;
@@ -99,6 +109,7 @@ export interface UserMonitoringProjectDashboard {
   nextRetrainingAt: string | null;
   lastRetrainingAt: string | null;
   lastMonitoringCheckAt: string | null;
+  nextMonitoringCheckAt?: string | null;
   lastDecisionReason: string | null;
   failureMonitoringEnabled: boolean;
   performanceMonitoringEnabled: boolean;
@@ -111,12 +122,20 @@ export interface UserMonitoringProjectDashboard {
   predictionSuccessRate: number;
   lastPredictionAt: string | null;
 
+  performanceDropPercent: number;
+
+  globalScoreThreshold: number | null;
+  currentProductionGlobalScore: number | null;
+  qualityStatus: string;
+  qualityReason: string;
+
   healthScore: number;
 
   scoreHistory: UserMonitoringScorePoint[];
   deployments: UserMonitoringDeploymentItem[];
   alerts: UserMonitoringAlertItem[];
   activities: UserMonitoringActivityItem[];
+  recentAlerts: UserMonitoringAlert[];
 }
 
 export interface UserMonitoringDashboardResponse {

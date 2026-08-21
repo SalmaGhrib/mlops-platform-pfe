@@ -41,6 +41,14 @@
             <h2 class="focus-name">{{ project.projectName }}</h2>
             <p class="focus-desc" *ngIf="project.description">{{ project.description }}</p>
           </div>
+
+          <div class="quality-badge-wrap">
+            <span [class]="'badge ' + qualityStatusClass(project.qualityStatus)">
+              Qualité : {{ qualityStatusLabel(project.qualityStatus) }}
+            </span>
+            <span *ngIf="project.qualityStatus === 'CONFORMING'">✅</span>
+            <span *ngIf="project.qualityStatus === 'INSUFFICIENT'">⚠️</span>
+          </div>
         </div>
 
         <div class="focus-select-wrap">
@@ -111,8 +119,8 @@
           </span>
           <div>
             <span class="pkpi-label">Prochain réentraînement</span>
-            <strong class="pkpi-value" *ngIf="project.retrainingEnabled && project.nextRetrainingAt">
-              {{ formatShortDate(project.nextRetrainingAt) }}
+            <strong class="pkpi-value" *ngIf="project.retrainingEnabled">
+              {{ getRetrainingNextDate(project) }}
             </strong>
             <strong class="pkpi-value pkpi-muted" *ngIf="!project.retrainingEnabled">Non planifié</strong>
           </div>
@@ -414,6 +422,30 @@
             <strong>{{ project.bestGlobalScore ?? '-' }}</strong>
           </div>
           <div>
+            <span>Score production :</span>
+            <strong>{{ formatScore(project.currentProductionGlobalScore) }}</strong>
+          </div>
+          <div>
+            <span>Seuil qualité :</span>
+            <strong>{{ formatScore(project.globalScoreThreshold) }}</strong>
+          </div>
+          <div>
+            <span>Statut qualité :</span>
+            <strong>
+              <span [class]="'badge ' + qualityStatusClass(project.qualityStatus)">
+                {{ qualityStatusLabel(project.qualityStatus) }}
+              </span>
+            </strong>
+          </div>
+          <div>
+            <span>Raison qualité :</span>
+            <strong>{{ project.qualityReason || '-' }}</strong>
+          </div>
+          <div>
+            <span>Baisse de performance :</span>
+            <strong>{{ project.performanceDropPercent ?? 0 }}%</strong>
+          </div>
+          <div>
             <span>Prediction latency :</span>
             <strong>{{ project.averagePredictionLatencyMs ?? 0 }} ms</strong>
           </div>
@@ -435,7 +467,7 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
             </svg>
           </span>
-          <h3>Réentraînement intelligent</h3>
+          <h3>{{ getRetrainingSectionTitle(project.retrainingStrategy) }}</h3>
         </div>
 
         <div class="details-list">
@@ -445,7 +477,7 @@
           </div>
           <div>
             <span>Stratégie :</span>
-            <strong>{{ project.retrainingStrategy || '-' }}</strong>
+            <strong>{{ getRetrainingStrategyLabel(project.retrainingStrategy) }}</strong>
           </div>
           <div>
             <span>Dernier retraining :</span>
@@ -507,6 +539,43 @@
 
     <!-- alerts & activity -->
     <div class="bottom-grid" *ngIf="projectDashboard as project">
+      <div class="table-card">
+        <div class="card-heading">
+          <span class="card-icon kpi-cyan">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+            </svg>
+          </span>
+          <h3>Alertes récentes</h3>
+          <span *ngIf="project.recentAlerts?.length" class="heading-count alert-count">
+            {{ project.recentAlerts.length }}
+          </span>
+        </div>
+
+        <div *ngIf="!project.recentAlerts?.length" class="empty-state">
+          <span class="empty-icon">✓</span>
+          <span>Aucune alerte récente.</span>
+        </div>
+
+        <div *ngFor="let alert of project.recentAlerts" class="row-item">
+          <div class="row-icon-box" [ngClass]="severityClass(alert.severity)">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+          </div>
+          <div class="row-body">
+            <div class="row-title">{{ alert.title }}</div>
+            <div class="row-subtitle">{{ alert.message }}</div>
+          </div>
+          <div class="row-meta">
+            <span [class]="badgeClass(alert.severity)">
+              {{ alert.severity }}
+            </span>
+            <small>{{ formatShortDate(alert.createdAt) }}</small>
+          </div>
+        </div>
+      </div>
+
       <div class="table-card">
         <div class="card-heading">
           <span class="card-icon kpi-red">

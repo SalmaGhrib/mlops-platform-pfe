@@ -4,6 +4,7 @@ import com.mlops.platform.entity.ModelApiKey;
 import com.mlops.platform.entity.ModelDeployment;
 import com.mlops.platform.exception.GatewayException;
 import com.mlops.platform.service.ModelGatewayService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
 import org.springframework.util.LinkedMultiValueMap;
@@ -27,8 +28,14 @@ import java.util.UUID;
  *
  * POST /api/external/models/{registeredModelName}/predict
  * POST /api/external/models/{registeredModelName}/predict-image
+ * POST /api/external/models/{registeredModelName}/predict-text
  *
  * Header obligatoire : X-API-KEY (la clé identifie modèle, propriétaire, quota et usage).
+ *
+ * Le client externe ne fournit JAMAIS model_name / model_alias : le modèle est
+ * identifié par l'URL et le Gateway injecte automatiquement model_name +
+ * model_alias="production" (résolution de la version active côté backend) avant
+ * d'appeler le model server, sans écraser les features métier.
  *
  * Codes d'erreur :
  * - 401 MISSING_API_KEY / INVALID_API_KEY
@@ -48,9 +55,17 @@ public class ExternalPredictionController {
     private final ModelGatewayService modelGatewayService;
     private final RestTemplate restTemplate;
 
+    @Autowired
     public ExternalPredictionController(ModelGatewayService modelGatewayService) {
+        this(modelGatewayService, new RestTemplate());
+    }
+
+    ExternalPredictionController(
+            ModelGatewayService modelGatewayService,
+            RestTemplate restTemplate
+    ) {
         this.modelGatewayService = modelGatewayService;
-        this.restTemplate = new RestTemplate();
+        this.restTemplate = restTemplate;
     }
 
     @PostMapping("/models/{registeredModelName}/predict")
@@ -424,6 +439,33 @@ public class ExternalPredictionController {
         );
     }
 
+    /*
+     * Enrichit le payload JSON envoyé au model server avec les métadonnées
+     * internes résolues côté backend (le client externe ne doit JAMAIS les fournir) :
+     *   model_name  = le registeredModelName extrait de l'URL /models/{name}/predict
+     *   model_alias = "production" (l'alias MLflow @production est maintenu par
+     *                 le reconciler AutoProductionDeploymentReconcilerService)
+     *
+     * Les features métier (rows / data / text) ne sont PAS écrasées : l'injection
+     * se fait uniquement au niveau racine, jamais à l'intérieur des lignes.
+     */
+    private Map<String, Object> enrichWithModelMetadata(
+            Map<String, Object> normalizedBody,
+            ModelDeployment deployment
+    ) {
+        Map<String, Object> enriched = new LinkedHashMap<>(normalizedBody);
+
+        String modelName = deployment == null ? null : deployment.getRegisteredModelName();
+
+        if (modelName != null && !modelName.isBlank()) {
+            enriched.put("model_name", modelName.trim());
+        }
+
+        enriched.put("model_alias", "production");
+
+        return enriched;
+    }
+
     private Object firstExistingValue(Map<String, Object> body, String... keys) {
         if (body == null || keys == null) {
             return null;
@@ -515,11 +557,16 @@ public class ExternalPredictionController {
                 forcedFormat
         );
 
+        Map<String, Object> enrichedBody = enrichWithModelMetadata(
+                normalizedBody,
+                deployment
+        );
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
 
-        return new HttpEntity<>(normalizedBody, headers);
+        return new HttpEntity<>(enrichedBody, headers);
     }
 
     /*

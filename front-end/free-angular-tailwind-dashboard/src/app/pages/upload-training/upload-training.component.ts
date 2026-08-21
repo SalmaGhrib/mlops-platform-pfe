@@ -11,9 +11,15 @@ import {
   ExperimentService,
   MlExperimentResponse,
   MlProjectResponse,
+  PipelineStatusResponse,
   RuntimeAnalysisResult,
   UploadAndRunCustomModelRequest,
 } from '../../core/services/experiment.service';
+import {
+  ModelDeploymentResponse,
+  ModelRegistryService
+} from '../../core/services/model-registry.service';
+import { PipelineTrackerComponent } from '../../shared/components/pipeline-tracker/pipeline-tracker.component';
 
 type ReplacementAction = 'KEEP' | 'REPLACE';
 type ProjectType = 'classification' | 'regression';
@@ -48,12 +54,56 @@ interface AlgorithmSelection {
 @Component({
   selector: 'app-upload-training',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, KeyValuePipe],
+  imports: [CommonModule, FormsModule, RouterLink, KeyValuePipe, PipelineTrackerComponent],
   templateUrl: './upload-training.component.html',
 })
 export class UploadTrainingComponent implements OnInit, OnDestroy {
   projects: MlProjectResponse[] = [];
   experiments: MlExperimentResponse[] = [];
+
+  get latestExperiment(): MlExperimentResponse | null {
+    return this.experiments.length > 0 ? this.experiments[0] : null;
+  }
+
+  get hasRunningExperiment(): boolean {
+    return this.experiments.some((experiment) =>
+      ['CREATED', 'RUNNING', 'PENDING', 'BUILDING_IMAGE', 'IMAGE_READY'].includes(
+        String(experiment.status || '').toUpperCase()
+      )
+    );
+  }
+
+  selectedExperimentId: number | null = null;
+  trackedDeployment: ModelDeploymentResponse | null = null;
+  trackingStartedAt: number | null = null;
+  pipelineStatus: PipelineStatusResponse | null = null;
+
+  get trackedExperiment(): MlExperimentResponse | null {
+    if (this.selectedExperimentId != null) {
+      const selected = this.experiments.find(
+        (experiment) => experiment.id === this.selectedExperimentId
+      );
+
+      if (selected) {
+        return selected;
+      }
+    }
+
+    return this.experiments.length > 0 ? this.experiments[0] : null;
+  }
+
+  isExperimentSelected(experiment: MlExperimentResponse): boolean {
+    return this.selectedExperimentId != null && this.selectedExperimentId === experiment.id;
+  }
+
+  selectExperiment(experiment: MlExperimentResponse): void {
+    this.selectedExperimentId = experiment.id;
+    this.trackedDeployment = null;
+    this.trackingStartedAt = Date.now();
+    this.pipelineStatus = null;
+    this.loadTrackedDeployment();
+    this.startPollingExperiments();
+  }
 
   selectedProjectId: number | null = null;
 
@@ -87,7 +137,10 @@ export class UploadTrainingComponent implements OnInit, OnDestroy {
 
   private pollingIntervalId: any = null;
 
-  constructor(private experimentService: ExperimentService) {}
+  constructor(
+    private experimentService: ExperimentService,
+    private modelRegistryService: ModelRegistryService
+  ) {}
 
   ngOnInit(): void {
     this.loadProjects();
@@ -385,27 +438,36 @@ getDetectedComponentsCount(): number {
         return;
       }
 
+      const tracked = this.trackedExperiment;
+
+      if (tracked && tracked.id != null) {
+        this.experimentService.getPipelineStatus(tracked.id).subscribe({
+          next: (pipeline) => {
+            this.pipelineStatus = pipeline || null;
+          },
+          error: () => {
+            this.pipelineStatus = null;
+          }
+        });
+      }
+
       this.experimentService.getExperimentsByProject(this.selectedProjectId).subscribe({
         next: (experiments: MlExperimentResponse[]) => {
           this.experiments = this.normalizeExperiments(experiments || []);
 
-          const hasRunningExperiment = this.experiments.some((experiment) =>
-            ['CREATED', 'RUNNING', 'PENDING', 'BUILDING_IMAGE', 'IMAGE_READY'].includes(
-              String(experiment.status || '').toUpperCase()
-            )
-          );
-
-          if (!hasRunningExperiment) {
+          if (this.isTrackingFinished()) {
             this.stopPollingExperiments();
-            this.syncExperimentsForSelectedProject();
+            return;
           }
+
+          this.loadTrackedDeployment();
         },
         error: () => {
           this.stopPollingExperiments();
           this.loadExperimentsForSelectedProject();
         },
       });
-    }, 10000);
+    }, 3000);
   }
 
   stopPollingExperiments(): void {
@@ -413,6 +475,61 @@ getDetectedComponentsCount(): number {
       clearInterval(this.pollingIntervalId);
       this.pollingIntervalId = null;
     }
+  }
+
+  loadTrackedDeployment(): void {
+    const tracked = this.trackedExperiment;
+
+    if (!tracked || !tracked.projectId) {
+      this.trackedDeployment = null;
+      return;
+    }
+
+    this.modelRegistryService.getActiveDeploymentByProject(tracked.projectId)
+      .subscribe({
+        next: (deployment) => {
+          this.trackedDeployment = deployment || null;
+        },
+        error: () => {
+          this.trackedDeployment = null;
+        },
+      });
+  }
+
+  isTrackingFinished(): boolean {
+    const tracked = this.trackedExperiment;
+
+    if (!tracked) {
+      return true;
+    }
+
+    const status = String(tracked.status || '').toUpperCase();
+
+    if (status === 'FAILED' || status === 'ERROR' || status === 'CANCELLED' || status === 'CANCELED') {
+      return true;
+    }
+
+    if (status === 'CREATED' || status === 'RUNNING' || status === 'PENDING') {
+      return false;
+    }
+
+    const deploymentStatus = String(this.trackedDeployment?.deploymentStatus || '').toUpperCase();
+
+    if (deploymentStatus === 'DEPLOYED' || deploymentStatus === 'FAILED') {
+      return true;
+    }
+
+    if (deploymentStatus === 'PENDING' || deploymentStatus === 'DEPLOYING') {
+      return false;
+    }
+
+    if (this.trackingStartedAt == null) {
+      this.trackingStartedAt = Date.now();
+    }
+
+    const elapsedMinutes = (Date.now() - this.trackingStartedAt) / 60000;
+
+    return elapsedMinutes > 20;
   }
 
   onModelFileSelected(event: Event): void {
@@ -1125,6 +1242,10 @@ getDetectedComponentsCount(): number {
           ...this.experiments.filter((item) => item.id !== normalized.id),
         ];
 
+        this.selectedExperimentId = normalized.id;
+        this.trackedDeployment = null;
+        this.trackingStartedAt = Date.now();
+
         this.startPollingExperiments();
       },
       error: (error) => {
@@ -1750,6 +1871,11 @@ getDetectedComponentsCount(): number {
     }
 
     return 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300';
+  }
+
+  isFailed(experiment: any): boolean {
+    const normalized = String(experiment?.status || '').toUpperCase();
+    return normalized === 'FAILED' || normalized === 'ERROR' || normalized === 'BUILD_FAILED';
   }
 
   formatMetric(metric?: string | null): string {

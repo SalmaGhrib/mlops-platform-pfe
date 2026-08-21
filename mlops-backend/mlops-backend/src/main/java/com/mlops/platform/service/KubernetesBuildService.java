@@ -1,17 +1,21 @@
 package com.mlops.platform.service;
-
+import org.springframework.beans.factory.annotation.Value;
+import com.mlops.platform.config.UploadsStorageProperties;
 import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.MlProject;
+import com.mlops.platform.entity.UploadedFileType;
 import com.mlops.platform.entity.UploadedProjectFile;
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ConfigMapBuilder;
+import io.fabric8.kubernetes.api.model.EnvVar;
+import io.fabric8.kubernetes.api.model.EnvVarBuilder;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientBuilder;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -58,12 +62,6 @@ public class KubernetesBuildService {
     @Value("${app.kubernetes.custom-job.backoff-limit:0}")
     private Integer backoffLimit;
 
-    @Value("${app.uploads.pvc-name:mlops-uploads-pvc}")
-private String uploadsPvcName;
-
-@Value("${app.uploads.mount-path:/app/uploads}")
-private String uploadsMountPath;
-
     @Value("${app.kaniko.docker-config-secret:kaniko-docker-config}")
     private String kanikoDockerConfigSecret;
 
@@ -75,6 +73,15 @@ private String uploadsMountPath;
 
     @Value("${app.platform-runtime-root:/app/mini-mlops}")
     private String platformRuntimeRoot;
+
+    private final DatasetFileResolverService datasetFileResolverService;
+
+    @Autowired
+    private UploadsStorageProperties uploadsStorageProperties;
+
+    public KubernetesBuildService(DatasetFileResolverService datasetFileResolverService) {
+        this.datasetFileResolverService = datasetFileResolverService;
+    }
 
     public static class BuildJobResult {
         private String buildJobName;
@@ -142,6 +149,7 @@ private String uploadsMountPath;
         System.out.println("[CUSTOM-DOCKER] Dockerfile contains ENV PYTHONPATH=/workspace=" + dockerfileForCheck.contains("pythonpath=/workspace") );
         System.out.println("[CUSTOM-DOCKER] Reconstructed build context will contain src/custom_models/generic_pyfunc_wrapper.py=" + buildContextFiles.containsKey("src__custom_models__generic_pyfunc_wrapper.py"));
         System.out.println("[CUSTOM-DOCKER] Reconstructed build context will contain src/custom_models/import_detector.py=" + buildContextFiles.containsKey("src__custom_models__import_detector.py"));
+        System.out.println("[CUSTOM-DOCKER] Reconstructed build context will contain src/custom_models/model_artifact_detector.py=" + buildContextFiles.containsKey("src__custom_models__model_artifact_detector.py"));
 
         try {
             validateBuildContextAgainstDockerfile(buildContextFiles, buildContextFiles.get(STANDARD_DOCKERFILE));
@@ -354,7 +362,7 @@ private String uploadsMountPath;
             throw new RuntimeException("Model Python file not found: " + modelFile.getFilePath());
         }
 
-        UploadedProjectFile datasetFile = experiment.getDatasetFile();
+        UploadedProjectFile datasetFile = datasetFileResolverService.resolveDatasetFile(project, experiment);
 
         if (datasetFile != null && datasetFile.getFilePath() != null && !datasetFile.getFilePath().isBlank()) {
             if (!Files.exists(Path.of(datasetFile.getFilePath()))) {
@@ -371,10 +379,13 @@ private String uploadsMountPath;
 
         UploadedProjectFile modelFile = experiment.getModelFile();
         String originalModelFileName = modelFile != null
-                ? safeFileName(modelFile.getOriginalFileName(), STANDARD_TRAIN_FILE)
+                ? safeFileName(
+                        UploadFileNameNormalizer.runtimeName(
+                                modelFile.getOriginalFileName(), UploadedFileType.TRAINING_SCRIPT),
+                        STANDARD_TRAIN_FILE)
                 : null;
 
-        UploadedProjectFile datasetFile = experiment.getDatasetFile();
+        UploadedProjectFile datasetFile = datasetFileResolverService.resolveDatasetFile(project, experiment);
 
         boolean datasetProvided = datasetFile != null
                 && datasetFile.getFilePath() != null
@@ -392,13 +403,42 @@ private String uploadsMountPath;
                 : "";
 
         String originalDatasetFileName = datasetProvided
-                ? safeFileName(datasetFile.getOriginalFileName(), STANDARD_DATASET_FILE)
+                ? safeFileName(
+                        UploadFileNameNormalizer.runtimeName(
+                                datasetFile.getOriginalFileName(),
+                                effectiveRole(datasetFile)),
+                        STANDARD_DATASET_FILE)
                 : STANDARD_DATASET_FILE;
 
         System.out.println("[KubernetesBuildService] originalModelFileName=" + originalModelFileName);
         System.out.println("[KubernetesBuildService] datasetProvided=" + datasetProvided
                 + ", datasetRuntimePath=" + (datasetRuntimePath.isBlank() ? "-" : datasetRuntimePath)
                 + ", originalDatasetFileName=" + originalDatasetFileName);
+
+        String buildTrainingScriptPath = modelFile != null && modelFile.getFilePath() != null
+                ? modelFile.getFilePath() : "-";
+        UploadedProjectFile buildPreprocessing = datasetFileResolverService.findPreprocessingScript(project);
+        String buildPreprocessingPath = buildPreprocessing != null
+                && buildPreprocessing.getFilePath() != null
+                ? buildPreprocessing.getFilePath() : "-";
+        String buildRequirementsPath = experiment.getRequirementsPath() != null
+                ? experiment.getRequirementsPath() : "-";
+        String buildDockerfilePath = experiment.getDockerfilePath() != null
+                ? experiment.getDockerfilePath() : "-";
+        String buildDatasetPath = datasetProvided ? datasetRuntimePath : "-";
+
+        System.out.println("[TRAINING-FILES] datasetPath=" + buildDatasetPath);
+        System.out.println("[TRAINING-FILES] trainingScriptPath=" + buildTrainingScriptPath);
+        System.out.println("[TRAINING-FILES] preprocessingScriptPath=" + buildPreprocessingPath);
+        System.out.println("[TRAINING-FILES] requirementsPath=" + buildRequirementsPath);
+        System.out.println("[TRAINING-FILES] dockerfilePath=" + buildDockerfilePath);
+        System.out.println("[TRAINING-FILES] trainingScriptRuntimeName=" + (modelFile != null
+                ? UploadFileNameNormalizer.runtimeName(modelFile.getOriginalFileName(), UploadedFileType.TRAINING_SCRIPT) : "-"));
+        System.out.println("[TRAINING-FILES] datasetRuntimeName=" + (datasetProvided
+                ? UploadFileNameNormalizer.runtimeName(
+                        datasetFile.getOriginalFileName(), effectiveRole(datasetFile)) : "-"));
+        System.out.println("[TRAINING-FILES] requirementsRuntimeName=" + UploadFileNameNormalizer.REQUIREMENTS_RUNTIME_NAME
+                + ", dockerfileRuntimeName=" + UploadFileNameNormalizer.DOCKERFILE_RUNTIME_NAME);
 
         dockerfileContent = forcePlatformRunnerCommand(
                 dockerfileContent,
@@ -436,6 +476,10 @@ private String uploadsMountPath;
                 "src__custom_models__import_detector.py",
                 readRequiredPlatformFile("src/custom_models/import_detector.py")
         );
+        files.put(
+                "src__custom_models__model_artifact_detector.py",
+                readRequiredPlatformFile("src/custom_models/model_artifact_detector.py")
+        );
 
         if (modelFile != null
                 && modelFile.getFilePath() != null
@@ -446,7 +490,8 @@ private String uploadsMountPath;
             files.put(STANDARD_TRAIN_FILE, modelContent);
 
             originalModelFileName = safeFileName(
-                    modelFile.getOriginalFileName(),
+                    UploadFileNameNormalizer.runtimeName(
+                            modelFile.getOriginalFileName(), UploadedFileType.TRAINING_SCRIPT),
                     STANDARD_TRAIN_FILE
             );
 
@@ -913,14 +958,19 @@ private String uploadsMountPath;
                     }
 
                     /*
-                     * SCALABILITY FIX:
-                     * Never COPY datasets/CSV files into the image through ConfigMap.
-                     * Large datasets stay outside the image and are read from /app/uploads
+                     * SCALABILITY FIX + NORMALIZATION FIX:
+                     * Never COPY datasets into the image through ConfigMap.
+                     * Datasets stay outside the image and are read from /app/uploads
                      * at runtime through the shared uploads PVC.
+                     * We strip ANY dataset extension (csv, zip, parquet, json, txt,
+                     * images...) AND the normalized runtime dataset name, so a
+                     * "data (2).csv" / "images (1).zip" COPY is removed even if the
+                     * user Dockerfile still references the browser-generated name.
                      */
                     if (lowerBase.equals("dataset.csv")
                             || (!lowerOriginalDataset.isBlank() && lowerBase.equals(lowerOriginalDataset))
-                            || lowerBase.endsWith(".csv")) {
+                            || lowerBase.endsWith(".csv")
+                            || UploadFileNameNormalizer.isDatasetFileName(lowerBase)) {
                         removeLine = true;
                         break;
                     }
@@ -949,21 +999,29 @@ private String uploadsMountPath;
 
         System.out.println("[KubernetesBuildService] Detected WORKDIR='" + workdir + "', final WORKDIR='" + directory + "'");
 
-        String datasetEnvPath = datasetProvided && datasetRuntimePath != null && !datasetRuntimePath.isBlank()
-                ? datasetRuntimePath
-                : directory + "/dataset.csv";
-
         String datasetComment = datasetProvided
                 ? "# Dataset is not copied into the image. It is read from the shared uploads PVC at runtime.\n"
                 : "";
 
+        /*
+         * ARCHITECTURE FIX:
+         * DATASET_PATH / DATA_PATH are NOT baked into the image anymore.
+         *
+         * They used to be injected here as Docker ENV (single, stale, per-image
+         * source of truth). That allowed a wrong/legacy path (e.g. a .py script)
+         * to be frozen into the image and to leak into every training Pod.
+         *
+         * The dataset is now resolved per-experiment and injected explicitly as
+         * Pod environment variables at Job launch time (KubernetesJobService).
+         * This image must contain NO dataset path at all.
+         */
         String platformInjection = """
 
 # ---- Injected by MLOps platform ----
 # The user script is standardized as train.py.
 # The platform runner executes train.py, detects model artifacts,
 # logs metrics/artifacts to MLflow, and reports user script failures.
-%6$s
+%3$s
 COPY requirements.txt %1$s/requirements.txt
 RUN python -m pip install --no-cache-dir -r %1$s/requirements.txt
 
@@ -977,19 +1035,13 @@ ENV PYTHONPATH=%1$s
 ENV OUTPUT_DIR=%1$s/outputs
 ENV ML_OUTPUT_DIR=/opt/ml/model
 ENV MODEL_OUTPUT_DIR=/opt/ml/model
-ENV DATA_PATH=%2$s
-ENV DATASET_PATH=%2$s
-ENV PLATFORM_DATASET_EXTERNAL=%3$s
-ENV PLATFORM_DATASET_SOURCE=%4$s
+ENV PLATFORM_DATASET_EXTERNAL=%2$s
 
 RUN mkdir -p %1$s/outputs %1$s/artifacts /opt/ml/model
 
 CMD ["python", "platform_runner.py"]
 """.formatted(
                 directory,
-                dockerfileEnvValue(datasetEnvPath),
-                datasetProvided ? "true" : "false",
-                dockerfileEnvValue(datasetRuntimePath == null ? "" : datasetRuntimePath),
                 datasetProvided ? "true" : "false",
                 datasetComment
         );
@@ -998,14 +1050,6 @@ CMD ["python", "platform_runner.py"]
         content = content.replaceAll("(?im)^\\s*ENTRYPOINT\\s+.*$", "");
 
         return content.trim() + "\n" + platformInjection;
-    }
-
-    private String dockerfileEnvValue(String value) {
-        if (value == null) {
-            return "";
-        }
-
-        return value.trim().replace("\\", "/").replace("\"", "\\\"");
     }
 
     private String detectLastWorkdir(String content) {
@@ -2650,27 +2694,34 @@ if __name__ == "__main__":
                         .withNewSpec()
                             .withRestartPolicy("Never")
 
-                            .addNewVolume()
-                                .withName("build-context-configmap")
-                                .withNewConfigMap()
-                                    .withName(configMapName)
-                                .endConfigMap()
-                            .endVolume()
+.addNewVolume()
+                                 .withName("build-context-configmap")
+                                 .withNewConfigMap()
+                                     .withName(configMapName)
+                                 .endConfigMap()
+                             .endVolume()
 
-                            .addNewVolume()
-                                .withName("build-context-workdir")
-                                .withNewEmptyDir()
-                                .endEmptyDir()
-                            .endVolume()
+                             .addNewVolume()
+                                 .withName("mlops-uploads")
+                                 .withNewPersistentVolumeClaim()
+                                     .withClaimName(uploadsStorageProperties.getPvcName().trim())
+                                 .endPersistentVolumeClaim()
+                             .endVolume()
 
-                            .addNewVolume()
-                                .withName("kaniko-docker-config")
-                                .withNewSecret()
-                                    .withSecretName(kanikoDockerConfigSecret)
-                                .endSecret()
-                            .endVolume()
+                             .addNewVolume()
+                                 .withName("build-context-workdir")
+                                 .withNewEmptyDir()
+                                 .endEmptyDir()
+                             .endVolume()
 
-                            .addNewInitContainer()
+                             .addNewVolume()
+                                 .withName("kaniko-docker-config")
+                                 .withNewSecret()
+                                     .withSecretName(kanikoDockerConfigSecret)
+                                 .endSecret()
+                             .endVolume()
+
+                             .addNewInitContainer()
                                 .withName("prepare-build-context")
                                 .withImage("busybox:1.36")
                                 .withImagePullPolicy("IfNotPresent")
@@ -2686,11 +2737,17 @@ if __name__ == "__main__":
                                                 + "cp -L /configmap-src/src__custom_models__init__.py /kaniko-context/src/custom_models/__init__.py && "
                                                 + "cp -L /configmap-src/src__custom_models__generic_pyfunc_wrapper.py /kaniko-context/src/custom_models/generic_pyfunc_wrapper.py && "
                                                 + "cp -L /configmap-src/src__custom_models__import_detector.py /kaniko-context/src/custom_models/import_detector.py && "
+                                                + "cp -L /configmap-src/src__custom_models__model_artifact_detector.py /kaniko-context/src/custom_models/model_artifact_detector.py && "
                                                 + "ls -laR /kaniko-context"
                                 )
                                 .addNewVolumeMount()
                                     .withName("build-context-configmap")
                                     .withMountPath("/configmap-src")
+                                    .withReadOnly(true)
+                                .endVolumeMount()
+                                .addNewVolumeMount()
+                                    .withName("mlops-uploads")
+                                    .withMountPath(uploadsStorageProperties.getMountPath())
                                     .withReadOnly(true)
                                 .endVolumeMount()
                                 .addNewVolumeMount()
@@ -2704,6 +2761,12 @@ if __name__ == "__main__":
                                 .withImage(kanikoImage)
                                 .withImagePullPolicy("IfNotPresent")
                                 .withArgs(kanikoArgs)
+                                .withEnv(
+                                        new EnvVarBuilder()
+                                                .withName("MLOPS_UPLOADS_PVC_NAME")
+                                                .withValue(uploadsStorageProperties.getPvcName())
+                                                .build()
+                                )
                                 .addNewVolumeMount()
                                     .withName("build-context-workdir")
                                     .withMountPath("/kaniko-context")
@@ -2711,6 +2774,11 @@ if __name__ == "__main__":
                                 .addNewVolumeMount()
                                     .withName("kaniko-docker-config")
                                     .withMountPath("/kaniko/.docker")
+                                    .withReadOnly(true)
+                                .endVolumeMount()
+                                .addNewVolumeMount()
+                                    .withName("mlops-uploads")
+                                    .withMountPath(uploadsStorageProperties.getMountPath())
                                     .withReadOnly(true)
                                 .endVolumeMount()
                             .endContainer()
@@ -2929,6 +2997,17 @@ if __name__ == "__main__":
         }
 
         return slug;
+    }
+
+    private UploadedFileType effectiveRole(UploadedProjectFile file) {
+        if (file == null) {
+            return null;
+        }
+        UploadedFileType role = file.getRole();
+        if (role != null && role != UploadedFileType.OTHER) {
+            return role;
+        }
+        return file.getFileType();
     }
 
     private String safeFileName(String originalName, String fallback) {

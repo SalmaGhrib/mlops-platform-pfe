@@ -1,7 +1,11 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Observable, throwError } from 'rxjs';
 import { catchError } from 'rxjs/operators';
+import {
+  SearchPageResponse,
+  SmartSearchParams
+} from '../../shared/components/common/smart-search/smart-search.types';
 
 export type ProjectType = 'classification' | 'regression';
 export type RuntimeMode = 'STANDARD_RUNTIME' | 'CUSTOM_DOCKERFILE';
@@ -78,6 +82,29 @@ export class ProjectService {
     return this.http
       .get<MlProjectResponse[]>(this.apiUrl, {
         headers: this.getAuthHeaders()
+      })
+      .pipe(catchError(this.handleError));
+  }
+
+  searchProjects(params: SmartSearchParams): Observable<SearchPageResponse<MlProjectResponse>> {
+    let httpParams = new HttpParams();
+
+    if (params.q) {
+      httpParams = httpParams.set('q', params.q);
+    }
+    if (params.projectType) {
+      httpParams = httpParams.set('projectType', params.projectType);
+    }
+    if (params.dataType) {
+      httpParams = httpParams.set('dataType', params.dataType);
+    }
+    httpParams = httpParams.set('page', String(params.page));
+    httpParams = httpParams.set('size', String(params.size));
+
+    return this.http
+      .get<SearchPageResponse<MlProjectResponse>>(`${this.apiUrl}/search`, {
+        headers: this.getAuthHeaders(),
+        params: httpParams
       })
       .pipe(catchError(this.handleError));
   }

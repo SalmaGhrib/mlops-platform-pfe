@@ -66,6 +66,7 @@ public class UserMonitoringDashboardResponse {
         public LocalDateTime nextRetrainingAt;
         public LocalDateTime lastRetrainingAt;
         public LocalDateTime lastMonitoringCheckAt;
+        public LocalDateTime nextMonitoringCheckAt;
         public String lastDecisionReason;
         public boolean failureMonitoringEnabled;
         public boolean performanceMonitoringEnabled;
@@ -74,16 +75,23 @@ public class UserMonitoringDashboardResponse {
         public long recentPredictionCount;
         public double predictionErrorRatePercent;
         public double dataDriftScorePercent;
+        public double performanceDropPercent;
         public double averagePredictionLatencyMs;
         public double predictionSuccessRate;
         public LocalDateTime lastPredictionAt;
 
         public int healthScore;
 
+        public Double globalScoreThreshold;
+        public Double currentProductionGlobalScore;
+        public String qualityStatus;
+        public String qualityReason;
+
         public List<ScorePoint> scoreHistory = new ArrayList<>();
         public List<DeploymentItem> deployments = new ArrayList<>();
         public List<AlertItem> alerts = new ArrayList<>();
         public List<ActivityItem> activities = new ArrayList<>();
+        public List<MonitoringAlertResponse> recentAlerts = new ArrayList<>();
     }
 
     public static class ScorePoint {

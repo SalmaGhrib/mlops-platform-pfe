@@ -50,6 +50,12 @@ public class ModelDeploymentResponse {
     private String mlflowProductionVersion;
     private String kubernetesActiveVersion;
 
+    /*
+     * Blue/green
+     */
+    private String servingTrack;
+    private String stableServiceName;
+
     public ModelDeploymentResponse() {
     }
 
@@ -85,6 +91,9 @@ public class ModelDeploymentResponse {
         response.setDeployedAt(toUtcIsoString(deployment.getDeployedAt()));
         response.setCreatedAt(toUtcIsoString(deployment.getCreatedAt()));
         response.setUpdatedAt(toUtcIsoString(deployment.getUpdatedAt()));
+
+        response.setServingTrack(deployment.getServingTrack());
+        response.setStableServiceName(deployment.getStableServiceName());
 
         /*
          * Important pour Angular :
@@ -211,6 +220,14 @@ public class ModelDeploymentResponse {
         return kubernetesActiveVersion;
     }
 
+    public String getServingTrack() {
+        return servingTrack;
+    }
+
+    public String getStableServiceName() {
+        return stableServiceName;
+    }
+
     public void setId(Long id) {
         this.id = id;
     }
@@ -305,5 +322,13 @@ public class ModelDeploymentResponse {
 
     public void setKubernetesActiveVersion(String kubernetesActiveVersion) {
         this.kubernetesActiveVersion = kubernetesActiveVersion;
+    }
+
+    public void setServingTrack(String servingTrack) {
+        this.servingTrack = servingTrack;
+    }
+
+    public void setStableServiceName(String stableServiceName) {
+        this.stableServiceName = stableServiceName;
     }
 }

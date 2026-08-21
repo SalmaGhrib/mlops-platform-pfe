@@ -32,6 +32,15 @@
     </div>
 
     <div class="p-6">
+      <app-smart-search
+        [searchFn]="searchModels"
+        placeholder="Rechercher un modèle enregistré..."
+        [pageSize]="12"
+        (itemsChange)="onSearchItems($event)"
+        (loadingChange)="loading = $event"
+        (totalChange)="onTotalChange($event)"
+      />
+
       @if (errorMessage) {
         <div class="mb-5 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
           <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -109,7 +118,7 @@
                           <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                           </svg>
-                          Production v{{ model.productionVersion || '-' }}
+                          Production v{{ getProductionVersion(model) }}
                         } @else {
                           Pas de production
                         }
@@ -194,6 +203,17 @@
                       Ce modèle est déjà actif pour la prédiction.
                     </p>
                   }
+
+                  <button
+                    type="button"
+                    (click)="openModelCard(model)"
+                    class="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:from-blue-700 hover:to-indigo-700"
+                  >
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                    </svg>
+                    Model Card
+                  </button>
                 </div>
               </div>
 
@@ -205,7 +225,7 @@
                   </p>
 
                   <p class="mt-2 text-xl font-bold text-gray-900 dark:text-white">
-                    v{{ model.latestVersion || '-' }}
+                    v{{ getModelVersion(model) }}
                   </p>
                 </div>
 
@@ -215,7 +235,7 @@
                   </p>
 
                   <p class="mt-2 text-xl font-bold text-green-700 dark:text-green-300">
-                    v{{ model.productionVersion || '-' }}
+                    v{{ getProductionVersion(model) }}
                   </p>
                 </div>
 
@@ -225,7 +245,7 @@
                   </p>
 
                   <p class="mt-2 text-xl font-bold text-indigo-700 dark:text-indigo-300">
-                    {{ formatGlobalScore(model.globalScore) }}
+                    {{ isFailed(model) ? '—' : formatGlobalScore(model.globalScore) }}
                   </p>
                 </div>
 
@@ -235,11 +255,11 @@
                   </p>
 
                   <p class="mt-2 text-sm font-bold text-gray-900 dark:text-white">
-                    {{ formatMetric(model.primaryMetric) }}
+                    {{ isFailed(model) ? '—' : formatMetric(model.primaryMetric) }}
                   </p>
 
                   <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ formatMetricValue(model.primaryMetricValue) }}
+                    {{ isFailed(model) ? 'Run en échec' : formatMetricValue(model.primaryMetricValue) }}
                   </p>
                 </div>
               </div>
@@ -606,3 +626,192 @@
     </div>
   </div>
 </div>
+
+@if (modelCardModel) {
+  <div class="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-gray-950/60 p-4 backdrop-blur-sm" (click)="closeModelCard()">
+    <div class="w-full max-w-3xl my-8 rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-800 dark:bg-gray-900" (click)="$event.stopPropagation()">
+      @if (modelCardModel; as model) {
+        <div class="ai-hero relative overflow-hidden rounded-t-2xl border-b border-gray-100 px-6 py-6 dark:border-gray-800">
+          <div class="relative z-10 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div class="flex items-start gap-3">
+              <div
+                class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-white shadow-sm"
+                [ngClass]="isDeploymentDeployed(model)
+                  ? 'bg-gradient-to-br from-green-500 to-emerald-600 shadow-green-500/20'
+                  : model.hasProduction
+                    ? 'bg-gradient-to-br from-blue-500 to-indigo-600 shadow-blue-500/20'
+                    : 'bg-gradient-to-br from-gray-400 to-gray-500 shadow-gray-400/20'"
+              >
+                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                </svg>
+              </div>
+              <div>
+                <h3 class="text-xl font-bold text-gray-900 dark:text-white">
+                  {{ model.registeredModelName || '-' }}
+                </h3>
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                  Projet :
+                  <span class="font-semibold text-gray-700 dark:text-gray-300">{{ model.projectName || '-' }}</span>
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              (click)="closeModelCard()"
+              aria-label="Fermer"
+              class="flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 transition hover:bg-gray-50 hover:text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800"
+            >
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+
+          <div class="relative z-10 mt-4 flex flex-wrap gap-2">
+            <span class="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold" [ngClass]="getProductionBadgeClass(model)">
+              @if (model.hasProduction) {
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+                Production v{{ getProductionVersion(model) }}
+              } @else {
+                Pas de production
+              }
+            </span>
+            <span class="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold" [ngClass]="getDeploymentBadgeClass(model)">
+              @if (isDeploymentDeployed(model)) {
+                <span class="h-1.5 w-1.5 rounded-full bg-green-500 mlops-pulse"></span>
+              }
+              {{ getDeploymentLabel(model) }}
+            </span>
+            @if (isDeploymentDeployed(model)) {
+              <span class="rounded-full px-3 py-1 text-xs font-bold" [ngClass]="isApiEnabled(model) ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'">
+                {{ isApiEnabled(model) ? 'PUBLIC_API' : 'PRIVATE' }}
+              </span>
+            }
+          </div>
+        </div>
+
+        <div class="max-h-[70vh] overflow-y-auto p-6">
+          @if (getModelCardDescription(model)) {
+            <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+              <p class="text-sm leading-6 text-gray-700 dark:text-gray-300">
+                {{ getModelCardDescription(model) }}
+              </p>
+            </div>
+          }
+
+          <div class="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div class="rounded-2xl bg-gray-50 p-4 dark:bg-white/[0.03]">
+              <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Dernière version</p>
+              <p class="mt-2 text-xl font-bold text-gray-900 dark:text-white">v{{ getModelVersion(model) }}</p>
+            </div>
+            <div class="rounded-2xl bg-gray-50 p-4 dark:bg-white/[0.03]">
+              <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Version production</p>
+              <p class="mt-2 text-xl font-bold text-green-700 dark:text-green-300">v{{ getProductionVersion(model) }}</p>
+            </div>
+            <div class="rounded-2xl bg-gray-50 p-4 dark:bg-white/[0.03]">
+              <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Score global</p>
+              <p class="mt-2 text-xl font-bold text-indigo-700 dark:text-indigo-300">
+                {{ isFailed(model) ? '—' : formatGlobalScore(model.globalScore) }}
+              </p>
+            </div>
+            <div class="rounded-2xl bg-gray-50 p-4 dark:bg-white/[0.03]">
+              <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Type de données</p>
+              <p class="mt-2 text-sm font-bold text-gray-900 dark:text-white">{{ getModelDataType(model) }}</p>
+            </div>
+          </div>
+
+          <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+              <h4 class="text-sm font-bold text-gray-900 dark:text-white">Métriques</h4>
+              @if (hasMetrics(model)) {
+                <div class="mt-3 flex flex-wrap gap-2">
+                  @for (metric of getMetrics(model) | keyvalue; track metric.key) {
+                    <span class="rounded-full bg-white px-3 py-1 text-xs font-semibold text-gray-700 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-800">
+                      {{ formatMetric(metric.key) }}={{ formatMetricValue(metric.value) }}
+                    </span>
+                  }
+                </div>
+              } @else {
+                <p class="mt-3 text-sm text-gray-500 dark:text-gray-400">Aucune métrique disponible.</p>
+              }
+            </div>
+
+            <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+              <h4 class="text-sm font-bold text-gray-900 dark:text-white">Algorithmes</h4>
+              @if (hasAlgorithmInfo(model)) {
+                <div class="mt-3 flex flex-wrap gap-2">
+                  @for (algo of getAlgorithmsList(model); track $index) {
+                    <span class="rounded-full bg-white px-3 py-1 text-xs font-semibold text-gray-700 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-800">
+                      {{ algo }}
+                    </span>
+                  }
+                </div>
+                @if (hasReplacement(model)) {
+                  <div class="mt-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 dark:border-amber-800/50 dark:bg-amber-950/30 dark:text-amber-300">
+                    <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                    </svg>
+                    Remplacement automatique d'algorithme : {{ getReplacementCount(model) }}
+                  </div>
+                }
+              } @else {
+                <p class="mt-3 text-sm text-gray-500 dark:text-gray-400">Non détecté.</p>
+              }
+            </div>
+          </div>
+
+          <div class="mt-5 rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+            <h4 class="text-sm font-bold text-gray-900 dark:text-white">Détails du déploiement</h4>
+            <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div class="rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Statut</p>
+                <p class="mt-1 text-sm font-bold text-gray-900 dark:text-white">{{ getDeploymentLabel(model) }}</p>
+              </div>
+              <div class="rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
+                <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Image Docker</p>
+                <p class="mt-1 truncate text-sm font-semibold text-gray-900 dark:text-white" [title]="model.dockerImage || '-'">{{ model.dockerImage || '-' }}</p>
+              </div>
+              @if (model.predictionEndpoint) {
+                <div class="rounded-xl bg-white p-3 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800 sm:col-span-2">
+                  <p class="text-xs font-medium text-gray-500 dark:text-gray-400">Endpoint</p>
+                  <code class="mt-1 block truncate text-xs font-semibold text-gray-800 dark:text-gray-200">{{ model.predictionEndpoint }}</code>
+                </div>
+              }
+              @if (model.errorMessage) {
+                <div class="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-medium text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300 sm:col-span-2">
+                  <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                  </svg>
+                  {{ model.errorMessage }}
+                </div>
+              }
+            </div>
+          </div>
+
+          <div class="mt-5 flex items-center justify-between border-t border-gray-100 pt-4 dark:border-gray-800">
+            <p class="text-xs text-gray-400 dark:text-gray-500">
+              Créé le {{ formatDate(model.createdAt) }} · Mis à jour le {{ formatDate(model.updatedAt) }}
+            </p>
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400">
+                <span class="h-2 w-2 rounded-full mlops-pulse" [ngClass]="getModelCardHealthLevel(model) === 'success' ? 'bg-success-500' : getModelCardHealthLevel(model) === 'error' ? 'bg-error-500' : 'bg-amber-500'"></span>
+                {{ getModelCardHealthLevel(model) === 'success' ? 'Santé : opérationnel' : getModelCardHealthLevel(model) === 'error' ? 'Santé : critique' : 'Santé : à surveiller' }}
+              </span>
+              <button
+                type="button"
+                (click)="closeModelCard()"
+                class="rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-bold text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+  </div>
+}

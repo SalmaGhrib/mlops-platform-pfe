@@ -107,6 +107,40 @@ export interface MlExperimentResponse {
   [key: string]: any;
 }
 
+export type PipelineStepStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED';
+
+export interface RunPipelineStepDto {
+  stepCode: string;
+  label?: string;
+  executionMode?: string;
+  status: PipelineStepStatus;
+  progress?: number | null;
+  orderIndex?: number;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  message?: string | null;
+  errorCode?: string | null;
+  errorDetails?: string | null;
+  jobName?: string | null;
+  podName?: string | null;
+  externalId?: string | null;
+  updatedAt?: string | null;
+  hasLogs?: boolean;
+
+  [key: string]: any;
+}
+
+export interface PipelineStatusResponse {
+  experimentId?: number;
+  runtimeMode?: string;
+  runStatus?: string | null;
+  kubeflowStatus?: string | null;
+  buildStatus?: string | null;
+  globalProgress?: number | null;
+  updatedAt?: string | null;
+  steps: RunPipelineStepDto[];
+}
+
 export interface ReplacementOption {
   className: string;
   display: string;
@@ -427,6 +461,25 @@ export class ExperimentService {
       {},
       {
         headers: this.getAuthHeaders()
+      }
+    );
+  }
+
+  getPipelineStatus(experimentId: number): Observable<PipelineStatusResponse> {
+    return this.http.get<PipelineStatusResponse>(
+      `${this.springApiUrl}/${experimentId}/pipeline-status`,
+      {
+        headers: this.getAuthHeaders()
+      }
+    );
+  }
+
+  getPipelineStepLogs(experimentId: number, stepCode: string): Observable<string> {
+    return this.http.get(
+      `${this.springApiUrl}/${experimentId}/pipeline-steps/${encodeURIComponent(stepCode)}/logs`,
+      {
+        headers: this.getAuthHeaders(),
+        responseType: 'text'
       }
     );
   }

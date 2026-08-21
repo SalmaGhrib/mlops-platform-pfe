@@ -13,20 +13,29 @@
       <div class="flex items-center justify-center z-1">
         <app-grid-shape />
         <div class="flex flex-col items-center max-w-md px-6 text-center">
-          <a routerLink="/" class="block mb-6">
-            <img
-              width="231"
-              height="48"
-              src="/images/logo/auth-logo.svg"
-              alt="Logo"
-            />
+          <a routerLink="/" class="mb-6 inline-flex items-center gap-3">
+            <span class="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 via-indigo-500 to-cyan-400 text-white shadow-lg shadow-brand-500/30">
+              <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3v18h18"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 14l4-4 3 3 5-6"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 19.5h16"/>
+              </svg>
+            </span>
+            <span class="flex flex-col leading-tight">
+              <span class="text-2xl font-extrabold tracking-tight text-white">
+                MLOps<span class="text-brand-300">Pilot</span>
+              </span>
+              <span class="text-[10px] font-medium uppercase tracking-widest text-white/60">
+                Plateforme ML &amp; IA
+              </span>
+            </span>
           </a>
 
           <span class="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-white">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
             </svg>
-            Plateforme MLOps
+            MLOps Pilot
           </span>
 
           <h2 class="mt-5 text-2xl font-bold leading-tight text-white sm:text-3xl">

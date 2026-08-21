@@ -3,6 +3,7 @@ package com.mlops.platform.controller;
 import com.mlops.platform.dto.MetricPriorityDto;
 import com.mlops.platform.dto.MlflowModelVersionDto;
 import com.mlops.platform.dto.ModelRegistryResponse;
+import com.mlops.platform.dto.SearchPageResponse;
 import com.mlops.platform.service.MlExperimentService;
 import com.mlops.platform.service.MlflowTrackingClientService;
 import com.mlops.platform.service.ModelRegistryService;
@@ -52,6 +53,24 @@ public class ModelRegistryController {
             @RequestHeader("Authorization") String authHeader
     ) {
         return modelRegistryService.syncAndGetMyRegisteredModels(authHeader);
+    }
+
+    /**
+     * Recherche dynamique des modèles du user connecté avec filtres
+     * projectType / dataType et pagination.
+     */
+    @GetMapping("/my-models/search")
+    public SearchPageResponse<ModelRegistryResponse> searchMyRegisteredModels(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String projectType,
+            @RequestParam(required = false) String dataType,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "12") int size
+    ) {
+        return modelRegistryService.searchMyRegisteredModels(
+                authHeader, q, projectType, dataType, page, size
+        );
     }
 
     /**

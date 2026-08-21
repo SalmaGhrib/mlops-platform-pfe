@@ -1,6 +1,7 @@
 package com.mlops.platform.controller;
 
 import com.mlops.platform.dto.MlExperimentResponse;
+import com.mlops.platform.dto.PipelineStatusResponse;
 import com.mlops.platform.service.MlExperimentService;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import org.springframework.http.HttpHeaders;
@@ -85,7 +86,14 @@ public class MlExperimentController {
             /**
              * requirements.txt optionnel pour le mode CUSTOM_DOCKERFILE.
              */
-            @RequestParam(value = "requirements_file", required = false) MultipartFile requirementsFile
+            @RequestParam(value = "requirements_file", required = false) MultipartFile requirementsFile,
+
+            /**
+             * Rôle explicite du fichier dataset (facultatif).
+             * Valeurs : DATASET_FILE, DATASET_ARCHIVE, DATASET_PREPARATION_SCRIPT, AUXILIARY.
+             * Lorsqu'il est absent, le rôle est dérivé de l'extension de manière sûre.
+             */
+            @RequestParam(value = "dataset_role", required = false) String datasetRole
     ) {
         return mlExperimentService.uploadAndLaunchExperiment(
                 authHeader,
@@ -99,7 +107,8 @@ public class MlExperimentController {
                 runtimeMode,
                 customImageUri,
                 dockerfileFile,
-                requirementsFile
+                requirementsFile,
+                datasetRole
         );
     }
 
@@ -109,6 +118,29 @@ public class MlExperimentController {
             @PathVariable Long projectId
     ) {
         return mlExperimentService.getExperimentsByProject(authHeader, projectId);
+    }
+
+    /**
+     * État courant des étapes du pipeline d'un run (léger, aucune requête MLflow/Kubernetes).
+     */
+    @GetMapping("/{experimentId}/pipeline-status")
+    public PipelineStatusResponse getPipelineStatus(
+            @RequestHeader(HttpHeaders.AUTHORIZATION) String authHeader,
+            @PathVariable Long experimentId
+    ) {
+        return mlExperimentService.getPipelineStatus(authHeader, experimentId);
+    }
+
+    /**
+     * Logs détaillés d'une étape précise du pipeline d'un run.
+     */
+    @GetMapping(value = "/{experimentId}/pipeline-steps/{stepCode}/logs", produces = MediaType.TEXT_PLAIN_VALUE)
+    public String getPipelineStepLogs(
+            @RequestHeader(HttpHeaders.AUTHORIZATION) String authHeader,
+            @PathVariable Long experimentId,
+            @PathVariable String stepCode
+    ) {
+        return mlExperimentService.getPipelineStepLogs(authHeader, experimentId, stepCode);
     }
 
     @GetMapping("/project/{projectId}/{experimentId}")

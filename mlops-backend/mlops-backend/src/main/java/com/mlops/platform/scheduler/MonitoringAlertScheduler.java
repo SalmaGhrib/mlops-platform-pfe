@@ -1,13 +1,24 @@
 package com.mlops.platform.scheduler;
 
 import com.mlops.platform.dto.MonitoringSummaryResponse;
+import com.mlops.platform.dto.RetrainingDecisionResult;
+import com.mlops.platform.entity.AlertSeverity;
+import com.mlops.platform.entity.AlertType;
+import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.entity.NotificationTargetType;
 import com.mlops.platform.entity.NotificationType;
+import com.mlops.platform.entity.RetrainingConfig;
+import com.mlops.platform.entity.RetrainingTriggerType;
 import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.MlExperimentRepository.FailedRunsByProjectProjection;
+import com.mlops.platform.repository.MlProjectRepository;
+import com.mlops.platform.repository.RetrainingConfigRepository;
+import com.mlops.platform.service.ModelQualityService;
+import com.mlops.platform.service.MonitoringAlertService;
 import com.mlops.platform.service.MonitoringRetrainingTriggerService;
 import com.mlops.platform.service.MonitoringService;
 import com.mlops.platform.service.NotificationService;
+import com.mlops.platform.service.RetrainingDecisionService;
 
 import jakarta.annotation.PostConstruct;
 
@@ -35,6 +46,11 @@ public class MonitoringAlertScheduler {
     private final NotificationService notificationService;
     private final MlExperimentRepository mlExperimentRepository;
     private final MonitoringRetrainingTriggerService monitoringRetrainingTriggerService;
+    private final RetrainingConfigRepository retrainingConfigRepository;
+    private final MlProjectRepository mlProjectRepository;
+    private final RetrainingDecisionService retrainingDecisionService;
+    private final ModelQualityService modelQualityService;
+    private final MonitoringAlertService monitoringAlertService;
 
     private final AtomicBoolean localCycleRunning = new AtomicBoolean(false);
 
@@ -63,13 +79,23 @@ public class MonitoringAlertScheduler {
             MonitoringService monitoringService,
             NotificationService notificationService,
             MlExperimentRepository mlExperimentRepository,
-            MonitoringRetrainingTriggerService monitoringRetrainingTriggerService
+            MonitoringRetrainingTriggerService monitoringRetrainingTriggerService,
+            RetrainingConfigRepository retrainingConfigRepository,
+            MlProjectRepository mlProjectRepository,
+            RetrainingDecisionService retrainingDecisionService,
+            ModelQualityService modelQualityService,
+            MonitoringAlertService monitoringAlertService
     ) {
         this.monitoringService = monitoringService;
         this.notificationService = notificationService;
         this.mlExperimentRepository = mlExperimentRepository;
         this.monitoringRetrainingTriggerService =
                 monitoringRetrainingTriggerService;
+        this.retrainingConfigRepository = retrainingConfigRepository;
+        this.mlProjectRepository = mlProjectRepository;
+        this.retrainingDecisionService = retrainingDecisionService;
+        this.modelQualityService = modelQualityService;
+        this.monitoringAlertService = monitoringAlertService;
     }
 
     @PostConstruct
@@ -120,6 +146,7 @@ public class MonitoringAlertScheduler {
              */
             checkFailedRunsByProjectAndTriggerRetraining();
             checkSmartMonitoringRetrainingTriggers();
+            checkProjectQualityAndSignals();
 
             /*
              * Le résumé global sert principalement aux alertes administrateur.
@@ -257,26 +284,22 @@ public class MonitoringAlertScheduler {
                         alertTargetId
                 );
 
-                boolean retrainingRequested =
-                        monitoringRetrainingTriggerService
-                                .triggerRetrainingFromMonitoringAlert(
-                                        projectId,
-                                        "FAILED_RUNS detected. failedRuns="
-                                                + failedRuns
-                                                + ", lookbackHours="
-                                                + failedRunsLookbackHours
-                                );
-
+                /*
+                 * Les runs échoués sont un signal TECHNIQUE (Job Docker,
+                 * MLflow, déploiement) : on alerte mais on ne déclenche
+                 * JAMAIS de réentraînement automatique. Un modèle qui tourne
+                 * mal ne se corrige pas en ré-entraînant sur des données
+                 * potentiellement corrompues.
+                 */
                 System.out.println(
-                        "[MONITORING_ALERT] FAILED_RUNS signal evaluated. "
+                        "[MONITORING_ALERT] FAILED_RUNS signal detected. "
                                 + "projectId="
                                 + projectId
                                 + ", failedRuns="
                                 + failedRuns
                                 + ", threshold="
                                 + failedRunsByProjectThreshold
-                                + ", retrainingRequested="
-                                + retrainingRequested
+                                + ", retraining=NOT_TRIGGERED"
                 );
             }
 
@@ -309,6 +332,150 @@ public class MonitoringAlertScheduler {
             );
             smartTriggerError.printStackTrace();
         }
+    }
+
+    /**
+     * Alertes applicatives par projet :
+     * 1. Gate qualité : modèle sous le seuil minimal -> MODEL_QUALITY_FAILED.
+     * 2. Signaux monitoring -> PREDICTION_ERROR_RATE / DATA_DRIFT /
+     *    PERFORMANCE_DROP.
+     *
+     * Contrairement aux runs échoués, ces signaux sont des indicateurs de
+     * SANTÉ DU MODÈLE : ils peuvent déclencher un réentraînement via le
+     * moteur de décision (stratégie, seuils, cooldown, running state).
+     */
+    private void checkProjectQualityAndSignals() {
+        try {
+            List<RetrainingConfig> configs =
+                    retrainingConfigRepository.findEnabledConfigs();
+
+            if (configs == null || configs.isEmpty()) {
+                System.out.println(
+                        "[MONITORING_ALERT] No enabled retraining config. "
+                                + "Project-level alerts skipped."
+                );
+                return;
+            }
+
+            for (RetrainingConfig config : configs) {
+                if (config == null || config.getProjectId() == null) {
+                    continue;
+                }
+
+                MlProject project = mlProjectRepository
+                        .findById(config.getProjectId())
+                        .orElse(null);
+
+                if (project == null) {
+                    continue;
+                }
+
+                modelQualityService.raiseQualityAlertIfNeeded(project);
+                raiseSignalAlerts(project, config);
+            }
+
+        } catch (Exception projectAlertError) {
+            System.err.println(
+                    "[MONITORING_ALERT] Project-level alert evaluation failed. reason="
+                            + safeMessage(projectAlertError.getMessage())
+            );
+            projectAlertError.printStackTrace();
+        }
+    }
+
+    private void raiseSignalAlerts(MlProject project, RetrainingConfig config) {
+        if (project == null || config == null) {
+            return;
+        }
+
+        RetrainingDecisionResult decision =
+                retrainingDecisionService.evaluateMonitoringSignals(config);
+
+        if (decision == null || !decision.isShouldRetrain()) {
+            return;
+        }
+
+        RetrainingTriggerType triggerType = decision.getTriggerType();
+        AlertType alertType = mapToAlertType(triggerType);
+        if (alertType == null) {
+            return;
+        }
+
+        AlertSeverity severity = config.getDataDriftThresholdPercent() != null
+                && AlertType.DATA_DRIFT == alertType
+                && decision.getDataDriftScorePercent() >= config.getDataDriftThresholdPercent() * 2
+                ? AlertSeverity.CRITICAL
+                : AlertSeverity.WARNING;
+
+        double observedValue = switch (triggerType) {
+            case PREDICTION_ERRORS -> decision.getPredictionErrorRatePercent();
+            case DATA_DRIFT -> decision.getDataDriftScorePercent();
+            case PERFORMANCE_DROP -> decision.getPerformanceDropPercent();
+            default -> 0.0;
+        };
+
+        double thresholdValue = switch (triggerType) {
+            case PREDICTION_ERRORS -> safeDouble(config.getMaxPredictionErrorRatePercent(), 20.0);
+            case DATA_DRIFT -> safeDouble(config.getDataDriftThresholdPercent(), 25.0);
+            case PERFORMANCE_DROP -> safeDouble(config.getPerformanceDropThresholdPercent(), 5.0);
+            default -> 0.0;
+        };
+
+        String idempotencyKey = MonitoringAlertService.buildHourlyIdempotencyKey(
+                alertType,
+                project.getId(),
+                null,
+                java.time.LocalDateTime.now()
+        );
+
+        monitoringAlertService.raiseAlert(
+                alertType,
+                severity,
+                project.getId(),
+                null,
+                null,
+                observedValue,
+                thresholdValue,
+                triggerType.name(),
+                "Vérifier les prédictions récentes et envisager un réentraînement.",
+                "Alerte détectée pour le projet \""
+                        + safeName(project.getName(), project.getId())
+                        + "\" : "
+                        + safeMessage(decision.getReason()),
+                idempotencyKey,
+                project.getOwner()
+        );
+
+        System.out.println(
+                "[MONITORING_ALERT] Signal alert raised. projectId="
+                        + project.getId()
+                        + ", alertType="
+                        + alertType
+                        + ", observed="
+                        + observedValue
+                        + ", threshold="
+                        + thresholdValue
+        );
+    }
+
+    private AlertType mapToAlertType(RetrainingTriggerType triggerType) {
+        if (triggerType == null) {
+            return null;
+        }
+
+        return switch (triggerType) {
+            case PREDICTION_ERRORS -> AlertType.PREDICTION_ERROR_RATE;
+            case DATA_DRIFT -> AlertType.DATA_DRIFT;
+            case PERFORMANCE_DROP -> AlertType.PERFORMANCE_DROP;
+            default -> null;
+        };
+    }
+
+    private String safeName(String value, Long fallbackId) {
+        if (value != null && !value.isBlank()) {
+            return value.trim();
+        }
+        return "project " + (fallbackId != null ? fallbackId : "?");
     }
 
     private void checkFailedDeployments(
@@ -424,5 +591,9 @@ public class MonitoringAlertScheduler {
                 .replace("\r", " ")
                 .replace("\u0000", "")
                 .trim();
+    }
+
+    private double safeDouble(Double value, double fallback) {
+        return value != null && value > 0 ? value : fallback;
     }
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import json
 import importlib.util
@@ -27,6 +28,7 @@ from mlflow.tracking import MlflowClient
 
 from src.custom_models.generic_pyfunc_wrapper import GenericPyFuncWrapper
 from src.custom_models.import_detector import analyze_script_imports
+from src.custom_models import model_artifact_detector as model_detector
 
 
 SUPPORTED_MODEL_EXTENSIONS = {
@@ -1019,6 +1021,8 @@ def find_dataset_for_auto_metrics(workspace: Path, dataset_path: Optional[Path])
         workspace / "data" / "iris.csv",
     ])
 
+    # Handle ZIP extraction: extract dataset ZIP to /workspace/dataset and find
+    # the actual data file inside (CSV, TSV, TXT).
     for candidate in candidates:
         try:
             candidate = candidate.resolve()
@@ -1027,27 +1031,38 @@ def find_dataset_for_auto_metrics(workspace: Path, dataset_path: Optional[Path])
                 if candidate.suffix.lower() in {".csv", ".tsv", ".txt"}:
                     return candidate
 
-            if candidate.exists() and candidate.is_dir():
-                nested_files = sorted(
-                    [
-                        path.resolve()
-                        for path in candidate.rglob("*")
-                        if path.is_file()
-                        and path.suffix.lower() in {".csv", ".tsv", ".txt"}
-                        and path.name.lower()
-                        not in {
-                            "metrics.csv",
-                            "predictions.csv",
-                            "history.csv",
-                        }
-                    ],
-                    key=lambda path: path.stat().st_size,
-                    reverse=True,
-                )
-
-                if nested_files:
-                    return nested_files[0]
-
+                if candidate.suffix.lower() == ".zip":
+                    # Extract ZIP to /workspace/dataset
+                    dataset_dir = workspace / "dataset"
+                    if dataset_dir.exists():
+                        import shutil
+                        shutil.rmtree(dataset_dir)
+                    dataset_dir.mkdir(parents=True, exist_ok=True)
+                    try:
+                        with zipfile.ZipFile(candidate, "r") as zip_ref:
+                            zip_ref.extractall(dataset_dir)
+                    except Exception:
+                        pass
+                    # After extraction, look for data files in the dataset dir
+                    if dataset_dir.exists():
+                        nested_files = sorted(
+                            [
+                                path.resolve()
+                                for path in dataset_dir.rglob("*")
+                                if path.is_file()
+                                and path.suffix.lower() in {".csv", ".tsv", ".txt"}
+                                and path.name.lower()
+                                not in {
+                                    "metrics.csv",
+                                    "predictions.csv",
+                                    "history.csv",
+                                }
+                            ],
+                            key=lambda path: path.stat().st_size,
+                            reverse=True,
+                        )
+                        if nested_files:
+                            return nested_files[0]
         except Exception:
             continue
 
@@ -1462,70 +1477,34 @@ def get_model_search_roots(workspace: Path) -> List[Path]:
     return unique_roots
 
 
-def find_model_artifacts(workspace: Path) -> List[Path]:
+def find_model_artifacts(
+    workspace: Path,
+    stdout_text: Optional[str] = None,
+) -> List[Path]:
     """
     Discover predictive model files created by the user script.
 
     Custom Docker scripts frequently save their final model to /opt/ml/model,
-    which is outside /workspace.
+    /outputs, /app/outputs or the workspace outputs directory. Detection is
+    generic (multi-format, multi-root), deterministic and deduplicated.
     """
-    ignored_dirs = {
-        ".git",
-        "__pycache__",
-        "mlruns",
-        ".venv",
-        "venv",
-        "env",
-        ".ipynb_checkpoints",
-    }
+    stdout_hint = model_detector.model_path_hint_from_stdout(stdout_text)
 
-    discovered: List[Path] = []
-    seen: set[str] = set()
-    search_roots = get_model_search_roots(workspace)
+    extra_roots: List[Path] = []
+    configured_dirs = [
+        os.environ.get("MODEL_OUTPUT_DIR"),
+        os.environ.get("ML_OUTPUT_DIR"),
+        os.environ.get("MLOPS_DEFAULT_OUTPUT_DIR"),
+    ]
+    for value in configured_dirs:
+        if value and str(value).strip():
+            extra_roots.append(Path(str(value).strip()))
 
-    print(
-        "[PLATFORM_MODEL] Search roots="
-        + str([str(path) for path in search_roots])
+    discovered = model_detector.discover_model_artifacts(
+        workspace=workspace,
+        stdout_hint=stdout_hint,
+        extra_roots=extra_roots,
     )
-
-    for root in search_roots:
-        try:
-            if not root.exists():
-                continue
-
-            candidates = [root] if root.is_file() else list(root.rglob("*"))
-
-            for path in candidates:
-                try:
-                    if not path.is_file():
-                        continue
-
-                    if path.suffix.lower() not in SUPPORTED_MODEL_EXTENSIONS:
-                        continue
-
-                    if any(part in ignored_dirs for part in path.parts):
-                        continue
-
-                    resolved = path.resolve()
-                    key = str(resolved)
-
-                    if key in seen:
-                        continue
-
-                    seen.add(key)
-                    discovered.append(resolved)
-
-                except Exception as exc:
-                    print(
-                        "[PLATFORM_MODEL] Could not inspect candidate "
-                        f"{path}: {exc}"
-                    )
-
-        except Exception as exc:
-            print(
-                "[PLATFORM_MODEL] Could not scan model root "
-                f"{root}: {exc}"
-            )
 
     ordered = sorted(
         discovered,
@@ -1547,6 +1526,39 @@ def select_primary_model_artifact(model_artifacts: List[Path]) -> Optional[Path]
             return path
 
     return model_artifacts[0] if model_artifacts else None
+
+
+def canonicalize_primary_artifact(
+    primary_model_path: Path,
+    workspace: Path,
+) -> Path:
+    """
+    Copie l'artefact retenu vers l'emplacement canonique
+    <workspace>/outputs/platform_model/ avant son enregistrement MLflow.
+
+    Garantit un chemin stable, persisté hors des emplacements éphémères
+    (/outputs, /opt/ml/model), et réutilise la copie si le contenu est
+    identique (hash).
+    """
+    try:
+        canonical_path, digest = model_detector.canonicalize_artifact(
+            primary_model_path,
+            workspace,
+        )
+        print(
+            "[MODEL_ARTIFACT_CANONICALIZED] "
+            f"runId={_clean_env_value(os.environ.get('PLATFORM_MLFLOW_RUN_ID'))}, "
+            f"detected_path={primary_model_path}, "
+            f"canonical_path={canonical_path}, "
+            f"sha256={digest}"
+        )
+        return canonical_path
+    except Exception as exc:
+        print(
+            "[MODEL_ARTIFACT_CANONICALIZED] failed to canonicalize "
+            f"{primary_model_path}: {exc}"
+        )
+        return primary_model_path
 
 
 def _companion_artifact_score(path: Path, primary_model_path: Path) -> int:
@@ -1980,6 +1992,17 @@ def find_existing_model_version_for_run(
     for version in versions:
         version_run_id = _clean_env_value(getattr(version, "run_id", None))
         if version_run_id and version_run_id == clean_run_id:
+            existing = _clean_env_value(getattr(version, "version", None))
+            if existing:
+                return existing
+
+        # Certains serveurs MLflow renvoient run_id vide dans
+        # search_model_versions. On s'appuie alors sur le tag
+        # platform_run_id, posé de façon fiable à l'enregistrement, pour
+        # garantir l'unicité 1 run = 1 version.
+        tags = getattr(version, "tags", None) or {}
+        tagged_run_id = _clean_env_value(tags.get("platform_run_id"))
+        if tagged_run_id and tagged_run_id == clean_run_id:
             existing = _clean_env_value(getattr(version, "version", None))
             if existing:
                 return existing
@@ -3327,11 +3350,14 @@ def materialize_dataset_source(
         and source.suffix.lower()
         in DATASET_PREPARATION_EXTENSIONS
     ):
+        print("[DATASET_SOURCE_DETECTED]", flush=True)
+        print("[DATASET_PREPARATION_STARTED]", flush=True)
         source = execute_dataset_preparation_script(
             script_path=source,
             workspace=workspace,
         )
         generated = True
+        print("[DATASET_PREPARATION_COMPLETED]", flush=True)
 
     # Le script de préparation peut lui-même produire une archive.
     if source.is_file() and _is_archive(source):
@@ -3372,6 +3398,10 @@ def materialize_dataset_source(
             else source.suffix.lower().lstrip(".")
         ),
     }
+
+    print("[DATASET_PATH_RESOLVED]", flush=True)
+    print("[DATASET_VALIDATED]", flush=True)
+    print("[DATASET_MATERIALIZED]", flush=True)
 
     os.environ[
         "PLATFORM_MATERIALIZED_DATASET_PATH"
@@ -3677,6 +3707,93 @@ def create_dataset_aliases(
     return source
 
 
+def detect_script_cli_args(script_path: Path) -> set[str]:
+    """
+    Analyse le script avec `ast` pour découvrir les arguments argparse
+    qu'il déclare réellement (ex : --output_dir, --data_path).
+
+    La plateforme ne passe jamais un argument que le script ne connaît pas :
+    un script qui utilise parse_args() (et non parse_known_args) échouerait
+    sinon avec "unrecognized arguments".
+    """
+    detected: set[str] = set()
+
+    try:
+        tree = ast.parse(script_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[PLATFORM] Could not parse script for CLI args {script_path}: {exc}")
+        return detected
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+
+        if not isinstance(node.func, ast.Attribute):
+            continue
+
+        if node.func.attr != "add_argument":
+            continue
+
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                name = arg.value
+                if name.startswith("--"):
+                    detected.add(name[2:].replace("-", "_"))
+                elif name.startswith("-"):
+                    detected.add(name[1:].replace("-", "_"))
+
+    return detected
+
+
+# Alias plateforme -> flag(s) que le script pourrait déclarer.
+_DATASET_FLAG_ALIASES = {
+    "data_path",
+    "data-path",
+    "dataset_path",
+    "dataset-path",
+    "dataset",
+    "input",
+    "data",
+    "train_data",
+}
+_OUTPUT_FLAG_ALIASES = {
+    "output_dir",
+    "output-dir",
+    "output",
+    "out_dir",
+    "out",
+}
+
+
+def _command_with_declared_flags(
+    script: str,
+    dataset_path: Optional[Path],
+    output_dir: Path,
+    declared: set[str],
+) -> List[str]:
+    command = [sys.executable, script]
+
+    if dataset_path is not None:
+        dataset_flag = next(
+            (flag for flag in _DATASET_FLAG_ALIASES if flag in declared),
+            None,
+        )
+        if dataset_flag:
+            command.extend([f"--{dataset_flag}", str(dataset_path)])
+
+    output_flag = next(
+        (flag for flag in _OUTPUT_FLAG_ALIASES if flag in declared),
+        None,
+    )
+    if output_flag:
+        command.extend([f"--{output_flag}", str(output_dir)])
+
+    if len(command) == 2:
+        return []
+
+    return command
+
+
 def build_script_commands(
     script_path: Path,
     dataset_path: Optional[Path],
@@ -3685,6 +3802,18 @@ def build_script_commands(
     commands: List[List[str]] = []
 
     script = str(script_path)
+
+    declared = detect_script_cli_args(script_path)
+
+    if declared:
+        tailored = _command_with_declared_flags(
+            script,
+            dataset_path,
+            output_dir,
+            declared,
+        )
+        if tailored:
+            commands.append(tailored)
 
     if dataset_path is not None:
         data = str(dataset_path)
@@ -3739,6 +3868,14 @@ def build_script_commands(
                     out,
                 ],
             ]
+        )
+
+    # Un script qui ne déclare que --output_dir doit le recevoir, sinon
+    # la détection automatique de l'artefact fonctionnera quand même grâce
+    # à la variable d'environnement OUTPUT_DIR.
+    if declared and _OUTPUT_FLAG_ALIASES & declared and dataset_path is None:
+        commands.append(
+            [sys.executable, script, "--output_dir", str(output_dir)]
         )
 
     commands.append([sys.executable, script])
@@ -3868,58 +4005,196 @@ def run_user_script(
     return last_result
 
 
+def _safe_jsonable(value: Any) -> Any:
+    """Convertit des objets arbitraires (estimators, sérialiseurs) en JSON-safe."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _safe_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_safe_jsonable(v) for v in value]
+    if hasattr(value, "get_params"):
+        try:
+            return value.get_params()
+        except Exception:
+            pass
+    return str(value)
+
+
+def detect_estimator_framework(estimator: Any) -> Optional[str]:
+    """
+    Détection générique du framework d'un estimateur chargé.
+    Retourne un jeton de stratégie d'enregistrement MLflow :
+      sklearn | keras | tensorflow | torch | onnx | xgboost | lightgbm | catboost | pyfunc
+    """
+    if estimator is None:
+        return None
+
+    module_name = ""
+    try:
+        cls = getattr(estimator, "__class__", None) or type(estimator)
+        module_name = str(getattr(cls, "__module__", "") or "").lower()
+    except Exception:
+        module_name = ""
+
+    module_name = module_name.strip().lower()
+
+    if module_name.startswith("xgboost"):
+        return "xgboost"
+    if module_name.startswith("lightgbm"):
+        return "lightgbm"
+    if module_name.startswith("catboost"):
+        return "catboost"
+    if module_name.startswith("tensorflow.keras") or "keras" in module_name:
+        return "keras"
+    if module_name.startswith("tensorflow") or module_name.startswith("tensorflow_hub"):
+        return "tensorflow"
+    if module_name.startswith("torch"):
+        return "torch"
+    if module_name == "onnx" or "onnx" in module_name:
+        return "onnx"
+    if module_name.startswith("sklearn") or module_name.startswith("sklearn2pmml"):
+        return "sklearn"
+    if hasattr(estimator, "predict") or callable(estimator):
+        return "pyfunc"
+    return None
+
+
 def try_log_pickle_model(
     model_path: Path,
     companion_artifacts: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     companion_artifacts = companion_artifacts or {}
 
-    # Si le modèle a un scaler/preprocessor séparé, il faut absolument utiliser
-    # un wrapper pyfunc. Sinon la prédiction servirait un modèle incomplet.
-    if companion_artifacts:
+    # ------------------------------------------------------------------
+    # 1) Chargement CORRECT selon le format :
+    #    - .joblib  -> toujours joblib.load(...) (canvas du joblib)
+    #    - .pkl     -> pickle.load(...) (peut néanmoins être un objet joblib)
+    #    On ne fait JAMAIS pickle.load() sur un fichier joblib, ni joblib.load()
+    #    pour forcer un .pkl : on tente le format natif puis on suit la structure.
+    # ------------------------------------------------------------------
+    obj = None
+    extension = model_path.suffix.lower()
+
+    if extension == ".joblib":
+        try:
+            obj = joblib.load(model_path)
+        except Exception as exc:
+            print(
+                "[MODEL_OBJECT_LOADED] joblib.load failed for "
+                f"{model_path}: {exc}"
+            )
+            obj = None
+    else:  # .pkl / .pickle / autre
+        try:
+            with open(model_path, "rb") as file:
+                obj = pickle.load(file)
+        except Exception as pickle_exc:
+            # Un .pkl peut en réalité avoir été produit par joblib.dump.
+            try:
+                obj = joblib.load(model_path)
+            except Exception:
+                print(
+                    f"[MODEL_OBJECT_LOADED] pickle.load failed for "
+                    f"{model_path}: {pickle_exc}"
+                )
+                obj = None
+
+    # ------------------------------------------------------------------
+    # 2) Extraction STRUCTURELLE (bundle) :
+    #    Estimator utilisable directement  -> obj
+    #    dict {"model": estimator, ...}   -> estimateur = obj["model"],
+    #       les autres clés (labels, classes, image_size, preprocessor,
+    #       feature_extractor, feature_names, target, metadata...) sont
+    #       conservées comme métadonnées/artefacts compagnons.
+    # ------------------------------------------------------------------
+    estimator = None
+    bundle_metadata: Dict[str, Any] = {}
+    companion_keys = {
+        "labels", "classes", "class_names", "image_size", "mode",
+        "preprocessor", "feature_extractor", "feature_names",
+        "target", "metadata", "scaler", "encoder", "model_path",
+        "preprocessing", "transform", "tokenizer", "vectorizer",
+    }
+
+    if obj is not None and hasattr(obj, "predict"):
+        estimator = obj
+    elif isinstance(obj, dict):
+        for primary_key in ("model", "estimator", "pipeline", "classifier"):
+            candidate = obj.get(primary_key)
+            if candidate is not None and hasattr(candidate, "predict"):
+                estimator = candidate
+                for key, value in obj.items():
+                    if key != primary_key:
+                        bundle_metadata[key] = value
+                break
+
+    if estimator is None:
+        print(
+            f"[MODEL_ESTIMATOR_EXTRACTED] No predict-capable estimator "
+            f"found in {model_path} (type={type(obj).__name__ if obj is not None else 'None'})."
+        )
+
+    # Extracteur de framework générique (sklearn / pyfunc).
+    framework = detect_estimator_framework(estimator)
+
+    print(
+        f"[MODEL_FORMAT_DETECTED] extension={extension} format=joblib"
+        if extension == ".joblib"
+        else f"[MODEL_FORMAT_DETECTED] extension={extension} format=pickle"
+    )
+    if framework:
+        print(f"[MODEL_FRAMEWORK_DETECTED] framework={framework}", flush=True)
+
+    # ------------------------------------------------------------------
+    # 3) Enregistrement via la stratégie adaptée (jamais pyfunc en 1re).
+    # ------------------------------------------------------------------
+    if estimator is not None and framework == "sklearn":
+        try:
+            mlflow.sklearn.log_model(
+                estimator,
+                artifact_path="model",
+                metadata=bundle_metadata or None,
+            )
+            return mlflow.get_artifact_uri("model")
+        except Exception as exc:
+            print(
+                f"[MODEL_REGISTRATION_FAILED] mlflow.sklearn.log_model "
+                f"failed for {model_path}: {exc}"
+            )
+
+    # Wrapper pyfunc avec compagnons s'ils existent (scaler/preprocessor).
+    if companion_artifacts or estimator is not None:
         try:
             artifacts = {"model_path": str(model_path)}
             artifacts.update(companion_artifacts)
+            if bundle_metadata:
+                artifacts["bundle_metadata.json"] = json.dumps(
+                    _safe_jsonable(bundle_metadata),
+                    ensure_ascii=False,
+                    default=str,
+                )
 
             mlflow.pyfunc.log_model(
                 artifact_path="model",
                 python_model=GenericPyFuncWrapper(),
                 artifacts=artifacts,
             )
+
+            if estimator is not None or bundle_metadata:
+                print("[MODEL_REGISTRATION_COMPLETED]", flush=True)
             return mlflow.get_artifact_uri("model")
         except Exception as exc:
             print(
-                "[PLATFORM_MODEL] pyfunc log_model with companion artifacts failed "
-                f"for {model_path}: {exc}"
+                f"[MODEL_REGISTRATION_FAILED] pyfunc log_model failed for "
+                f"{model_path}: {exc}"
             )
 
-    # Cas simple : pipeline sklearn complet ou modèle sklearn standalone.
-    try:
-        model = joblib.load(model_path)
-
-        if hasattr(model, "predict"):
-            mlflow.sklearn.log_model(model, artifact_path="model")
-            return mlflow.get_artifact_uri("model")
-    except Exception as first_exc:
-        print(f"[PLATFORM_MODEL] sklearn log_model failed for {model_path}: {first_exc}")
-
-    # Fallback générique.
-    try:
-        with open(model_path, "rb") as file:
-            pickle.load(file)
-
-        mlflow.pyfunc.log_model(
-            artifact_path="model",
-            python_model=GenericPyFuncWrapper(),
-            artifacts={"model_path": str(model_path)},
-        )
-        return mlflow.get_artifact_uri("model")
-    except Exception as second_exc:
-        print(
-            f"[PLATFORM_MODEL] generic pyfunc log_model failed for "
-            f"{model_path}: {second_exc}"
-        )
-        return None
+    print(
+        f"[MODEL_REGISTRATION_FAILED] Nothing loadable/usable to log for "
+        f"{model_path}."
+    )
+    return None
 
 
 def _find_training_source(model_path: Path) -> Optional[Path]:
@@ -4247,16 +4522,28 @@ def run_standard_runtime(
     run_name: str,
     workspace: Optional[Path] = None,
     registered_model_name: Optional[str] = None,
+    enforce_whitelist: Optional[bool] = None,
 ) -> RunResult:
     workspace = workspace or script_path.parent
     workspace = workspace.resolve()
 
     script_path = script_path.resolve()
 
+    runtime_mode = (
+        os.environ.get("RUNTIME_MODE", "").strip().upper() or "CUSTOM_DOCKERFILE"
+    )
+
+    # La whitelist n'a de sens que pour le runtime standard (STANDARD_RUNTIME).
+    # En mode Dockerfile personnalisé (CUSTOM_DOCKERFILE), l'image est construite
+    # avec requirements.txt : toutes les dépendances sont disponibles, aucun import
+    # ne doit être bloqué par la liste blanche.
+    if enforce_whitelist is None:
+        enforce_whitelist = runtime_mode == "STANDARD_RUNTIME"
+
     script_code = script_path.read_text(encoding="utf-8")
     analysis = analyze_script_imports(script_code)
 
-    if not analysis["supported"]:
+    if enforce_whitelist and not analysis["supported"]:
         return RunResult(
             status="UNSUPPORTED_DEPENDENCIES",
             return_code=1,
@@ -4336,6 +4623,9 @@ def run_standard_runtime(
 
     script_start_time_ms = int(time.time() * 1000)
 
+    print("[STEP] TRAINING_RUNNING", flush=True)
+    print("[STEP] USER_SCRIPT_RUNNING", flush=True)
+
     result = run_user_script(
         workspace=workspace,
         entrypoint=str(script_path.name),
@@ -4345,6 +4635,8 @@ def run_standard_runtime(
     )
 
     script_end_time_ms = int(time.time() * 1000)
+
+    print("[STEP] USER_SCRIPT_COMPLETED", flush=True)
 
     parsed_output_metrics = parse_metrics(
         f"{result.stdout or ''}\n{result.stderr or ''}"
@@ -4356,18 +4648,24 @@ def run_standard_runtime(
     )
     metrics = sanitize_metrics(metrics)
 
+    print("[STEP] METRICS_EXTRACTED", flush=True)
+
     print(
         "[PLATFORM_METRICS] metrics available after script execution: "
         f"{json.dumps(metrics, ensure_ascii=False, sort_keys=True)}"
     )
 
-    model_artifacts = find_model_artifacts(workspace)
+    model_artifacts = find_model_artifacts(
+        workspace,
+        stdout_text=f"{result.stdout or ''}\n{result.stderr or ''}",
+    )
 
     if model_artifacts:
         print(
             "[PLATFORM_MODEL] model_artifacts_count="
             f"{len(model_artifacts)}"
         )
+        print("[STEP] MODEL_ARTIFACT_DETECTED", flush=True)
     else:
         print("[PLATFORM_MODEL] model_artifacts_count=0")
 
@@ -4598,11 +4896,16 @@ def run_standard_runtime(
             artifact_results: List[Dict[str, Any]] = []
 
             if primary_model_path:
+                canonical_primary = canonicalize_primary_artifact(
+                    primary_model_path,
+                    workspace,
+                )
+
                 print(f"[PLATFORM_MODEL] selected_primary_model={primary_model_path}")
                 print(f"[PLATFORM_MODEL] companion_artifacts={companion_artifacts}")
 
                 artifact_result = log_model_artifact(
-                    primary_model_path,
+                    canonical_primary,
                     companion_artifacts=companion_artifacts,
                 )
                 artifact_results.append(artifact_result)
@@ -4617,7 +4920,7 @@ def run_standard_runtime(
                     )
 
                     manifest = build_model_manifest(
-                        primary_model_path,
+                        canonical_primary,
                         logged_companion_artifacts,
                         metrics,
                         workspace,
@@ -4679,6 +4982,7 @@ def run_standard_runtime(
                         "[PLATFORM_MODEL] Local model registered as platform model: "
                         f"{platform_registered_model_name} v{platform_model_version}"
                     )
+                    print("[STEP] MLFLOW_REGISTERED", flush=True)
 
                 except Exception as exc:
                     print(
@@ -4896,6 +5200,21 @@ def main() -> int:
         else:
             dataset_path = workspace / raw_dataset_path
 
+    # Validation séparée du dataset : un chemin inexistant produit une erreur
+    # claire (DATASET_PATH_MISMATCH) avant même de lancer le script utilisateur.
+    if dataset_path is not None and not dataset_path.exists():
+        print(
+            "[STEP] DATASET_INVALID",
+            flush=True,
+        )
+        print(
+            f"[PLATFORM_RUNNER] ERROR: dataset path not found: {dataset_path}",
+            flush=True,
+        )
+        return 1
+
+    runtime_mode = os.environ.get("RUNTIME_MODE", "").strip().upper()
+
     try:
         result = run_standard_runtime(
             script_path=script_path,
@@ -4905,6 +5224,7 @@ def main() -> int:
             run_name=args.run_name,
             workspace=workspace,
             registered_model_name=args.registered_model_name,
+            enforce_whitelist=None,
         )
 
         print(json.dumps(result.__dict__, indent=2, default=str, ensure_ascii=False))

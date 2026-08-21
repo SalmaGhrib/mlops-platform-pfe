@@ -3,6 +3,7 @@ package com.mlops.platform.service;
 import com.mlops.platform.dto.DeployModelRequestDto;
 import com.mlops.platform.dto.ModelDeploymentResponse;
 import com.mlops.platform.dto.ModelDeploymentShareResponse;
+import com.mlops.platform.dto.SearchPageResponse;
 import com.mlops.platform.dto.ShareDeploymentRequest;
 import com.mlops.platform.entity.DeploymentStatus;
 import com.mlops.platform.entity.DeploymentVisibility;
@@ -12,6 +13,8 @@ import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.entity.User;
 import com.mlops.platform.exception.GatewayException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.MlProjectRepository;
@@ -36,6 +39,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
 
 @Service
 public class ModelDeploymentService {
@@ -123,6 +130,12 @@ public class ModelDeploymentService {
 
     @Value("${app.mlops.auto-deploy.enabled:true}")
     private boolean autoDeployEnabled;
+
+    @Value("${app.kubernetes.rollback-window-ms:600000}")
+    private long rollbackWindowMs;
+
+    @Value("${app.kubernetes.prediction-smoke-test.enabled:true}")
+    private boolean predictionSmokeTestEnabled;
 
     public ModelDeploymentService(
             ModelDeploymentRepository modelDeploymentRepository,
@@ -747,6 +760,21 @@ public ModelDeploymentResponse deployProductionModel(DeployModelRequestDto reque
     String deploymentName = safeModelName + "-v" + safeVersion + "-deployment";
     String serviceName = safeModelName + "-v" + safeVersion + "-service";
 
+    /*
+     * Blue/green :
+     * - deploymentName/serviceName sont propres à la version (conservés pour
+     *   la compatibilité du SMART MODEL GATEWAY et des endpoints ClusterIP).
+     * - stableServiceName est le Service stable du modèle (ex. detection-spam-service),
+     *   indépendant de la version, dont le selector bascule blue/green.
+     */
+    String stableServiceName = safeModelName + "-service";
+
+    String candidateServingTrack = resolveCandidateServingTrack(registeredModelName);
+    String stableServiceTargetTrack = resolveStableServiceTargetTrack(
+            registeredModelName,
+            candidateServingTrack
+    );
+
     ModelDeployment existingSameVersion = findLatestDeploymentForModelVersion(
             registeredModelName,
             modelVersion
@@ -884,6 +912,8 @@ public ModelDeploymentResponse deployProductionModel(DeployModelRequestDto reque
     deployment.setPredictionEndpoint(null);
     deployment.setDeploymentStatus(DeploymentStatus.DEPLOYING);
     deployment.setActive(false);
+    deployment.setServingTrack(candidateServingTrack);
+    deployment.setStableServiceName(stableServiceName);
     deployment.setErrorMessage(null);
 
     applyApiAccessConfig(deployment, apiAccessConfig);
@@ -926,14 +956,30 @@ public ModelDeploymentResponse deployProductionModel(DeployModelRequestDto reque
         String serviceBaseUrl = kubernetesModelServingService.deployModelServer(
                 deploymentName,
                 serviceName,
+                candidateServingTrack,
                 imageToDeploy,
                 registeredModelName,
                 modelVersion,
                 dataType
         );
 
+        kubernetesModelServingService.ensureStableService(
+                stableServiceName,
+                registeredModelName,
+                stableServiceTargetTrack
+        );
+
         String finalPredictionEndpoint = buildEndpointForDataType(serviceBaseUrl, dataType);
         saved.setPredictionEndpoint(finalPredictionEndpoint);
+
+        System.out.println("[BLUE_GREEN_START] Candidate deployment created. "
+                + "candidateDeployment=" + deploymentName
+                + ", candidateService=" + serviceName
+                + ", stableService=" + stableServiceName
+                + ", candidateTrack=" + candidateServingTrack
+                + ", stableServiceTargetTrack=" + stableServiceTargetTrack
+                + ", model=" + registeredModelName
+                + ", version=" + modelVersion);
 
         boolean readyInKubernetes = kubernetesModelServingService.isModelServerReady(
                 deploymentName,
@@ -953,10 +999,39 @@ public ModelDeploymentResponse deployProductionModel(DeployModelRequestDto reque
             System.out.println("[BLUE_GREEN] Candidate deployment created but not ready yet. "
                     + "old active deployment remains active. "
                     + "candidateDeployment=" + deploymentName
-                    + ", candidateService=" + serviceName);
+                    + ", candidateService=" + serviceName
+                    + ", candidateTrack=" + candidateServingTrack);
 
             return enrichDeploymentResponse(ModelDeploymentResponse.fromEntity(pending));
         }
+
+        if (predictionSmokeTestEnabled) {
+            boolean probeOk = kubernetesModelServingService.probePredictionEndpoint(finalPredictionEndpoint);
+
+            if (!probeOk) {
+                saved.setDeploymentStatus(DeploymentStatus.DEPLOYING);
+                saved.setActive(false);
+                saved.setErrorMessage(safeErrorMessage(
+                        "Kubernetes is ready but the prediction endpoint did not answer. "
+                                + "Candidate kept DEPLOYING, old active deployment remains active."
+                ));
+
+                ModelDeployment pending = modelDeploymentRepository.saveAndFlush(saved);
+
+                System.out.println("[BLUE_GREEN] Candidate prediction smoke test failed. "
+                        + "old active deployment remains active. "
+                        + "candidateDeployment=" + deploymentName
+                        + ", predictionEndpoint=" + finalPredictionEndpoint);
+
+                return enrichDeploymentResponse(ModelDeploymentResponse.fromEntity(pending));
+            }
+        }
+
+        System.out.println("[CANDIDATE_READY] Candidate is ready in Kubernetes. "
+                + "Switching traffic and promoting. "
+                + "candidateDeployment=" + deploymentName
+                + ", candidateTrack=" + candidateServingTrack
+                + ", stableService=" + stableServiceName);
 
         ModelDeployment deployed = promoteReadyDeployment(
                 saved,
@@ -1229,18 +1304,57 @@ public void reconcileDeploymentsWithKubernetes() {
             applyPromoteReadyInNewTransaction(deployment.getId());
             continue;
         }
+    }
 
-        if (DeploymentStatus.DEPLOYED.equals(status)
-                && Boolean.TRUE.equals(deployment.getActive())) {
+    /*
+     * Phase D : rollback automatique si la Production active perd sa readiness.
+     * Le reconciler rebascule le Service stable du modèle sur la dernière bonne
+     * version (encore running grâce à la fenêtre de rollback). Sans candidate,
+     * la ligne active passe en OUT_OF_SYNC.
+     */
+    for (ModelDeployment deployment : deployments) {
+        if (deployment == null || deployment.getId() == null) {
+            continue;
+        }
 
-            if (!readyInKubernetes) {
-                applyMarkOutOfSyncInNewTransaction(
-                        deployment.getId(),
-                        "MySQL marked this model as DEPLOYED, but Kubernetes Deployment/Service are missing or not ready."
-                );
-            }
+        boolean readyInKubernetes =
+                Boolean.TRUE.equals(readyByDeploymentId.get(deployment.getId()));
+
+        if (DeploymentStatus.DEPLOYED.equals(deployment.getDeploymentStatus())
+                && Boolean.TRUE.equals(deployment.getActive())
+                && !readyInKubernetes) {
+
+            attemptRollbackInNewTransaction(deployment.getId());
         }
     }
+
+    /*
+     * Phase E : nettoyage des versions obsolètes (DEPLOYED + inactive) dont les
+     * ressources Kubernetes existent encore et dont la fenêtre de rollback est
+     * dépassée. On ne supprime JAMAIS la Production active ni ses ressources.
+     */
+    for (ModelDeployment deployment : deployments) {
+        if (deployment == null || deployment.getId() == null) {
+            continue;
+        }
+
+        boolean readyInKubernetes =
+                Boolean.TRUE.equals(readyByDeploymentId.get(deployment.getId()));
+
+        if (DeploymentStatus.DEPLOYED.equals(deployment.getDeploymentStatus())
+                && !Boolean.TRUE.equals(deployment.getActive())
+                && readyInKubernetes
+                && isStaleDeployment(deployment)) {
+
+            cleanupStaleDeploymentInNewTransaction(deployment.getId());
+        }
+    }
+
+    /*
+     * Phase F : une seule Production active par modèle.
+     * Si deux lignes sont actives pour le même modèle, on garde la plus récente.
+     */
+    enforceSingleActivePerModel(deployments);
 }
 
 private void applyPromoteReadyInNewTransaction(Long deploymentId) {
@@ -1302,6 +1416,279 @@ private void applyMarkOutOfSyncInNewTransaction(Long deploymentId, String messag
                 + ", reason=" + e.getMessage());
     }
 }
+
+    /*
+     * =========================================================
+     * BLUE/GREEN — reconciler : rollback, stale cleanup, single active
+     * =========================================================
+     */
+
+    private void attemptRollbackInNewTransaction(Long deploymentId) {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        template.setTimeout(60);
+
+        try {
+            template.executeWithoutResult(status -> {
+                ModelDeployment current = modelDeploymentRepository.findById(deploymentId)
+                        .orElseThrow(() -> new RuntimeException(
+                                "Deployment not found for rollback. deploymentId=" + deploymentId
+                        ));
+
+                if (!DeploymentStatus.DEPLOYED.equals(current.getDeploymentStatus())
+                        || !Boolean.TRUE.equals(current.getActive())) {
+                    return;
+                }
+
+                ModelDeployment rollbackCandidate =
+                        findRollbackCandidateForModel(current.getRegisteredModelName(), current.getId());
+
+                if (rollbackCandidate == null) {
+                    System.out.println("[ROLLBACK_STARTED] Active deployment lost readiness but no "
+                            + "previous version is available. Marking OUT_OF_SYNC. "
+                            + "model=" + current.getRegisteredModelName()
+                            + ", version=" + current.getModelVersion()
+                            + ", deploymentId=" + current.getId());
+
+                    markDeploymentOutOfSync(
+                            current,
+                            "Active deployment lost Kubernetes readiness and no previous version is available for rollback."
+                    );
+                    return;
+                }
+
+                System.out.println("[ROLLBACK_STARTED] model=" + current.getRegisteredModelName()
+                        + ", fromVersion=" + current.getModelVersion()
+                        + ", toVersion=" + rollbackCandidate.getModelVersion()
+                        + ", deploymentId=" + current.getId());
+
+                if (hasText(rollbackCandidate.getStableServiceName())) {
+                    String track = normalizeServingTrack(rollbackCandidate.getServingTrack());
+                    kubernetesModelServingService.switchStableServiceTrack(
+                            rollbackCandidate.getStableServiceName(),
+                            rollbackCandidate.getRegisteredModelName(),
+                            track
+                    );
+                }
+
+                current.setActive(false);
+                current.setDeploymentStatus(DeploymentStatus.OUT_OF_SYNC);
+                current.setErrorMessage(safeErrorMessage(
+                        "Rolled back because this deployment lost Kubernetes readiness."
+                ));
+                modelDeploymentRepository.save(current);
+
+                rollbackCandidate.setActive(true);
+                rollbackCandidate.setDeploymentStatus(DeploymentStatus.DEPLOYED);
+                rollbackCandidate.setErrorMessage(null);
+                modelDeploymentRepository.save(rollbackCandidate);
+
+                modelDeploymentRepository.flush();
+
+                System.out.println("[ROLLBACK_COMPLETED] model=" + current.getRegisteredModelName()
+                        + ", productionRestored=" + rollbackCandidate.getModelVersion()
+                        + ", deploymentId=" + rollbackCandidate.getId());
+            });
+        } catch (Exception e) {
+            System.out.println("[ROLLBACK_STARTED] Rollback failed. deploymentId=" + deploymentId
+                    + ", reason=" + e.getMessage());
+        }
+    }
+
+    private ModelDeployment findRollbackCandidateForModel(String registeredModelName, Long excludeId) {
+        if (!hasText(registeredModelName)) {
+            return null;
+        }
+
+        List<ModelDeployment> deployments =
+                modelDeploymentRepository.findByRegisteredModelNameOrderByCreatedAtDesc(
+                        registeredModelName.trim()
+                );
+
+        if (deployments == null || deployments.isEmpty()) {
+            return null;
+        }
+
+        for (ModelDeployment deployment : deployments) {
+            if (deployment == null || deployment.getId() == null) {
+                continue;
+            }
+
+            if (excludeId != null && deployment.getId().equals(excludeId)) {
+                continue;
+            }
+
+            if (!DeploymentStatus.DEPLOYED.equals(deployment.getDeploymentStatus())
+                    || Boolean.TRUE.equals(deployment.getActive())) {
+                continue;
+            }
+
+            if (isDeploymentReallyReadyInKubernetes(deployment)) {
+                return deployment;
+            }
+        }
+
+        return null;
+    }
+
+    private boolean isStaleDeployment(ModelDeployment deployment) {
+        if (deployment == null) {
+            return false;
+        }
+
+        LocalDateTime base = deployment.getUpdatedAt() != null
+                ? deployment.getUpdatedAt()
+                : deployment.getDeployedAt();
+
+        if (base == null) {
+            return false;
+        }
+
+        return base.isBefore(
+                LocalDateTime.now().minus(rollbackWindowMs, java.time.temporal.ChronoUnit.MILLIS)
+        );
+    }
+
+    private void cleanupStaleDeploymentInNewTransaction(Long deploymentId) {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        template.setTimeout(60);
+
+        try {
+            template.executeWithoutResult(status -> {
+                ModelDeployment stale = modelDeploymentRepository.findById(deploymentId)
+                        .orElseThrow(() -> new RuntimeException(
+                                "Deployment not found for stale cleanup. deploymentId=" + deploymentId
+                        ));
+
+                if (!DeploymentStatus.DEPLOYED.equals(stale.getDeploymentStatus())
+                        || Boolean.TRUE.equals(stale.getActive())) {
+                    return;
+                }
+
+                System.out.println("[STALE_DEPLOYMENT_DETECTED] model=" + stale.getRegisteredModelName()
+                        + ", version=" + stale.getModelVersion()
+                        + ", deployment=" + stale.getDeploymentName()
+                        + ", service=" + stale.getServiceName()
+                        + ", deploymentId=" + stale.getId());
+
+                kubernetesModelServingService.deleteModelServer(
+                        stale.getDeploymentName(),
+                        stale.getServiceName()
+                );
+
+                stale.setDeploymentStatus(DeploymentStatus.OUT_OF_SYNC);
+                stale.setErrorMessage(safeErrorMessage(
+                        "Superseded by a newer production version and cleaned up after the rollback window."
+                ));
+                modelDeploymentRepository.saveAndFlush(stale);
+
+                System.out.println("[OLD_DEPLOYMENT_CLEANED] model=" + stale.getRegisteredModelName()
+                        + ", version=" + stale.getModelVersion()
+                        + ", deployment=" + stale.getDeploymentName()
+                        + ", service=" + stale.getServiceName());
+            });
+        } catch (Exception e) {
+            System.out.println("[STALE_DEPLOYMENT_DETECTED] Cleanup failed. deploymentId=" + deploymentId
+                    + ", reason=" + e.getMessage());
+        }
+    }
+
+    private void enforceSingleActivePerModel(List<ModelDeployment> deployments) {
+        if (deployments == null || deployments.isEmpty()) {
+            return;
+        }
+
+        Map<String, ModelDeployment> activeByModel = new LinkedHashMap<>();
+        List<Long> toDeactivateIds = new ArrayList<>();
+
+        for (ModelDeployment deployment : deployments) {
+            if (deployment == null || deployment.getId() == null) {
+                continue;
+            }
+
+            if (!DeploymentStatus.DEPLOYED.equals(deployment.getDeploymentStatus())
+                    || !Boolean.TRUE.equals(deployment.getActive())) {
+                continue;
+            }
+
+            if (!hasText(deployment.getRegisteredModelName())) {
+                continue;
+            }
+
+            String key = deployment.getRegisteredModelName().trim().toLowerCase();
+            ModelDeployment existing = activeByModel.get(key);
+
+            if (existing == null) {
+                activeByModel.put(key, deployment);
+                continue;
+            }
+
+            ModelDeployment toKeep = isNewerDeployment(deployment, existing) ? deployment : existing;
+            ModelDeployment toDeactivate = toKeep == deployment ? existing : deployment;
+
+            System.out.println("[BLUE_GREEN] Duplicate active deployment detected for model="
+                    + deployment.getRegisteredModelName()
+                    + ". Keeping deploymentId=" + toKeep.getId()
+                    + ", deactivating deploymentId=" + toDeactivate.getId());
+
+            if (toDeactivate.getId() != null) {
+                toDeactivateIds.add(toDeactivate.getId());
+            }
+        }
+
+        for (Long id : toDeactivateIds) {
+            applyDeactivateActiveInNewTransaction(id);
+        }
+    }
+
+    private boolean isNewerDeployment(ModelDeployment a, ModelDeployment b) {
+        LocalDateTime aTime = a.getDeployedAt() != null ? a.getDeployedAt() : a.getUpdatedAt();
+        LocalDateTime bTime = b.getDeployedAt() != null ? b.getDeployedAt() : b.getUpdatedAt();
+
+        if (aTime != null && bTime != null) {
+            int cmp = aTime.compareTo(bTime);
+            if (cmp != 0) {
+                return cmp > 0;
+            }
+        } else if (aTime != null) {
+            return true;
+        } else if (bTime != null) {
+            return false;
+        }
+
+        Long aId = a.getId();
+        Long bId = b.getId();
+
+        return aId != null && bId != null && aId > bId;
+    }
+
+    private void applyDeactivateActiveInNewTransaction(Long deploymentId) {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        template.setTimeout(30);
+
+        try {
+            template.executeWithoutResult(status -> {
+                ModelDeployment deployment = modelDeploymentRepository.findById(deploymentId)
+                        .orElse(null);
+
+                if (deployment == null || !Boolean.TRUE.equals(deployment.getActive())) {
+                    return;
+                }
+
+                deployment.setActive(false);
+                modelDeploymentRepository.saveAndFlush(deployment);
+            });
+        } catch (Exception e) {
+            System.out.println("[BLUE_GREEN] Failed to deactivate duplicate active deployment. "
+                    + "deploymentId=" + deploymentId
+                    + ", reason=" + e.getMessage());
+        }
+    }
 
 @Transactional
 public ModelDeploymentResponse createDeploymentRecord(
@@ -1374,9 +1761,40 @@ public ModelDeploymentResponse createDeploymentRecord(
 
     applyApiAccessConfig(deployment, apiAccessConfig);
 
-    ModelDeployment savedDeployment = modelDeploymentRepository.saveAndFlush(deployment);
+    try {
+        ModelDeployment savedDeployment = modelDeploymentRepository.saveAndFlush(deployment);
 
-    return enrichDeploymentResponse(ModelDeploymentResponse.fromEntity(savedDeployment));
+        return enrichDeploymentResponse(ModelDeploymentResponse.fromEntity(savedDeployment));
+
+    } catch (DataIntegrityViolationException duplicateViolation) {
+        /*
+         * Deux schedulers peuvent créer la même ligne en même temps.
+         * La contrainte UNIQUE uk_deployment_model_version a empêché
+         * le doublon : on retourne la ligne existante.
+         */
+        ModelDeployment raced = findLatestDeploymentForModelVersion(
+                registeredModelName,
+                modelVersion
+        );
+
+        if (raced != null) {
+            ensureApiAccessEnabled(raced);
+            ModelDeployment savedRaced =
+                    modelDeploymentRepository.saveAndFlush(raced);
+
+            System.out.println("[MODEL_DEPLOYMENT] createDeploymentRecord "
+                    + "recovered from unique-constraint race. "
+                    + "model=" + registeredModelName
+                    + ", version=" + modelVersion
+                    + ", existingDeploymentId=" + savedRaced.getId());
+
+            return enrichDeploymentResponse(
+                    ModelDeploymentResponse.fromEntity(savedRaced)
+            );
+        }
+
+        throw duplicateViolation;
+    }
 }
 
 
@@ -1468,8 +1886,31 @@ public ModelDeploymentResponse createDeploymentRecord(
 public ModelDeploymentResponse markAsDeployed(Long deploymentId) {
     ModelDeployment deployment = findDeploymentOrThrow(deploymentId);
 
-    deactivateActiveDeploymentsForProjectExcept(
-            deployment.getProjectId(),
+    /*
+     * Blue/green : on bascule le trafic vers ce déploiement puis on désactive
+     * les anciennes versions du modèle (ressources conservées pour rollback).
+     */
+    if (hasText(deployment.getStableServiceName())) {
+        String track = normalizeServingTrack(deployment.getServingTrack());
+
+        try {
+            kubernetesModelServingService.switchStableServiceTrack(
+                    deployment.getStableServiceName(),
+                    deployment.getRegisteredModelName(),
+                    track
+            );
+            System.out.println("[TRAFFIC_SWITCH] Manual promotion switched traffic to track="
+                    + track
+                    + ", model=" + deployment.getRegisteredModelName()
+                    + ", version=" + deployment.getModelVersion());
+        } catch (Exception e) {
+            System.out.println("[TRAFFIC_SWITCH] Failed to switch stable service on manual promotion. "
+                    + "reason=" + e.getMessage());
+        }
+    }
+
+    deactivatePreviousActiveDeploymentsForModel(
+            deployment.getRegisteredModelName(),
             deployment.getId()
     );
 
@@ -1483,6 +1924,11 @@ public ModelDeploymentResponse markAsDeployed(Long deploymentId) {
     ModelDeployment saved = modelDeploymentRepository.saveAndFlush(deployment);
 
     notifyDeploymentDeployedIfNeeded(saved);
+
+    System.out.println("[PRODUCTION_PROMOTED] Manual promotion. model="
+            + saved.getRegisteredModelName()
+            + ", version=" + saved.getModelVersion()
+            + ", deploymentId=" + saved.getId());
 
     return ModelDeploymentResponse.fromEntity(saved);
 }
@@ -1932,6 +2378,105 @@ public ModelDeploymentResponse markAsFailed(Long deploymentId, String errorMessa
 
         modelDeploymentRepository.flush();
     }
+
+    /*
+     * =========================================================
+     * BLUE/GREEN — helpers
+     * =========================================================
+     */
+
+    private ModelDeployment findCurrentActiveDeploymentForModel(String registeredModelName) {
+        return findKubernetesReadyActiveDeployment(registeredModelName).orElse(null);
+    }
+
+    /*
+     * La candidate prend la couleur opposée à la Production courante.
+     * Sans Production active, la première version démarre sur "blue".
+     */
+    private String resolveCandidateServingTrack(String registeredModelName) {
+        ModelDeployment active = findCurrentActiveDeploymentForModel(registeredModelName);
+
+        if (active != null) {
+            String track = normalizeServingTrack(active.getServingTrack());
+            return "green".equals(track) ? "blue" : "green";
+        }
+
+        return "blue";
+    }
+
+    /*
+     * Cible du Service stable pendant la création de la candidate :
+     * on garde le trafic sur la Production courante tant qu'elle existe et
+     * possède un Service stable ; sinon (première version / legacy sans Service
+     * stable) on pointe vers la candidate.
+     */
+    private String resolveStableServiceTargetTrack(
+            String registeredModelName,
+            String candidateTrack
+    ) {
+        ModelDeployment active = findCurrentActiveDeploymentForModel(registeredModelName);
+
+        if (active != null && hasText(active.getStableServiceName())) {
+            return normalizeServingTrack(active.getServingTrack());
+        }
+
+        return candidateTrack;
+    }
+
+    private String normalizeServingTrack(String track) {
+        if (track != null && "green".equalsIgnoreCase(track.trim())) {
+            return "green";
+        }
+
+        return "blue";
+    }
+
+    /*
+     * Désactive les anciennes versions actives du MÊME modèle (et non du même
+     * projet : le modèle est l'unité de Production), sans supprimer leurs
+     * ressources Kubernetes : elles restent disponibles pour un rollback
+     * pendant la fenêtre de rollback, puis le reconciler les nettoie.
+     */
+    private void deactivatePreviousActiveDeploymentsForModel(String registeredModelName, Long keepId) {
+        if (!hasText(registeredModelName)) {
+            return;
+        }
+
+        List<ModelDeployment> deployments =
+                modelDeploymentRepository.findByRegisteredModelNameOrderByCreatedAtDesc(
+                        registeredModelName.trim()
+                );
+
+        if (deployments == null || deployments.isEmpty()) {
+            return;
+        }
+
+        for (ModelDeployment oldDeployment : deployments) {
+            if (oldDeployment == null || oldDeployment.getId() == null) {
+                continue;
+            }
+
+            if (keepId != null && oldDeployment.getId().equals(keepId)) {
+                continue;
+            }
+
+            if (!Boolean.TRUE.equals(oldDeployment.getActive())) {
+                continue;
+            }
+
+            oldDeployment.setActive(false);
+            modelDeploymentRepository.save(oldDeployment);
+
+            System.out.println("[BLUE_GREEN] Previous active deployment deactivated. "
+                    + "Kubernetes resources kept for rollback window. "
+                    + "model=" + registeredModelName.trim()
+                    + ", version=" + oldDeployment.getModelVersion()
+                    + ", deploymentId=" + oldDeployment.getId());
+        }
+
+        modelDeploymentRepository.flush();
+    }
+
 private String resolveServingImageForRuntime(
         MlExperiment experiment,
         String registeredModelName,
@@ -2798,6 +3343,224 @@ public List<ModelDeploymentResponse> getVisibleDeploymentsForUser(User currentUs
                 .toList();
     }
 
+    /**
+     * Recherche dynamique des déploiements avec filtres et pagination.
+     *
+     * @param scope "owned" pour la page Déploiements, "accessible" pour la page Modèles accessibles.
+     *
+     * Pas de @Transactional : le filtrage appelle Kubernetes
+     * (isDeploymentReadyForUserInterface) et peut marquer des déploiements
+     * OUT_OF_SYNC (écriture) ; on ne garde jamais une connexion DB ouverte
+     * pendant des appels réseau.
+     */
+    public SearchPageResponse<ModelDeploymentResponse> searchDeploymentsForUser(
+            User currentUser,
+            String scope,
+            String q,
+            String projectType,
+            String dataType,
+            int page,
+            int size
+    ) {
+        if (currentUser == null || currentUser.getId() == null) {
+            throw new RuntimeException("Utilisateur connecté introuvable.");
+        }
+
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(size, 50));
+        boolean ownedOnly = "owned".equalsIgnoreCase(scope);
+
+        Specification<MlProject> projectSpec = deploymentProjectScopeSpecification(
+                currentUser, ownedOnly, projectType, dataType);
+
+        List<MlProject> candidateProjects = mlProjectRepository.findAll(projectSpec);
+
+        if (candidateProjects == null || candidateProjects.isEmpty()) {
+            return new SearchPageResponse<>(List.of(), 0, safePage, safeSize, false);
+        }
+
+        Map<Long, MlProject> projectById = new LinkedHashMap<>();
+        List<Long> projectIds = new ArrayList<>();
+
+        for (MlProject project : candidateProjects) {
+            if (project == null || project.getId() == null) {
+                continue;
+            }
+            projectById.put(project.getId(), project);
+            projectIds.add(project.getId());
+        }
+
+        if (projectIds.isEmpty()) {
+            return new SearchPageResponse<>(List.of(), 0, safePage, safeSize, false);
+        }
+
+        List<ModelDeployment> candidates =
+                modelDeploymentRepository.findByProjectIdInOrderByCreatedAtDesc(projectIds);
+
+        String normalizedQ = q == null ? "" : q.trim().toLowerCase();
+
+        List<ScoredDeployment> scored = new ArrayList<>();
+
+        for (ModelDeployment deployment : candidates) {
+            if (deployment == null || deployment.getId() == null) {
+                continue;
+            }
+
+            if (!isDeploymentReadyForUserInterface(deployment)) {
+                continue;
+            }
+
+            if (!ownedOnly) {
+                DeploymentVisibility visibility = deployment.getVisibility();
+                if (visibility == null) {
+                    visibility = DeploymentVisibility.PRIVATE;
+                }
+
+                boolean accessible = DeploymentVisibility.PUBLIC_API.equals(visibility)
+                        || (DeploymentVisibility.SHARED.equals(visibility)
+                        && isDeploymentSharedWithUser(deployment, currentUser));
+
+                if (!accessible) {
+                    continue;
+                }
+            }
+
+            int relevance = deploymentRelevanceScore(deployment, projectById, normalizedQ);
+
+            if (!normalizedQ.isEmpty() && relevance <= 0) {
+                continue;
+            }
+
+            scored.add(new ScoredDeployment(deployment, relevance));
+        }
+
+        List<ModelDeployment> ordered = scored.stream()
+                .sorted((a, b) -> {
+                    int cmp = Integer.compare(b.relevance, a.relevance);
+                    if (cmp != 0) {
+                        return cmp;
+                    }
+                    LocalDateTime ad = a.deployment.getCreatedAt();
+                    LocalDateTime bd = b.deployment.getCreatedAt();
+                    if (ad == null) {
+                        return 1;
+                    }
+                    if (bd == null) {
+                        return -1;
+                    }
+                    return bd.compareTo(ad);
+                })
+                .map(s -> s.deployment)
+                .toList();
+
+        List<ModelDeployment> deduped = deduplicateVisibleDeploymentsByModel(ordered);
+
+        List<ModelDeploymentResponse> all = deduped.stream()
+                .map(ModelDeploymentResponse::fromEntity)
+                .map(this::enrichDeploymentResponse)
+                .toList();
+
+        long total = all.size();
+        int from = Math.min(safePage * safeSize, all.size());
+        int to = Math.min(from + safeSize, all.size());
+        List<ModelDeploymentResponse> items = from >= all.size()
+                ? List.of()
+                : all.subList(from, to);
+
+        return new SearchPageResponse<>(items, total, safePage, safeSize, to < all.size());
+    }
+
+    private Specification<MlProject> deploymentProjectScopeSpecification(
+            User currentUser,
+            boolean ownedOnly,
+            String projectType,
+            String dataType
+    ) {
+        return (Root<MlProject> root, CriteriaQuery<?> query, CriteriaBuilder cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+
+            predicates.add(cb.isNotNull(root.get("owner")));
+
+            if (ownedOnly) {
+                predicates.add(cb.equal(root.get("owner"), currentUser));
+            } else {
+                predicates.add(cb.notEqual(root.get("owner"), currentUser));
+            }
+
+            if (projectType != null && !projectType.isBlank()) {
+                predicates.add(cb.equal(
+                        cb.lower(root.get("projectType")),
+                        projectType.trim().toLowerCase()
+                ));
+            }
+
+            if (dataType != null && !dataType.isBlank()) {
+                predicates.add(cb.equal(
+                        cb.upper(root.get("dataType")),
+                        dataType.trim().toUpperCase()
+                ));
+            }
+
+            return cb.and(predicates.toArray(new Predicate[0]));
+        };
+    }
+
+    private int deploymentRelevanceScore(
+            ModelDeployment deployment,
+            Map<Long, MlProject> projectById,
+            String q
+    ) {
+        if (q == null || q.isEmpty()) {
+            return 0;
+        }
+
+        int score = 0;
+
+        String registered = deployment.getRegisteredModelName();
+        if (registered != null) {
+            String lower = registered.toLowerCase();
+            if (lower.equals(q)) {
+                score += 100;
+            } else if (lower.startsWith(q)) {
+                score += 80;
+            } else if (lower.contains(q)) {
+                score += 60;
+            }
+        }
+
+        String name = deployment.getDeploymentName();
+        if (name != null && name.toLowerCase().contains(q)) {
+            score += 50;
+        }
+
+        String version = deployment.getModelVersion();
+        if (version != null && version.toLowerCase().contains(q)) {
+            score += 20;
+        }
+
+        MlProject project = projectById.get(deployment.getProjectId());
+        if (project != null) {
+            if (project.getName() != null && project.getName().toLowerCase().contains(q)) {
+                score += 40;
+            }
+            if (project.getDescription() != null && project.getDescription().toLowerCase().contains(q)) {
+                score += 30;
+            }
+        }
+
+        return score;
+    }
+
+    private static class ScoredDeployment {
+        private final ModelDeployment deployment;
+        private final int relevance;
+
+        private ScoredDeployment(ModelDeployment deployment, int relevance) {
+            this.deployment = deployment;
+            this.relevance = relevance;
+        }
+    }
+
     @Transactional
     public void deleteDeploymentsForProject(Long projectId) {
         if (projectId == null) {
@@ -3272,9 +4035,43 @@ private void cleanupDuplicateDeploymentsForSameModelVersion(
     ModelDeployment saved = modelDeploymentRepository.saveAndFlush(deployment);
 
     /*
-     * Blue/green : on désactive les anciennes versions seulement après readiness Kubernetes.
+     * Blue/green : on ne bascule le trafic qu'après readiness Kubernetes.
+     * Le Service stable du modèle bascule son selector vers le track candidat :
+     * opération atomique côté Kubernetes, aucun pod ne redémarre.
      */
-    deactivateActiveDeploymentsForProjectExcept(projectId, saved.getId());
+    if (hasText(saved.getStableServiceName())) {
+        String track = normalizeServingTrack(saved.getServingTrack());
+
+        try {
+            kubernetesModelServingService.switchStableServiceTrack(
+                    saved.getStableServiceName(),
+                    saved.getRegisteredModelName(),
+                    track
+            );
+
+            System.out.println("[TRAFFIC_SWITCH] Traffic switched to track="
+                    + track
+                    + ", model=" + saved.getRegisteredModelName()
+                    + ", version=" + saved.getModelVersion()
+                    + ", stableService=" + saved.getStableServiceName());
+        } catch (Exception e) {
+            System.out.println("[TRAFFIC_SWITCH] Failed to switch stable service. "
+                    + "model=" + saved.getRegisteredModelName()
+                    + ", version=" + saved.getModelVersion()
+                    + ", stableService=" + saved.getStableServiceName()
+                    + ", reason=" + e.getMessage());
+        }
+    }
+
+    /*
+     * Blue/green : les anciennes versions actives sont désactivées (active=false)
+     * MAIS leurs ressources Kubernetes restent en place pendant la fenêtre de
+     * rollback. Le reconciler les nettoie ensuite (STALE_DEPLOYMENT).
+     */
+    deactivatePreviousActiveDeploymentsForModel(
+            saved.getRegisteredModelName(),
+            saved.getId()
+    );
 
     cleanupDuplicateDeploymentsForSameModelVersion(
             saved.getRegisteredModelName(),
@@ -3285,6 +4082,13 @@ private void cleanupDuplicateDeploymentsForSameModelVersion(
     ModelDeployment finalSaved = modelDeploymentRepository.saveAndFlush(saved);
 
     notifyDeploymentDeployedIfNeeded(finalSaved);
+
+    System.out.println("[PRODUCTION_PROMOTED] model="
+            + finalSaved.getRegisteredModelName()
+            + ", version=" + finalSaved.getModelVersion()
+            + ", deploymentId=" + finalSaved.getId()
+            + ", track=" + normalizeServingTrack(finalSaved.getServingTrack())
+            + ", active=" + finalSaved.getActive());
 
     return finalSaved;
 }

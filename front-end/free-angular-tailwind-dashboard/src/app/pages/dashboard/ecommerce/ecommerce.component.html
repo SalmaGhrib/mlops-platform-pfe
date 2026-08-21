@@ -1,323 +1,395 @@
 <div class="space-y-6 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mlops-fade-in">
-  <!-- Header -->
-  <header class="overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-white/[0.03]" role="banner" aria-label="Bienvenue">
-    <div class="border-b border-gray-100 bg-gradient-to-r from-blue-50 via-white to-indigo-50 px-6 py-6 dark:border-gray-800 dark:from-blue-950/20 dark:via-transparent dark:to-indigo-950/20">
+  <!-- Header / welcome -->
+  <header class="ai-hero relative overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-white/[0.03]" role="banner" aria-label="Bienvenue">
+    <div class="ai-grid absolute inset-0"></div>
+    <div class="ai-blob absolute h-64 w-64 bg-brand-500/20" style="top: -80px; right: -40px"></div>
+    <div class="ai-blob absolute h-72 w-72 bg-cyan-400/10" style="bottom: -100px; left: -60px"></div>
+
+    <div class="relative z-10 border-b border-gray-100 px-6 py-6 dark:border-gray-800">
       <div class="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <span class="inline-flex rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-            Plateforme MLOps
+          <span class="inline-flex items-center gap-2 rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+            MLOps Pilot — Vue d'ensemble
           </span>
           <h1 class="mt-3 text-2xl font-bold text-gray-900 dark:text-white sm:text-3xl">
-            Bienvenue de retour
+            Bienvenue de retour, {{ firstName }}
           </h1>
           <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-400">
-            Vue d'ensemble centralisée de votre plateforme MLOps.
+            Tableau de bord temps réel : projets, runs, modèles, déploiements et santé de la plateforme.
           </p>
         </div>
-        <div class="flex items-center gap-3">
-          <a routerLink="/my-projects" aria-label="Accéder à Mes Projets" class="inline-flex items-center rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-600 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">Mes Projets</a>
-          <a routerLink="/upload-training" aria-label="Upload & Training" class="inline-flex items-center rounded-xl border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-800">Upload & Training</a>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            (click)="toggleAutoRefresh()"
+            class="inline-flex items-center gap-2 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.05]"
+          >
+            <span class="relative flex h-2.5 w-2.5">
+              @if (autoRefresh) {
+                <span class="absolute inline-flex h-full w-full rounded-full bg-success-500 opacity-50 mlops-pulse"></span>
+                <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-success-500"></span>
+              } @else {
+                <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-gray-400"></span>
+              }
+            </span>
+            {{ autoRefresh ? 'Auto-refresh 30s' : 'Auto-refresh OFF' }}
+          </button>
+          <button
+            type="button"
+            (click)="loadSummary()"
+            [disabled]="loading"
+            class="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-600 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            Actualiser
+          </button>
         </div>
       </div>
+
+      @if (lastUpdated) {
+        <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">
+          Dernière mise à jour : {{ lastUpdated.toLocaleTimeString('fr-FR') }}
+        </p>
+      }
     </div>
   </header>
 
-  <!-- Metric Cards -->
-  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-    <!-- Mes Projets -->
-    <div class="group card-hover rounded-2xl border border-gray-200 bg-white p-5 shadow-sm hover:border-brand-200 hover:shadow-md dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700">
-      <div class="flex items-center justify-between">
-        <div>
-          <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Mes Projets</p>
-          <p class="mt-2 text-2xl font-extrabold text-gray-900 dark:text-white sm:text-3xl">12</p>
-        </div>
-        <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 transition group-hover:scale-105 dark:bg-blue-900/20">
-          <svg class="h-6 w-6 text-blue-600 dark:text-blue-300" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M7 2h10a2 2 0 012 2v1h3a1 1 0 011 1v2h-2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V8H0V6a1 1 0 011-1h3V4a2 2 0 012-2zm8 2H7v2h8V4zm-8 4v12h10V8H7z"/>
-          </svg>
-        </div>
-      </div>
+  <!-- Loading / error -->
+  @if (loading) {
+    <div class="flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4 text-sm font-medium text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300">
+      <span class="mlops-spinner text-blue-600 dark:text-blue-300"></span>
+      Chargement des statistiques en temps réel...
     </div>
+  }
 
-    <!-- Mes Entraînements -->
-    <div class="group card-hover rounded-2xl border border-gray-200 bg-white p-5 shadow-sm hover:border-brand-200 hover:shadow-md dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700">
-      <div class="flex items-center justify-between">
-        <div>
-          <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Mes Entraînements</p>
-          <p class="mt-2 text-2xl font-extrabold text-gray-900 dark:text-white sm:text-3xl">28</p>
-        </div>
-        <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-100 dark:bg-purple-900/30">
-          <svg class="h-6 w-6 text-purple-600 dark:text-purple-400" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 2l9.5 5.5v9l-9.5 5.5-9.5-5.5v-9L12 2zm0 2.5l-7 4v7l7 4 7-4v-7l-7-4z"/>
-          </svg>
-        </div>
-      </div>
+  @if (error) {
+    <div class="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-400">
+      <svg class="mt-0.5 h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+      </svg>
+      <span>{{ error }}</span>
+      <button type="button" (click)="loadSummary()" class="ml-auto shrink-0 rounded-lg border border-red-300 px-3 py-1 text-xs font-semibold hover:bg-red-100 dark:hover:bg-red-900/30">
+        Réessayer
+      </button>
     </div>
+  }
 
-    <!-- Mes Modèles Enregistrés -->
-    <div class="group card-hover rounded-2xl border border-gray-200 bg-white p-5 shadow-sm hover:border-brand-200 hover:shadow-md dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700">
-      <div class="flex items-center justify-between">
-        <div>
-          <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Mes Modèles Enregistrés</p>
-          <p class="mt-2 text-2xl font-extrabold text-gray-900 dark:text-white sm:text-3xl">8</p>
-        </div>
-        <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-green-100 dark:bg-green-900/30">
-          <svg class="h-6 w-6 text-green-600 dark:text-green-400" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-          </svg>
-        </div>
-      </div>
-    </div>
-
-    <!-- Mes Modèles Déployés -->
-    <div class="group card-hover rounded-2xl border border-gray-200 bg-white p-5 shadow-sm hover:border-brand-200 hover:shadow-md dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700">
-      <div class="flex items-center justify-between">
-        <div>
-          <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Mes Modèles Déployés</p>
-          <p class="mt-2 text-2xl font-extrabold text-gray-900 dark:text-white sm:text-3xl">5</p>
-        </div>
-        <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-orange-100 dark:bg-orange-900/30">
-          <svg class="h-6 w-6 text-orange-600 dark:text-orange-400" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-          </svg>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Actions Rapides -->
-  <div>
-    <h2 class="mb-4 text-lg font-semibold text-gray-900 dark:text-white">Actions rapides</h2>
+  @if (summary && !loading) {
+    <!-- Metric cards -->
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      <a routerLink="/my-projects" aria-label="Créer un projet" class="group rounded-2xl border border-gray-200 bg-white px-4 py-4 text-left transition hover:border-brand-500 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 dark:border-gray-800 dark:bg-gray-900">
-        <div class="flex items-center space-x-3">
-          <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
-            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+      <div class="group card-hover relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Projets</p>
+            <p class="mt-2 text-2xl font-extrabold text-gray-900 dark:text-white sm:text-3xl">{{ summary.projectsTotal }}</p>
+          </div>
+          <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-blue-600 transition group-hover:scale-105 dark:bg-blue-900/20 dark:text-blue-400">
+            <svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 2h10a2 2 0 012 2v1h3a1 1 0 011 1v2h-2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V8H0V6a1 1 0 011-1h3V4a2 2 0 012-2zm8 2H7v2h8V4zm-8 4v12h10V8H7z"/>
             </svg>
           </div>
-          <div>
-            <p class="font-medium text-gray-900 dark:text-white">Créer un projet</p>
-            <p class="text-xs text-gray-600 dark:text-gray-400">Nouveau projet ML</p>
-          </div>
         </div>
-      </a>
-
-      <a routerLink="/upload-training" aria-label="Upload Dataset" class="group rounded-2xl border border-gray-200 bg-white px-4 py-4 text-left transition hover:border-green-500 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 dark:border-gray-800 dark:bg-gray-900">
-        <div class="flex items-center space-x-3">
-          <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-green-50 text-green-600 dark:bg-green-500/10 dark:text-green-400">
-            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3v-6"/>
-            </svg>
-          </div>
-          <div>
-            <p class="font-medium text-gray-900 dark:text-white">Upload Dataset</p>
-            <p class="text-xs text-gray-600 dark:text-gray-400">Importer des données</p>
-          </div>
-        </div>
-      </a>
-
-      <a routerLink="/upload-training" aria-label="Lancer Training" class="group rounded-2xl border border-gray-200 bg-white px-4 py-4 text-left transition hover:border-purple-500 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 dark:border-gray-800 dark:bg-gray-900">
-        <div class="flex items-center space-x-3">
-          <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400">
-            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-            </svg>
-          </div>
-          <div>
-            <p class="font-medium text-gray-900 dark:text-white">Lancer Training</p>
-            <p class="text-xs text-gray-600 dark:text-gray-400">Entraîner un modèle</p>
-          </div>
-        </div>
-      </a>
-
-      <a routerLink="/prediction-test" aria-label="Tester Prediction" class="group rounded-2xl border border-gray-200 bg-white px-4 py-4 text-left transition hover:border-orange-500 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 dark:border-gray-800 dark:bg-gray-900">
-        <div class="flex items-center space-x-3">
-          <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400">
-            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
-          </div>
-          <div>
-            <p class="font-medium text-gray-900 dark:text-white">Tester Prediction</p>
-            <p class="text-xs text-gray-600 dark:text-gray-400">Tester un modèle</p>
-          </div>
-        </div>
-      </a>
-    </div>
-  </div>
-
-  <!-- Content Sections Grid -->
-  <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-    <!-- Recent Pipeline Runs -->
-    <div class="rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900 lg:col-span-2">
-      <div class="border-b border-gray-100 px-6 py-4 dark:border-gray-800">
-        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Exécutions Pipeline Récentes</h2>
-      </div>
-      <div class="divide-y divide-gray-100 dark:divide-gray-800">
-        <div class="flex items-center justify-between px-6 py-4 transition hover:bg-gray-50/70 dark:hover:bg-white/[0.03]">
-          <div class="flex items-center gap-3">
-            <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-green-500"></span>
-            <div>
-              <p class="font-medium text-gray-900 dark:text-white">Pipeline ML-1</p>
-              <p class="text-sm text-gray-600 dark:text-gray-400">Entraînement du modèle de classification</p>
-            </div>
-          </div>
-          <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-800 dark:bg-green-900/30 dark:text-green-400">
-            <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
-            Réussi
-          </span>
-        </div>
-        <div class="flex items-center justify-between px-6 py-4 transition hover:bg-gray-50/70 dark:hover:bg-white/[0.03]">
-          <div class="flex items-center gap-3">
-            <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-blue-500 mlops-pulse"></span>
-            <div>
-              <p class="font-medium text-gray-900 dark:text-white">Pipeline ML-2</p>
-              <p class="text-sm text-gray-600 dark:text-gray-400">Traitement des données</p>
-            </div>
-          </div>
-          <span class="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">
+        @if (summary.runningProjects > 0) {
+          <p class="mt-3 inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
             <span class="h-1.5 w-1.5 rounded-full bg-blue-500 mlops-pulse"></span>
-            En cours
-          </span>
+            {{ summary.runningProjects }} avec run en cours
+          </p>
+        } @else {
+          <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">Aucun run en cours</p>
+        }
+      </div>
+
+      <div class="group card-hover relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Runs</p>
+            <p class="mt-2 text-2xl font-extrabold text-gray-900 dark:text-white sm:text-3xl">{{ summary.runsTotal }}</p>
+          </div>
+          <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-100 text-purple-600 transition group-hover:scale-105 dark:bg-purple-900/30 dark:text-purple-400">
+            <svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 2l9.5 5.5v9l-9.5 5.5-9.5-5.5v-9L12 2zm0 2.5l-7 4v7l7 4 7-4v-7l-7-4z"/>
+            </svg>
+          </div>
         </div>
-        <div class="flex items-center justify-between px-6 py-4 transition hover:bg-gray-50/70 dark:hover:bg-white/[0.03]">
-          <div class="flex items-center gap-3">
-            <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-red-500"></span>
-            <div>
-              <p class="font-medium text-gray-900 dark:text-white">Pipeline ML-3</p>
-              <p class="text-sm text-gray-600 dark:text-gray-400">Validation du modèle</p>
+        <div class="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          @if (summary.runsRunning > 0) {
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-0.5 font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+              <span class="h-1.5 w-1.5 rounded-full bg-blue-500 mlops-pulse"></span>
+              {{ summary.runsRunning }} en cours
+            </span>
+          }
+          <span class="rounded-full bg-success-100 px-2.5 py-0.5 font-semibold text-success-700 dark:bg-success-900/30 dark:text-success-400">{{ summary.runsCompleted }} réussis</span>
+          @if (summary.runsFailed > 0) {
+            <span class="rounded-full bg-error-100 px-2.5 py-0.5 font-semibold text-error-700 dark:bg-error-900/30 dark:text-error-400">{{ summary.runsFailed }} échoués</span>
+          }
+        </div>
+      </div>
+
+      <div class="group card-hover relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Modèles enregistrés</p>
+            <p class="mt-2 text-2xl font-extrabold text-gray-900 dark:text-white sm:text-3xl">{{ summary.modelsTotal }}</p>
+          </div>
+          <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-green-100 text-green-600 transition group-hover:scale-105 dark:bg-green-900/30 dark:text-green-400">
+            <svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+            </svg>
+          </div>
+        </div>
+        <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">
+          {{ summary.modelsWithProduction }} en production
+        </p>
+      </div>
+
+      <div class="group card-hover relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Déploiements</p>
+            <p class="mt-2 text-2xl font-extrabold text-gray-900 dark:text-white sm:text-3xl">{{ summary.deploymentsTotal }}</p>
+          </div>
+          <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-orange-100 text-orange-600 transition group-hover:scale-105 dark:bg-orange-900/30 dark:text-orange-400">
+            <svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+            </svg>
+          </div>
+        </div>
+        <div class="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <span class="rounded-full bg-success-100 px-2.5 py-0.5 font-semibold text-success-700 dark:bg-success-900/30 dark:text-success-400">{{ summary.deploymentsDeployed }} déployés</span>
+          @if (summary.deploymentsInProgress > 0) {
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-0.5 font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+              <span class="h-1.5 w-1.5 rounded-full bg-blue-500 mlops-pulse"></span>
+              {{ summary.deploymentsInProgress }} en cours
+            </span>
+          }
+          @if (summary.deploymentsFailed > 0) {
+            <span class="rounded-full bg-error-100 px-2.5 py-0.5 font-semibold text-error-700 dark:bg-error-900/30 dark:text-error-400">{{ summary.deploymentsFailed }} échoués</span>
+          }
+        </div>
+      </div>
+    </div>
+
+    <!-- Run health + platform status -->
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div class="rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900 lg:col-span-2">
+        <div class="border-b border-gray-100 px-6 py-4 dark:border-gray-800">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Santé des runs</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Répartition des exécutions de pipeline</p>
+        </div>
+        <div class="flex flex-col gap-6 px-6 py-6 sm:flex-row sm:items-center">
+          <div class="relative mx-auto flex h-36 w-36 shrink-0 items-center justify-center sm:mx-0">
+            <svg class="h-36 w-36 -rotate-90" viewBox="0 0 36 36">
+              @let completedShare = summary.runsTotal > 0 ? (summary.runsCompleted / summary.runsTotal) * 100 : 0;
+              @let failedShare = summary.runsTotal > 0 ? (summary.runsFailed / summary.runsTotal) * 100 : 0;
+              @let runningShare = summary.runsTotal > 0 ? (summary.runsRunning / summary.runsTotal) * 100 : 0;
+              <circle cx="18" cy="18" r="15.9155" fill="none" stroke="var(--color-gray-100)" stroke-width="4" class="dark:stroke-gray-800"/>
+              <circle cx="18" cy="18" r="15.9155" fill="none" stroke="var(--color-success-500)" stroke-width="4"
+                stroke-linecap="round" [attr.stroke-dasharray]="completedShare + ' 100'"
+                style="transition: stroke-dasharray 0.5s ease"/>
+              <circle cx="18" cy="18" r="15.9155" fill="none" stroke="var(--color-blue-500)" stroke-width="4"
+                stroke-linecap="round" [attr.stroke-dasharray]="runningShare + ' 100'"
+                [attr.stroke-dashoffset]="-completedShare"
+                [class.opacity-0]="runningShare === 0"
+                style="transition: stroke-dasharray 0.5s ease"/>
+              <circle cx="18" cy="18" r="15.9155" fill="none" stroke="var(--color-error-500)" stroke-width="4"
+                stroke-linecap="round" [attr.stroke-dasharray]="failedShare + ' 100'"
+                [attr.stroke-dashoffset]="-(completedShare + runningShare)"
+                [class.opacity-0]="failedShare === 0"
+                style="transition: stroke-dasharray 0.5s ease"/>
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center">
+              <span class="text-2xl font-extrabold text-gray-900 dark:text-white">{{ summary.runSuccessRate }}%</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">taux de succès</span>
             </div>
           </div>
-          <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-800 dark:bg-red-900/30 dark:text-red-400">
-            <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>
-            Échoué
-          </span>
+
+          <div class="grid flex-1 grid-cols-2 gap-3">
+            <div class="rounded-xl border border-success-200 bg-success-50 p-4 dark:border-success-900/50 dark:bg-success-900/10">
+              <div class="flex items-center gap-2">
+                <span class="h-2.5 w-2.5 rounded-full bg-success-500"></span>
+                <p class="text-sm font-medium text-success-700 dark:text-success-400">Réussis</p>
+              </div>
+              <p class="mt-1 text-xl font-bold text-gray-900 dark:text-white">{{ summary.runsCompleted }}</p>
+            </div>
+            <div class="rounded-xl border border-blue-200 bg-blue-50 p-4 dark:border-blue-900/50 dark:bg-blue-900/10">
+              <div class="flex items-center gap-2">
+                <span class="h-2.5 w-2.5 rounded-full bg-blue-500 mlops-pulse"></span>
+                <p class="text-sm font-medium text-blue-700 dark:text-blue-400">En cours</p>
+              </div>
+              <p class="mt-1 text-xl font-bold text-gray-900 dark:text-white">{{ summary.runsRunning }}</p>
+            </div>
+            <div class="rounded-xl border border-error-200 bg-error-50 p-4 dark:border-error-900/50 dark:bg-error-900/10">
+              <div class="flex items-center gap-2">
+                <span class="h-2.5 w-2.5 rounded-full bg-error-500"></span>
+                <p class="text-sm font-medium text-error-700 dark:text-error-400">Échoués</p>
+              </div>
+              <p class="mt-1 text-xl font-bold text-gray-900 dark:text-white">{{ summary.runsFailed }}</p>
+            </div>
+            <div class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900">
+              <div class="flex items-center gap-2">
+                <span class="h-2.5 w-2.5 rounded-full bg-gray-400"></span>
+                <p class="text-sm font-medium text-gray-600 dark:text-gray-400">Annulés</p>
+              </div>
+              <p class="mt-1 text-xl font-bold text-gray-900 dark:text-white">{{ summary.runsCancelled }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Platform status -->
+      <div class="rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <div class="border-b border-gray-100 px-6 py-4 dark:border-gray-800">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Statut de la Plateforme</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Systèmes MLOps Pilot</p>
+        </div>
+        <div class="space-y-4 px-6 py-4">
+          <div class="flex items-center justify-between rounded-xl border border-gray-100 px-4 py-3 dark:border-gray-800">
+            <div>
+              <p class="text-sm font-medium text-gray-700 dark:text-gray-300">API Serveur</p>
+              <p class="text-xs text-gray-400 dark:text-gray-500">{{ summary.platformStatus.latencyMs }} ms</p>
+            </div>
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-success-100 px-3 py-1 text-xs font-semibold text-success-700 dark:bg-success-900/30 dark:text-success-400">
+              <span class="h-1.5 w-1.5 rounded-full bg-success-500 mlops-pulse"></span>
+              {{ summary.platformStatus.backend }}
+            </span>
+          </div>
+          <div class="flex items-center justify-between rounded-xl border border-gray-100 px-4 py-3 dark:border-gray-800">
+            <div>
+              <p class="text-sm font-medium text-gray-700 dark:text-gray-300">Base de Données</p>
+              <p class="text-xs text-gray-400 dark:text-gray-500">MySQL</p>
+            </div>
+            <span [class]="summary.platformStatus.database === 'UP'
+              ? 'inline-flex items-center gap-1.5 rounded-full bg-success-100 px-3 py-1 text-xs font-semibold text-success-700 dark:bg-success-900/30 dark:text-success-400'
+              : 'inline-flex items-center gap-1.5 rounded-full bg-error-100 px-3 py-1 text-xs font-semibold text-error-700 dark:bg-error-900/30 dark:text-error-400'">
+              <span class="h-1.5 w-1.5 rounded-full bg-success-500 mlops-pulse"></span>
+              {{ summary.platformStatus.database }}
+            </span>
+          </div>
+          <div class="flex items-center justify-between rounded-xl border border-gray-100 px-4 py-3 dark:border-gray-800">
+            <div>
+              <p class="text-sm font-medium text-gray-700 dark:text-gray-300">Déploiements actifs</p>
+              <p class="text-xs text-gray-400 dark:text-gray-500">Services REST en ligne</p>
+            </div>
+            <span class="text-lg font-bold text-gray-900 dark:text-white">{{ summary.activeDeployments }}</span>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Statut des Modèles Déployés -->
-    <div class="rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
-      <div class="border-b border-gray-100 px-6 py-4 dark:border-gray-800">
-        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Statut des Modèles Déployés</h2>
-      </div>
-      <div class="space-y-4 px-6 py-4">
-        <div>
-          <div class="mb-2 flex items-center justify-between">
-            <p class="text-sm font-medium text-gray-900 dark:text-white">Modèle A</p>
-            <span class="text-xs font-semibold text-green-600 dark:text-green-400">99.5%</span>
+    <!-- Recent runs + best models -->
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div class="rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900 lg:col-span-2">
+        <div class="flex items-center justify-between border-b border-gray-100 px-6 py-4 dark:border-gray-800">
+          <div>
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Exécutions Pipeline Récentes</h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Derniers runs de vos projets</p>
           </div>
-          <div class="h-2 rounded-full bg-gray-200 dark:bg-gray-800">
-            <div class="h-2 rounded-full bg-green-500" style="width: 99.5%"></div>
-          </div>
+          <a routerLink="/upload-training" class="text-sm font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400">Voir tout</a>
         </div>
-        <div>
-          <div class="mb-2 flex items-center justify-between">
-            <p class="text-sm font-medium text-gray-900 dark:text-white">Modèle B</p>
-            <span class="text-xs font-semibold text-green-600 dark:text-green-400">97.2%</span>
-          </div>
-          <div class="h-2 rounded-full bg-gray-200 dark:bg-gray-800">
-            <div class="h-2 rounded-full bg-green-500" style="width: 97.2%"></div>
-          </div>
-        </div>
-        <div>
-          <div class="mb-2 flex items-center justify-between">
-            <p class="text-sm font-medium text-gray-900 dark:text-white">Modèle C</p>
-            <span class="text-xs font-semibold text-yellow-600 dark:text-yellow-400">85.8%</span>
-          </div>
-          <div class="h-2 rounded-full bg-gray-200 dark:bg-gray-800">
-            <div class="h-2 rounded-full bg-yellow-500" style="width: 85.8%"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
 
-  <!-- Meilleurs Modèles -->
-  <div class="rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
-    <div class="border-b border-gray-100 px-6 py-4 dark:border-gray-800">
-      <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Meilleurs Modèles</h2>
-    </div>
-    <div class="divide-y divide-gray-100 dark:divide-gray-800">
-      <div class="flex items-center justify-between px-6 py-4">
-        <div>
-          <p class="font-medium text-gray-900 dark:text-white">Classification CNN v2.5</p>
-          <p class="text-sm text-gray-600 dark:text-gray-400">Précision: 95.2% • F1-Score: 94.8%</p>
-        </div>
-        <span class="inline-flex rounded-full bg-yellow-100 px-3 py-1 text-xs font-semibold text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400">★ 4.8</span>
-      </div>
-      <div class="flex items-center justify-between px-6 py-4">
-        <div>
-          <p class="font-medium text-gray-900 dark:text-white">Régression XGBOOST v1.3</p>
-          <p class="text-sm text-gray-600 dark:text-gray-400">RMSE: 0.45 • R²: 0.92</p>
-        </div>
-        <span class="inline-flex rounded-full bg-yellow-100 px-3 py-1 text-xs font-semibold text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400">★ 4.5</span>
-      </div>
-      <div class="flex items-center justify-between px-6 py-4">
-        <div>
-          <p class="font-medium text-gray-900 dark:text-white">NLP Transformer v3.0</p>
-          <p class="text-sm text-gray-600 dark:text-gray-400">Accuracy: 88.5% • BLEU: 32.1</p>
-        </div>
-        <span class="inline-flex rounded-full bg-yellow-100 px-3 py-1 text-xs font-semibold text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400">★ 4.2</span>
-      </div>
-    </div>
-  </div>
+        @if (recentRuns().length === 0) {
+          <div class="px-6 py-10 text-center">
+            <p class="text-sm text-gray-500 dark:text-gray-400">Aucun run lancé pour le moment.</p>
+            <a routerLink="/upload-training" class="mt-3 inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600">
+              Lancer un premier run
+            </a>
+          </div>
+        }
 
-  <!-- Platform Status -->
-  <div class="rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
-    <div class="border-b border-gray-100 px-6 py-4 dark:border-gray-800">
-      <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Statut de la Plateforme</h2>
+        <div class="divide-y divide-gray-100 dark:divide-gray-800">
+          @for (run of recentRuns(); track run.experimentId) {
+            <div class="flex items-center justify-between gap-3 px-6 py-4 transition hover:bg-gray-50/70 dark:hover:bg-white/[0.03]">
+              <div class="flex min-w-0 items-center gap-3">
+                <span class="h-2.5 w-2.5 shrink-0 rounded-full" [class]="statusTone(run.status).dot"
+                  [class.mlops-pulse]="run.status === 'RUNNING'"></span>
+                <div class="min-w-0">
+                  <p class="truncate font-medium text-gray-900 dark:text-white">{{ run.experimentName }}</p>
+                  <p class="truncate text-sm text-gray-500 dark:text-gray-400">
+                    {{ run.projectName }} · {{ run.modelName || run.registeredModelName || 'Modèle' }}
+                  </p>
+                </div>
+              </div>
+              <div class="flex shrink-0 items-center gap-3">
+                @if (run.primaryMetricValue !== null && run.primaryMetricValue !== undefined) {
+                  <span class="hidden text-sm font-semibold text-gray-700 dark:text-gray-300 sm:block">
+                    {{ formatMetricValue(run.primaryMetricValue) }}
+                  </span>
+                }
+                <span class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold" [class]="statusTone(run.status).badge">
+                  <span class="h-1.5 w-1.5 rounded-full" [class]="statusTone(run.status).dot"></span>
+                  {{ statusLabel(run.status) }}
+                </span>
+                <span class="hidden text-xs text-gray-400 dark:text-gray-500 md:block">{{ formatDate(run.createdAt) }}</span>
+              </div>
+            </div>
+          }
+        </div>
+      </div>
+
+      <!-- Best models -->
+      <div class="rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <div class="flex items-center justify-between border-b border-gray-100 px-6 py-4 dark:border-gray-800">
+          <div>
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Meilleurs Modèles</h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Top par score global</p>
+          </div>
+          <a routerLink="/model-registry" class="text-sm font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400">Registre</a>
+        </div>
+
+        @if (bestModels().length === 0) {
+          <div class="px-6 py-10 text-center">
+            <p class="text-sm text-gray-500 dark:text-gray-400">Aucun modèle enregistré avec score.</p>
+            <a routerLink="/model-registry" class="mt-3 inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600">
+              Ouvrir le registre
+            </a>
+          </div>
+        }
+
+        <div class="divide-y divide-gray-100 dark:divide-gray-800">
+          @for (model of bestModels(); track model.registeredModelName) {
+            <div class="px-6 py-4">
+              <div class="flex items-center justify-between gap-2">
+                <p class="truncate font-medium text-gray-900 dark:text-white">{{ model.registeredModelName }}</p>
+                @if (model.globalScore !== null && model.globalScore !== undefined) {
+                  <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-warning-100 px-2.5 py-0.5 text-xs font-semibold text-warning-700 dark:bg-warning-900/30 dark:text-warning-400">
+                    <svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+                      <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.286 3.958a1 1 0 00.95.69h4.162c.969 0 1.371 1.24.588 1.81l-3.368 2.447a1 1 0 00-.364 1.118l1.287 3.957c.3.922-.755 1.688-1.539 1.118l-3.367-2.446a1 1 0 00-1.176 0l-3.367 2.446c-.783.57-1.838-.196-1.539-1.118l1.287-3.957a1 1 0 00-.364-1.118L2.05 9.385c-.783-.57-.38-1.81.588-1.81h4.162a1 1 0 00.95-.69l1.286-3.958z"/>
+                    </svg>
+                    {{ model.globalScore.toFixed(2) }}
+                  </span>
+                }
+              </div>
+              @if (model.primaryMetric) {
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                  {{ model.primaryMetric }} : {{ formatMetricValue(model.primaryMetricValue) }}
+                </p>
+              }
+              <div class="mt-2 flex flex-wrap items-center gap-2">
+                @if (model.hasProduction) {
+                  <span class="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                    Production v{{ model.productionVersion }}
+                  </span>
+                } @else {
+                  <span class="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-semibold text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                    Enregistré
+                  </span>
+                }
+                @if (model.deploymentStatus) {
+                  <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold" [class]="statusTone(model.deploymentStatus).badge">
+                    {{ statusLabel(model.deploymentStatus) }}
+                  </span>
+                }
+              </div>
+            </div>
+          }
+        </div>
+      </div>
     </div>
-    <div class="grid grid-cols-1 gap-4 px-6 py-4 sm:grid-cols-2 lg:grid-cols-4">
-      <div class="rounded-xl px-3 py-2 transition hover:bg-gray-50 dark:hover:bg-white/[0.03]">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-sm font-medium text-gray-600 dark:text-gray-400">API Serveur</p>
-            <p class="mt-1 text-sm text-gray-900 dark:text-white">Opérationnel</p>
-          </div>
-          <span class="relative flex h-3 w-3">
-            <span class="absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-50 mlops-pulse"></span>
-            <span class="relative inline-flex h-3 w-3 rounded-full bg-green-500"></span>
-          </span>
-        </div>
-      </div>
-      <div class="rounded-xl px-3 py-2 transition hover:bg-gray-50 dark:hover:bg-white/[0.03]">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-sm font-medium text-gray-600 dark:text-gray-400">Base de Données</p>
-            <p class="mt-1 text-sm text-gray-900 dark:text-white">Opérationnel</p>
-          </div>
-          <span class="relative flex h-3 w-3">
-            <span class="absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-50 mlops-pulse"></span>
-            <span class="relative inline-flex h-3 w-3 rounded-full bg-green-500"></span>
-          </span>
-        </div>
-      </div>
-      <div class="rounded-xl px-3 py-2 transition hover:bg-gray-50 dark:hover:bg-white/[0.03]">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-sm font-medium text-gray-600 dark:text-gray-400">Service ML</p>
-            <p class="mt-1 text-sm text-gray-900 dark:text-white">Opérationnel</p>
-          </div>
-          <span class="relative flex h-3 w-3">
-            <span class="absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-50 mlops-pulse"></span>
-            <span class="relative inline-flex h-3 w-3 rounded-full bg-green-500"></span>
-          </span>
-        </div>
-      </div>
-      <div class="rounded-xl px-3 py-2 transition hover:bg-gray-50 dark:hover:bg-white/[0.03]">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-sm font-medium text-gray-600 dark:text-gray-400">Stockage Données</p>
-            <p class="mt-1 text-sm text-gray-900 dark:text-white">93% Utilisé</p>
-          </div>
-          <span class="relative flex h-3 w-3">
-            <span class="absolute inline-flex h-full w-full rounded-full bg-yellow-500 opacity-50 mlops-pulse"></span>
-            <span class="relative inline-flex h-3 w-3 rounded-full bg-yellow-500"></span>
-          </span>
-        </div>
-      </div>
-    </div>
-  </div>
+  }
 </div>

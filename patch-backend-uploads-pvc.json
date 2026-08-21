@@ -6,7 +6,7 @@
           {
             "name": "backend-uploads",
             "persistentVolumeClaim": {
-              "claimName": "mlops-uploads-pvc"
+              "claimName": "backend-uploads-rwx-pvc"
             }
           }
         ]

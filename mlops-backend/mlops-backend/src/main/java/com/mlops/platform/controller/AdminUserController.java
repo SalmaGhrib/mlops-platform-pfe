@@ -1,5 +1,6 @@
 package com.mlops.platform.controller;
 
+import com.mlops.platform.dto.SearchPageResponse;
 import com.mlops.platform.dto.UpdateUserRoleRequest;
 import com.mlops.platform.dto.UpdateUserStatusRequest;
 import com.mlops.platform.dto.UserResponse;
@@ -26,6 +27,24 @@ public class AdminUserController {
     @GetMapping
     public List<UserResponse> getAllUsers() {
         return adminUserService.getAllUsers();
+    }
+
+    /**
+     * Recherche dynamique des utilisateurs avec filtres et pagination.
+     *
+     * @param q      texte libre (email / prénom / nom)
+     * @param status filtre ACTIVE | BLOCKED
+     * @param role   filtre ADMIN | USER
+     */
+    @GetMapping("/search")
+    public SearchPageResponse<UserResponse> searchUsers(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String role,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "12") int size
+    ) {
+        return adminUserService.searchUsers(q, status, role, page, size);
     }
 
     @PutMapping("/{id}/role")

@@ -197,8 +197,38 @@ export class NotificationDropdownComponent
       case 'DEPLOYMENT_OUT_OF_SYNC':
         return 'OS';
 
+      case 'DEPLOYMENT_UNHEALTHY':
+        return 'DU';
+
       case 'MONITORING_ALERT':
         return 'AL';
+
+      case 'DATA_DRIFT':
+        return 'DD';
+
+      case 'PREDICTION_ERROR_RATE':
+        return 'PE';
+
+      case 'PERFORMANCE_DROP':
+        return 'PD';
+
+      case 'GLOBAL_SCORE_TOO_LOW':
+        return 'GS';
+
+      case 'MODEL_QUALITY_FAILED':
+        return 'MQ';
+
+      case 'RETRAINING_TRIGGERED':
+        return 'RT';
+
+      case 'RETRAINING_FAILED':
+        return 'RF';
+
+      case 'RETRAINING_COMPLETED':
+        return 'RD';
+
+      case 'NEW_PRODUCTION_VERSION':
+        return 'NP';
 
       default:
         return 'IN';
@@ -216,6 +246,10 @@ export class NotificationDropdownComponent
 
       case 'RUN_FAILED':
       case 'DEPLOYMENT_FAILED':
+      case 'DEPLOYMENT_UNHEALTHY':
+      case 'MODEL_QUALITY_FAILED':
+      case 'RETRAINING_FAILED':
+      case 'GLOBAL_SCORE_TOO_LOW':
         return (
           'bg-red-100 text-red-700 ' +
           'dark:bg-red-900/30 dark:text-red-400'
@@ -223,9 +257,20 @@ export class NotificationDropdownComponent
 
       case 'DEPLOYMENT_OUT_OF_SYNC':
       case 'MONITORING_ALERT':
+      case 'DATA_DRIFT':
+      case 'PREDICTION_ERROR_RATE':
+      case 'PERFORMANCE_DROP':
         return (
           'bg-yellow-100 text-yellow-700 ' +
           'dark:bg-yellow-900/30 dark:text-yellow-400'
+        );
+
+      case 'RETRAINING_TRIGGERED':
+      case 'RETRAINING_COMPLETED':
+      case 'NEW_PRODUCTION_VERSION':
+        return (
+          'bg-green-100 text-green-700 ' +
+          'dark:bg-green-900/30 dark:text-green-400'
         );
 
       default:
@@ -253,8 +298,38 @@ export class NotificationDropdownComponent
       case 'DEPLOYMENT_OUT_OF_SYNC':
         return 'Déploiement désynchronisé';
 
+      case 'DEPLOYMENT_UNHEALTHY':
+        return 'Déploiement malsain';
+
       case 'MONITORING_ALERT':
         return 'Alerte monitoring';
+
+      case 'DATA_DRIFT':
+        return 'Data drift détecté';
+
+      case 'PREDICTION_ERROR_RATE':
+        return 'Taux d’erreur de prédiction';
+
+      case 'PERFORMANCE_DROP':
+        return 'Baisse de performance';
+
+      case 'GLOBAL_SCORE_TOO_LOW':
+        return 'Score global trop bas';
+
+      case 'MODEL_QUALITY_FAILED':
+        return 'Qualité du modèle insuffisante';
+
+      case 'RETRAINING_TRIGGERED':
+        return 'Réentraînement déclenché';
+
+      case 'RETRAINING_FAILED':
+        return 'Réentraînement échoué';
+
+      case 'RETRAINING_COMPLETED':
+        return 'Réentraînement terminé';
+
+      case 'NEW_PRODUCTION_VERSION':
+        return 'Nouvelle version en production';
 
       default:
         return 'Notification';

@@ -13,6 +13,8 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class ModelArtifactStandardizerService {
@@ -20,6 +22,14 @@ public class ModelArtifactStandardizerService {
     private final MlExperimentRepository mlExperimentRepository;
     private final MlflowTrackingClientService mlflowTrackingClientService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /*
+     * Verrou par expérience : deux schedulers (watcher Docker et reconciler
+     * de production) peuvent invoquer le standardizer en même temps pour le
+     * même run. Sans ce verrou, deux exécutions concurrentes créeraient deux
+     * versions MLflow distinctes.
+     */
+    private final Map<Long, Object> standardizerLocks = new ConcurrentHashMap<>();
 
     @Value("${app.model-standardizer.enabled:true}")
     private boolean standardizerEnabled;
@@ -62,6 +72,92 @@ public class ModelArtifactStandardizerService {
         if (!hasText(experiment.getRegisteredModelName())) {
             return StandardizationResult.skipped(
                     "Experiment has no registeredModelName yet. Standardization will be skipped for now."
+            );
+        }
+
+        Object lock = standardizerLocks.computeIfAbsent(
+                experiment.getId(),
+                key -> new Object()
+        );
+
+        synchronized (lock) {
+            try {
+                return standardizeSafely(experiment);
+            } finally {
+                standardizerLocks.remove(experiment.getId());
+            }
+        }
+    }
+
+    /**
+     * Exécution réelle, protégée par le verrou de l'expérience.
+     * Avant de lancer le script, vérifie dans MLflow si le run possède déjà
+     * une version enregistrée : dans ce cas, on la réutilise et on ne crée
+     * JAMAIS de nouvelle version (règle : 1 run = 1 version).
+     */
+    private StandardizationResult standardizeSafely(MlExperiment experiment) {
+        if (experiment == null || experiment.getId() == null) {
+            return StandardizationResult.skipped("Experiment is null.");
+        }
+
+        if (!hasText(experiment.getMlflowRunId())) {
+            return StandardizationResult.skipped(
+                    "Experiment has no MLflow run id yet. Standardization will be skipped for now."
+            );
+        }
+
+        if (!hasText(experiment.getRegisteredModelName())) {
+            return StandardizationResult.skipped(
+                    "Experiment has no registeredModelName yet. Standardization will be skipped for now."
+            );
+        }
+
+        String existingVersion = null;
+
+        try {
+            existingVersion = mlflowTrackingClientService.findModelVersionByRunId(
+                    experiment.getRegisteredModelName(),
+                    experiment.getMlflowRunId()
+            );
+        } catch (Exception e) {
+            System.out.println("[MODEL_STANDARDIZER] Version existence check failed. experimentId="
+                    + experiment.getId()
+                    + ", reason=" + e.getMessage());
+        }
+
+        if (hasText(existingVersion)) {
+            System.out.println("[MODEL_STANDARDIZER] Idempotent reuse. experimentId="
+                    + experiment.getId()
+                    + ", runId=" + experiment.getMlflowRunId()
+                    + ", registeredModelName=" + experiment.getRegisteredModelName()
+                    + ", existingVersion=" + existingVersion
+                    + ". No new MLflow version will be created.");
+
+            if (!hasText(experiment.getModelVersion())) {
+                experiment.setModelVersion(existingVersion);
+            }
+
+            experiment.setMessage(
+                    appendMessage(
+                            experiment.getMessage(),
+                            "Version MLflow déjà enregistrée pour ce run (v"
+                                    + existingVersion
+                                    + "). Aucune nouvelle version créée."
+                    )
+            );
+
+            experiment.setErrorMessage(null);
+
+            mlExperimentRepository.saveAndFlush(experiment);
+
+            return StandardizationResult.success(
+                    "Run already registered as MLflow version v" + existingVersion
+                            + ". Idempotent reuse, no new version created.",
+                    false,
+                    true,
+                    existingVersion,
+                    "idempotent_reuse",
+                    null
             );
         }
 

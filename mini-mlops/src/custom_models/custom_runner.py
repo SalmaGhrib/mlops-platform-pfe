@@ -40,6 +40,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from src.custom_models.custom_config_loader import load_custom_config
 from src.custom_models.generic_pyfunc_wrapper import GenericPyFuncWrapper
+from src.custom_models import model_artifact_detector
 from src.custom_models.inline_project_manager import (
     create_inline_dataset,
     create_inline_workspace,
@@ -416,40 +417,34 @@ def find_all_model_artifacts(workspace: Path, outputs_dir: Path) -> list[Path]:
     """
     Find all model artifacts in the workspace with supported extensions.
     Returns sorted list (most recent first).
+
+    Detection déléguée au détecteur générique (multi-racines, multi-formats,
+    déduplication par realpath/hash, validation anti-fichier vide). Le tri
+    final reste par date de modification pour préserver le comportement
+    "plus récent d'abord" des appelants.
     """
-    supported_extensions = [
-        ".pkl", ".joblib", ".pickle",  # Pickle formats
-        ".pt", ".pth",                  # PyTorch
-        ".h5", ".keras",                # Keras/TensorFlow
-        ".onnx",                        # ONNX
-    ]
-    
-    candidates: list[Path] = []
-    
-    # Search in outputs_dir first (priority)
-    for ext in supported_extensions:
-        candidates.extend(outputs_dir.glob(f"*{ext}"))
-    
-    # Then search in workspace root
-    for ext in supported_extensions:
-        candidates.extend(workspace.glob(f"*{ext}"))
-    
-    # Then search recursively
-    for ext in supported_extensions:
-        for p in workspace.rglob(f"*{ext}"):
-            if "metadata" not in str(p) and p not in candidates:
-                candidates.append(p)
-    
-    # Sort by modification time (most recent first)
-    candidates_sorted = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
-    
+    extra_roots: list[Path] = []
+    if outputs_dir is not None:
+        extra_roots.append(outputs_dir)
+
+    discovered = model_artifact_detector.discover_model_artifacts(
+        workspace=workspace,
+        extra_roots=extra_roots,
+    )
+
+    candidates_sorted = sorted(
+        discovered,
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
     if candidates_sorted:
         print(f"[MODEL DETECTION] Found {len(candidates_sorted)} model candidates:")
         for i, p in enumerate(candidates_sorted):
             ext = p.suffix.lower()
             mtime = p.stat().st_mtime
             print(f"  {i+1}. {p.name} ({ext}) - modified: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime))}")
-    
+
     return candidates_sorted
 
 

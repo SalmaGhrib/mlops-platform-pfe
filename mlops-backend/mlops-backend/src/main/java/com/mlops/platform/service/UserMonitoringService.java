@@ -23,6 +23,8 @@ public class UserMonitoringService {
     private final UserRepository userRepository;
     private final JwtService jwtService;
     private final RetrainingDecisionService retrainingDecisionService;
+    private final ModelQualityService modelQualityService;
+    private final MonitoringAlertService monitoringAlertService;
 
     public UserMonitoringService(
             MlProjectRepository mlProjectRepository,
@@ -32,7 +34,9 @@ public class UserMonitoringService {
             PredictionLogRepository predictionLogRepository,
             UserRepository userRepository,
             JwtService jwtService,
-            RetrainingDecisionService retrainingDecisionService
+            RetrainingDecisionService retrainingDecisionService,
+            ModelQualityService modelQualityService,
+            MonitoringAlertService monitoringAlertService
     ) {
         this.mlProjectRepository = mlProjectRepository;
         this.mlExperimentRepository = mlExperimentRepository;
@@ -42,6 +46,8 @@ public class UserMonitoringService {
         this.userRepository = userRepository;
         this.jwtService = jwtService;
         this.retrainingDecisionService = retrainingDecisionService;
+        this.modelQualityService = modelQualityService;
+        this.monitoringAlertService = monitoringAlertService;
     }
 
     public UserMonitoringDashboardResponse getDashboard(String authHeader, Long requestedProjectId) {
@@ -256,6 +262,7 @@ public class UserMonitoringService {
         dashboard.nextRetrainingAt = config != null ? config.getNextRetrainingAt() : null;
         dashboard.lastRetrainingAt = config != null ? config.getLastRetrainingAt() : null;
         dashboard.lastMonitoringCheckAt = config != null ? config.getLastMonitoringCheckAt() : null;
+        dashboard.nextMonitoringCheckAt = config != null ? config.getNextMonitoringCheckAt() : null;
         dashboard.lastDecisionReason = config != null ? safeText(config.getLastDecisionReason()) : null;
         dashboard.failureMonitoringEnabled = config != null && config.isFailureMonitoringEnabled();
         dashboard.performanceMonitoringEnabled = config != null && config.isPerformanceMonitoringEnabled();
@@ -264,6 +271,7 @@ public class UserMonitoringService {
         dashboard.recentPredictionCount = monitoringDecision.getRecentPredictionCount();
         dashboard.predictionErrorRatePercent = roundTwo(monitoringDecision.getPredictionErrorRatePercent());
         dashboard.dataDriftScorePercent = roundTwo(monitoringDecision.getDataDriftScorePercent());
+        dashboard.performanceDropPercent = roundTwo(monitoringDecision.getPerformanceDropPercent());
         dashboard.averagePredictionLatencyMs = roundTwo(
                 recentPredictionLogs.stream()
                         .map(PredictionLog::getLatencyMs)
@@ -284,6 +292,26 @@ public class UserMonitoringService {
                 .filter(Objects::nonNull)
                 .max(LocalDateTime::compareTo)
                 .orElse(null);
+
+        ModelQualityService.QualityEvaluation qualityEvaluation =
+                modelQualityService.evaluateCandidate(project);
+
+        if (qualityEvaluation != null) {
+            dashboard.globalScoreThreshold = qualityEvaluation.threshold();
+            dashboard.currentProductionGlobalScore = qualityEvaluation.globalScore();
+            dashboard.qualityStatus = qualityEvaluation.threshold() == null
+                    ? "NOT_CONFIGURED"
+                    : (qualityEvaluation.conforming() ? "CONFORMING" : "INSUFFICIENT");
+            dashboard.qualityReason = qualityEvaluation.reason();
+        } else {
+            dashboard.globalScoreThreshold = modelQualityService.resolveThreshold(project.getId());
+            dashboard.qualityStatus = dashboard.globalScoreThreshold == null
+                    ? "NOT_CONFIGURED"
+                    : "NO_PRODUCTION_MODEL";
+            dashboard.qualityReason = "No production model to evaluate.";
+        }
+
+        dashboard.recentAlerts = monitoringAlertService.getRecentAlertsByProject(project.getId());
 
         dashboard.alerts = buildProjectAlerts(project);
         dashboard.healthScore = calculateProjectHealthScore(dashboard, deployments);

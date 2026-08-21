@@ -99,12 +99,22 @@ public interface RetrainingConfigRepository
      * - ou nextRetrainingAt est atteint.
      *
      * La stratégie seule ne rend jamais une configuration due.
+     *
+     * Seules les configurations réclamables (isClaimable) sont renvoyées :
+     * les états EVALUATING / TRIGGERED / RUNNING sont exclus, et une
+     * configuration en COOLDOWN doit avoir dépassé sa période d'attente.
      */
     @Query("""
         select c
         from RetrainingConfig c
         where c.enabled = true
           and c.running = false
+          and c.state in (
+                com.mlops.platform.entity.RetrainingState.IDLE,
+                com.mlops.platform.entity.RetrainingState.COMPLETED,
+                com.mlops.platform.entity.RetrainingState.FAILED,
+                com.mlops.platform.entity.RetrainingState.COOLDOWN
+          )
           and (
                 c.manualTriggerRequested = true
                 or (
@@ -145,6 +155,9 @@ public interface RetrainingConfigRepository
      *
      * Deux pods ou deux threads ne peuvent pas réclamer la même configuration.
      * La transaction courte est gérée par le scheduler/service appelant.
+     *
+     * Le claim passe l'état à EVALUATING et mémorise la fenêtre de
+     * déclenchement (clé d'idempotence).
      */
     @Modifying(
             clearAutomatically = true,
@@ -153,10 +166,18 @@ public interface RetrainingConfigRepository
     @Query("""
         update RetrainingConfig c
            set c.running = true,
+               c.state = com.mlops.platform.entity.RetrainingState.EVALUATING,
+               c.lastTriggerWindow = coalesce(c.nextRetrainingAt, :now),
                c.updatedAt = :now
          where c.id = :id
            and c.enabled = true
            and c.running = false
+           and c.state in (
+                com.mlops.platform.entity.RetrainingState.IDLE,
+                com.mlops.platform.entity.RetrainingState.COMPLETED,
+                com.mlops.platform.entity.RetrainingState.FAILED,
+                com.mlops.platform.entity.RetrainingState.COOLDOWN
+           )
            and (
                 c.manualTriggerRequested = true
                 or (
@@ -187,11 +208,19 @@ public interface RetrainingConfigRepository
         update RetrainingConfig c
            set c.running = true,
                c.manualTriggerRequested = false,
+               c.state = com.mlops.platform.entity.RetrainingState.TRIGGERED,
+               c.lastTriggerWindow = :now,
                c.lastTriggerReason = 'MANUAL',
                c.updatedAt = :now
          where c.id = :id
            and c.enabled = true
            and c.running = false
+           and c.state in (
+                com.mlops.platform.entity.RetrainingState.IDLE,
+                com.mlops.platform.entity.RetrainingState.COMPLETED,
+                com.mlops.platform.entity.RetrainingState.FAILED,
+                com.mlops.platform.entity.RetrainingState.COOLDOWN
+           )
         """)
     int claimManualRetraining(
             @Param("id")
@@ -202,7 +231,36 @@ public interface RetrainingConfigRepository
     );
 
     /**
+     * Trace la dernière cause de déclenchement (ex. GITHUB_PUSH <commit>)
+     * après un claim réussi. N'affecte ni running ni l'état.
+     */
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
+    @Query("""
+        update RetrainingConfig c
+           set c.lastTriggerReason = :reason,
+               c.updatedAt = :now
+         where c.id = :id
+        """)
+    int updateLastTriggerReason(
+            @Param("id")
+            Long id,
+
+            @Param("reason")
+            String reason,
+
+            @Param("now")
+            LocalDateTime now
+    );
+
+    /**
      * Libération après création réussie d'un nouveau run.
+     *
+     * L'état passe à RUNNING (une expérience est active). Les champs
+     * d'idempotence (lastTriggerWindow, lastSourceModelVersion,
+     * lastExperimentId) sont enregistrés ici.
      */
     @Modifying(
             clearAutomatically = true,
@@ -212,10 +270,15 @@ public interface RetrainingConfigRepository
         update RetrainingConfig c
            set c.running = false,
                c.manualTriggerRequested = false,
+               c.state = com.mlops.platform.entity.RetrainingState.RUNNING,
                c.lastRetrainingAt = :lastRetrainingAt,
                c.nextRetrainingAt = :nextRetrainingAt,
                c.lastMonitoringCheckAt = :updatedAt,
                c.lastTriggerReason = 'SUCCESS',
+               c.lastSourceModelVersion = :sourceModelVersion,
+               c.lastExperimentId = :experimentId,
+               c.consecutiveFailures = 0,
+               c.cooldownUntil = null,
                c.updatedAt = :updatedAt
          where c.id = :id
            and c.running = true
@@ -230,12 +293,22 @@ public interface RetrainingConfigRepository
             @Param("nextRetrainingAt")
             LocalDateTime nextRetrainingAt,
 
+            @Param("sourceModelVersion")
+            String sourceModelVersion,
+
+            @Param("experimentId")
+            Long experimentId,
+
             @Param("updatedAt")
             LocalDateTime updatedAt
     );
 
     /**
      * Libération après échec du lancement.
+     *
+     * L'état passe à FAILED et le compteur d'échecs consécutifs est
+     * incrémenté. La gestion du cooldown est effectuée par le service
+     * appelant (transition COOLDOWN si le seuil est atteint).
      */
     @Modifying(
             clearAutomatically = true,
@@ -245,9 +318,11 @@ public interface RetrainingConfigRepository
         update RetrainingConfig c
            set c.running = false,
                c.manualTriggerRequested = false,
+               c.state = com.mlops.platform.entity.RetrainingState.FAILED,
                c.nextRetrainingAt = :nextRetrainingAt,
                c.lastMonitoringCheckAt = :updatedAt,
                c.lastTriggerReason = 'FAILED',
+               c.consecutiveFailures = c.consecutiveFailures + 1,
                c.updatedAt = :updatedAt
          where c.id = :id
            and c.running = true
@@ -264,7 +339,8 @@ public interface RetrainingConfigRepository
     );
 
     /**
-     * Libération lorsqu'aucun signal ne justifie un réentraînement.
+     * Libération après un passage direct en cooldown (échecs consécutifs
+     * au-delà du seuil). L'état passe à COOLDOWN jusqu'à cooldownUntil.
      */
     @Modifying(
             clearAutomatically = true,
@@ -274,6 +350,45 @@ public interface RetrainingConfigRepository
         update RetrainingConfig c
            set c.running = false,
                c.manualTriggerRequested = false,
+               c.state = com.mlops.platform.entity.RetrainingState.COOLDOWN,
+               c.nextRetrainingAt = :nextRetrainingAt,
+               c.cooldownUntil = :cooldownUntil,
+               c.lastMonitoringCheckAt = :updatedAt,
+               c.lastTriggerReason = 'COOLDOWN',
+               c.consecutiveFailures = c.consecutiveFailures + 1,
+               c.updatedAt = :updatedAt
+         where c.id = :id
+           and c.running = true
+        """)
+    int releaseAfterCooldown(
+            @Param("id")
+            Long id,
+
+            @Param("nextRetrainingAt")
+            LocalDateTime nextRetrainingAt,
+
+            @Param("cooldownUntil")
+            LocalDateTime cooldownUntil,
+
+            @Param("updatedAt")
+            LocalDateTime updatedAt
+    );
+
+    /**
+     * Libération lorsqu'aucun signal ne justifie un réentraînement.
+     *
+     * L'état revient à IDLE : la configuration reste éligible pour la
+     * prochaine échéance.
+     */
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
+    @Query("""
+        update RetrainingConfig c
+           set c.running = false,
+               c.manualTriggerRequested = false,
+               c.state = com.mlops.platform.entity.RetrainingState.IDLE,
                c.nextRetrainingAt = :nextRetrainingAt,
                c.lastDecisionReason = :decisionReason,
                c.lastMonitoringCheckAt = :updatedAt,
@@ -297,10 +412,49 @@ public interface RetrainingConfigRepository
     );
 
     /**
+     * Mise à jour de l'état d'une configuration non réclamée.
+     *
+     * Utilisée par le diagnostic DRY-RUN et par les réparations
+     * ponctuelles. Ne modifie pas running (la configuration n'est pas
+     * réclamée).
+     */
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
+    @Query("""
+        update RetrainingConfig c
+           set c.state = :state,
+               c.nextRetrainingAt = :nextRetrainingAt,
+               c.lastDecisionReason = :decisionReason,
+               c.updatedAt = :now
+         where c.id = :id
+           and c.running = false
+        """)
+    int updateStateForUnclaimedConfig(
+            @Param("id")
+            Long id,
+
+            @Param("state")
+            com.mlops.platform.entity.RetrainingState state,
+
+            @Param("nextRetrainingAt")
+            LocalDateTime nextRetrainingAt,
+
+            @Param("decisionReason")
+            String decisionReason,
+
+            @Param("now")
+            LocalDateTime now
+    );
+
+    /**
      * Demande manuelle ou intelligente atomique.
      *
      * La condition running=false empêche de demander un second lancement
      * pendant qu'un premier traitement est encore actif.
+     *
+     * L'état est repassé en IDLE (le scheduler le réclamera à nouveau).
      */
     @Modifying(
             clearAutomatically = true,
@@ -310,6 +464,7 @@ public interface RetrainingConfigRepository
         update RetrainingConfig c
            set c.manualTriggerRequested = true,
                c.nextRetrainingAt = :nextRetrainingAt,
+               c.state = com.mlops.platform.entity.RetrainingState.IDLE,
                c.lastTriggerReason = :triggerReason,
                c.lastDecisionReason = :decisionReason,
                c.updatedAt = :updatedAt
@@ -338,7 +493,8 @@ public interface RetrainingConfigRepository
     /**
      * Répare les configurations bloquées.
      *
-     * On ne modifie que les lignes réellement anciennes.
+     * On ne modifie que les lignes réellement anciennes. L'état redevient
+     * IDLE (la config redeviendra due selon nextRetrainingAt).
      */
     @Modifying(
             clearAutomatically = true,
@@ -348,6 +504,7 @@ public interface RetrainingConfigRepository
         update RetrainingConfig c
            set c.running = false,
                c.manualTriggerRequested = false,
+               c.state = com.mlops.platform.entity.RetrainingState.IDLE,
                c.lastTriggerReason = 'STUCK_RESET',
                c.lastDecisionReason =
                    'Le verrou de réentraînement a été réinitialisé automatiquement.',
@@ -360,6 +517,102 @@ public interface RetrainingConfigRepository
             @Param("cutoff")
             LocalDateTime cutoff,
 
+            @Param("now")
+            LocalDateTime now
+    );
+
+    /**
+     * Configurations actives en état RUNNING / TRIGGERED pour la
+     * réconciliation des expériences terminées.
+     */
+    @Query("""
+        select c
+        from RetrainingConfig c
+        where c.enabled = true
+          and c.state in (
+                com.mlops.platform.entity.RetrainingState.RUNNING,
+                com.mlops.platform.entity.RetrainingState.TRIGGERED
+          )
+        order by c.id asc
+        """)
+    List<RetrainingConfig> findRunningConfigs();
+
+    /**
+     * Configurations dont l'expérience de réentraînement s'est terminée
+     * mais dont l'état n'est jamais repassé actif/IDLE.
+     *
+     * running=false signifie que la garde du scheduler est déjà relâchée ;
+     * l'état RUNNING / TRIGGERED ne correspond plus à un traitement réel.
+     * Ces configurations sont bloquées pour tout nouveau claim (manuel ou
+     * planifié) tant qu'elles ne sont pas réinitialisées à IDLE.
+     */
+    @Query("""
+        select c
+        from RetrainingConfig c
+        where c.enabled = true
+          and c.running = false
+          and c.state in (
+                com.mlops.platform.entity.RetrainingState.RUNNING,
+                com.mlops.platform.entity.RetrainingState.TRIGGERED
+          )
+        order by c.id asc
+        """)
+    List<RetrainingConfig> findFinishedRunningConfigs();
+
+    /**
+     * Réinitialise à IDLE une configuration dont l'expérience de
+     * réentraînement est terminée (aucune expérience active en base).
+     *
+     * La clause d'état rend la requête idempotente : un second pod ne
+     * remet pas doublement à jour la même ligne.
+     */
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
+    @Query("""
+        update RetrainingConfig c
+           set c.state = com.mlops.platform.entity.RetrainingState.IDLE,
+               c.lastTriggerReason = 'RECONCILED',
+               c.lastDecisionReason =
+                   'Expérience de réentraînement terminée : état réinitialisé.',
+               c.updatedAt = :now
+         where c.id = :id
+           and c.running = false
+           and c.state in (
+                com.mlops.platform.entity.RetrainingState.RUNNING,
+                com.mlops.platform.entity.RetrainingState.TRIGGERED
+           )
+        """)
+    int resetFinishedConfigToIdle(
+            @Param("id")
+            Long id,
+
+            @Param("now")
+            LocalDateTime now
+    );
+
+    /**
+     * Configurations actives dont le cooldown est expiré : elles redeviennent
+     * éligibles au cycle suivant (état IDLE).
+     */
+    @Modifying(
+            clearAutomatically = true,
+            flushAutomatically = true
+    )
+    @Query("""
+        update RetrainingConfig c
+           set c.state = com.mlops.platform.entity.RetrainingState.IDLE,
+               c.cooldownUntil = null,
+               c.lastTriggerReason = 'COOLDOWN_EXPIRED',
+               c.updatedAt = :now
+         where c.enabled = true
+           and c.running = false
+           and c.state = com.mlops.platform.entity.RetrainingState.COOLDOWN
+           and c.cooldownUntil is not null
+           and c.cooldownUntil <= :now
+        """)
+    int releaseExpiredCooldowns(
             @Param("now")
             LocalDateTime now
     );

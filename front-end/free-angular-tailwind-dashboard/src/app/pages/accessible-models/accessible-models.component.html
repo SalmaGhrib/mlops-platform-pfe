@@ -15,6 +15,17 @@
       </button>
     </div>
 
+    <div class="search-bar">
+      <app-smart-search
+        [searchFn]="searchAccessibleModels"
+        placeholder="Rechercher un modèle accessible..."
+        [pageSize]="12"
+        (itemsChange)="onSearchItems($event)"
+        (loadingChange)="loading = $event"
+        (totalChange)="onTotalChange($event)"
+      />
+    </div>
+
     <div *ngIf="successMessage" class="success-message">
       {{ successMessage }}
     </div>
@@ -50,7 +61,7 @@
               <strong>{{ getProjectLabel(model) }}</strong>
               —
               Version :
-              <strong>v{{ model.modelVersion }}</strong>
+              <strong>v{{ getModelVersion(model) }}</strong>
             </p>
           </div>
 
@@ -73,7 +84,7 @@
 
           <div class="info-box">
             <span>Version</span>
-            <strong>v{{ model.modelVersion }}</strong>
+            <strong>v{{ getModelVersion(model) }}</strong>
           </div>
 
           <div class="info-box">

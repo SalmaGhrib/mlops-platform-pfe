@@ -24,6 +24,13 @@ export interface RetrainingConfigRequest {
   maxPredictionErrorRatePercent?: number;
   performanceDropThresholdPercent?: number;
   dataDriftThresholdPercent?: number;
+  globalScoreThreshold?: number;
+
+  /**
+   * Politique de source de données pour un retraining (exigence #21) :
+   * ORIGINAL_DATASET | LATEST_DATASET | MERGED_DATASET.
+   */
+  dataPolicy?: string;
 }
 
 export interface RetrainingConfigResponse {
@@ -48,10 +55,15 @@ export interface RetrainingConfigResponse {
   maxPredictionErrorRatePercent?: number | null;
   performanceDropThresholdPercent?: number | null;
   dataDriftThresholdPercent?: number | null;
+  globalScoreThreshold?: number | null;
   manualTriggerRequested?: boolean | null;
   lastTriggerReason?: string | null;
   lastDecisionReason?: string | null;
   lastMonitoringCheckAt?: string | null;
+  nextMonitoringCheckAt?: string | null;
+  state?: string | null;
+  cooldownUntil?: string | null;
+  dataPolicy?: string | null;
   experimentId?: number | null;
   jobName?: string | null;
   kubeflowRunName?: string | null;
@@ -84,6 +96,21 @@ export interface ProjectRetrainingStatusResponse {
 
 const RETRAINING_TERMINAL_STATUSES = ['COMPLETED', 'FAILED', 'CANCELLED', 'TIMED_OUT'];
 
+export interface ProjectRetrainingSummaryDTO {
+  projectId: number;
+  enabled: boolean;
+  strategy: string;
+  state: string;
+  lastRetrainingAt?: string | null;
+  nextRetrainingAt?: string | null;
+  lastMonitoringCheckAt?: string | null;
+  nextMonitoringCheckAt?: string | null;
+  lastTriggerReason?: string | null;
+  running: boolean;
+  cooldownUntil?: string | null;
+  frequencyLabel?: string | null;
+}
+
 export function isRetrainingTerminalStatus(status: string | null | undefined): boolean {
   return !!status && RETRAINING_TERMINAL_STATUSES.includes(String(status).toUpperCase());
 }
@@ -103,6 +130,17 @@ export class RetrainingService {
   getConfig(projectId: number): Observable<RetrainingConfigResponse> {
     return this.http.get<RetrainingConfigResponse>(
       `${this.apiUrl}/projects/${projectId}/config`,
+      {
+        headers: this.getAuthHeaders(),
+      }
+    );
+  }
+
+  getRetrainingSummary(
+    projectId: number
+  ): Observable<ProjectRetrainingSummaryDTO> {
+    return this.http.get<ProjectRetrainingSummaryDTO>(
+      `${this.apiUrl}/projects/${projectId}/summary`,
       {
         headers: this.getAuthHeaders(),
       }

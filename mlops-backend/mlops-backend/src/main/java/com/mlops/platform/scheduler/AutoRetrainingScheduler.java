@@ -115,6 +115,17 @@ public class AutoRetrainingScheduler {
                 );
             }
 
+            int reconciledCount =
+                    autoRetrainingService
+                            .reconcileFinishedRunningConfigs();
+
+            if (reconciledCount > 0) {
+                System.out.println(
+                        "[AUTO_RETRAINING] Reconciled finished configs="
+                                + reconciledCount
+                );
+            }
+
             List<RetrainingConfig> dueConfigs =
                     retrainingConfigRepository
                             .findDueConfigs(now);

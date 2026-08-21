@@ -72,6 +72,174 @@
 
   <ng-container *ngIf="summary && !loading">
     <div class="mlops-fade-in space-y-6">
+    <!-- Health overview -->
+    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
+      <div class="metric-card">
+        <div class="metric-icon kpi-red">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Modèles dégradés</p>
+          <h3 class="metric-value text-red-600 dark:text-red-400">
+            {{ overview?.degradedModels ?? 0 }}
+          </h3>
+          <p class="metric-help">Modèles en production avec alertes actives.</p>
+        </div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-icon kpi-yellow">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Sous le seuil qualité</p>
+          <h3 class="metric-value text-yellow-600 dark:text-yellow-400">
+            {{ overview?.modelsBelowQualityThreshold ?? 0 }}
+          </h3>
+          <p class="metric-help">Score global inférieur au seuil configuré.</p>
+        </div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-icon kpi-blue">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Data drift</p>
+          <h3 class="metric-value text-blue-600 dark:text-blue-400">
+            {{ overview?.projectsWithDataDrift ?? 0 }}
+          </h3>
+          <p class="metric-help">Projets avec data drift détecté.</p>
+        </div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-icon kpi-purple">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+        </div>
+        <div class="metric-body">
+          <p class="metric-label">Alertes critiques 24 h</p>
+          <h3 class="metric-value text-purple-600 dark:text-purple-400">
+            {{ overview?.criticalAlerts24h ?? 0 }}
+          </h3>
+          <p class="metric-help">Sur {{ overview?.totalAlerts24h ?? 0 }} alertes au total.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Projects health table + recent alerts -->
+    <div class="grid grid-cols-1 gap-5 xl:grid-cols-2">
+      <div class="dashboard-panel">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="panel-label">Projects Health</p>
+            <h2 class="panel-title">Santé des projets</h2>
+          </div>
+
+          <span class="text-sm text-gray-500 dark:text-gray-400">
+            {{ overview?.monitoredProjects ?? 0 }} surveillés
+          </span>
+        </div>
+
+        <div class="mt-6 overflow-x-auto">
+          <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
+            <thead>
+              <tr class="bg-gray-50 dark:bg-gray-800/60">
+                <th class="monitoring-th">Projet</th>
+                <th class="monitoring-th">Qualité</th>
+                <th class="monitoring-th">Score</th>
+                <th class="monitoring-th">Drift</th>
+                <th class="monitoring-th">Baisse perf.</th>
+              </tr>
+            </thead>
+
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-800">
+              <tr *ngFor="let project of overview?.projects ?? []; trackBy: trackByProject">
+                <td class="monitoring-td">
+                  <strong class="font-medium text-gray-900 dark:text-white">
+                    {{ project.projectName }}
+                  </strong>
+                  <div class="text-xs text-gray-400">
+                    {{ project.registeredModelName || '-' }} {{ project.modelVersion ? 'v' + project.modelVersion : '' }}
+                  </div>
+                </td>
+                <td class="monitoring-td">
+                  <span [ngClass]="qualityStatusClass(project.qualityStatus)">
+                    {{ qualityStatusLabel(project.qualityStatus) }}
+                  </span>
+                </td>
+                <td class="monitoring-td font-semibold">
+                  {{ project.globalScore != null ? project.globalScore.toFixed(2) : '-' }}
+                  <span class="text-xs text-gray-400">
+                    / {{ project.globalScoreThreshold != null ? project.globalScoreThreshold.toFixed(2) : '-' }}
+                  </span>
+                </td>
+                <td class="monitoring-td font-semibold">
+                  {{ project.dataDriftScorePercent.toFixed(1) }}%
+                </td>
+                <td class="monitoring-td font-semibold">
+                  {{ project.performanceDropPercent.toFixed(1) }}%
+                </td>
+              </tr>
+
+              <tr *ngIf="!overview?.projects?.length">
+                <td class="monitoring-td" colspan="5">
+                  Aucun projet surveillé.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="dashboard-panel">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="panel-label">Recent Alerts</p>
+            <h2 class="panel-title">Alertes récentes</h2>
+          </div>
+
+          <div class="alert-counter">
+            {{ overview?.totalAlerts24h ?? 0 }}
+          </div>
+        </div>
+
+        <div class="mt-6 space-y-3">
+          <div
+            *ngFor="let alert of overview?.recentAlerts ?? []; trackBy: trackByAlert"
+            class="rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/60"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <strong class="text-sm font-medium text-gray-900 dark:text-white">
+                {{ alert.title }}
+              </strong>
+              <span [ngClass]="severityClass(alert.severity)">
+                {{ alert.severity }}
+              </span>
+            </div>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {{ alert.message }}
+            </p>
+            <div class="mt-1 text-xs text-gray-400">
+              {{ formatOverviewDate(alert.createdAt) }}
+            </div>
+          </div>
+
+          <div *ngIf="!overview?.recentAlerts?.length" class="text-sm text-gray-500 dark:text-gray-400">
+            Aucune alerte récente.
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Main gauges -->
     <div class="grid grid-cols-1 gap-5 xl:grid-cols-4">
       <!-- Global Health -->

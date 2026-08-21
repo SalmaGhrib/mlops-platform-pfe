@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.HashMap;
@@ -47,6 +49,31 @@ public class KubernetesModelServingService {
             String modelVersion,
             String dataType
     ) {
+        return deployModelServer(
+                deploymentName,
+                serviceName,
+                null,
+                dockerImage,
+                registeredModelName,
+                modelVersion,
+                dataType
+        );
+    }
+
+    /*
+     * Variante blue/green : le paramètre servingTrack ajoute le label
+     * serving-track=blue|green sur les pods. Le Service stable du modèle
+     * (ensureStableService) route le trafic vers le track actif.
+     */
+    public String deployModelServer(
+            String deploymentName,
+            String serviceName,
+            String servingTrack,
+            String dockerImage,
+            String registeredModelName,
+            String modelVersion,
+            String dataType
+    ) {
         if (deploymentName == null || deploymentName.isBlank()) {
             throw new IllegalArgumentException("deploymentName est obligatoire.");
         }
@@ -73,6 +100,7 @@ public class KubernetesModelServingService {
         String cleanRegisteredModelName = registeredModelName.trim();
         String cleanModelVersion = modelVersion.trim();
         String cleanDataType = normalizeDataType(dataType);
+        String cleanServingTrack = normalizeTrack(servingTrack);
 
         /*
          * Important pour le blue/green :
@@ -99,6 +127,7 @@ public class KubernetesModelServingService {
         labels.put("component", "mlops-model-server");
         labels.put("model", sanitizeLabelValue(cleanRegisteredModelName));
         labels.put("model-version", sanitizeLabelValue("v" + cleanModelVersion));
+        labels.put("serving-track", cleanServingTrack);
 
         var container = new ContainerBuilder()
                 .withName("model-server")
@@ -190,6 +219,183 @@ public class KubernetesModelServingService {
                 + ", dataType=" + cleanDataType);
 
         return "http://" + cleanServiceName + "." + namespace + ".svc.cluster.local:8000";
+    }
+
+    /*
+     * Blue/green : crée le Service Kubernetes stable du modèle
+     * (ex. detection-spam-service) si nécessaire, OU le laisse inchangé
+     * s'il existe déjà (aucune bascule de trafic ici : la bascule est
+     * volontaire et se fait via switchStableServiceTrack après readiness).
+     *
+     * Le Service stable sélectionne les pods par model + serving-track.
+     */
+    public void ensureStableService(
+            String stableServiceName,
+            String registeredModelName,
+            String targetTrack
+    ) {
+        if (stableServiceName == null || stableServiceName.isBlank()
+                || registeredModelName == null || registeredModelName.isBlank()) {
+            return;
+        }
+
+        String cleanServiceName = stableServiceName.trim();
+        String modelLabel = sanitizeLabelValue(registeredModelName.trim());
+        String track = normalizeTrack(targetTrack);
+
+        Map<String, String> stableLabels = new HashMap<>();
+        stableLabels.put("component", "mlops-model-stable-service");
+        stableLabels.put("model", modelLabel);
+
+        io.fabric8.kubernetes.api.model.Service existing = kubernetesClient.services()
+                .inNamespace(namespace)
+                .withName(cleanServiceName)
+                .get();
+
+        if (existing != null) {
+            System.out.println("[BLUE_GREEN_START] Stable service already exists. "
+                    + "Traffic stays on current track. "
+                    + "service=" + cleanServiceName
+                    + ", model=" + registeredModelName.trim()
+                    + ", targetTrack=" + track);
+            return;
+        }
+
+        var stableService = new ServiceBuilder()
+                .withNewMetadata()
+                    .withName(cleanServiceName)
+                    .withNamespace(namespace)
+                    .withLabels(stableLabels)
+                .endMetadata()
+                .withNewSpec()
+                    .withType("ClusterIP")
+                    .withSelector(Map.of(
+                            "model", modelLabel,
+                            "serving-track", track
+                    ))
+                    .withPorts(new ServicePortBuilder()
+                            .withName("http")
+                            .withPort(8000)
+                            .withTargetPort(new IntOrString(8000))
+                            .build())
+                .endSpec()
+                .build();
+
+        kubernetesClient.services()
+                .inNamespace(namespace)
+                .resource(stableService)
+                .createOrReplace();
+
+        System.out.println("[BLUE_GREEN_START] Stable service created. "
+                + "service=" + cleanServiceName
+                + ", model=" + registeredModelName.trim()
+                + ", selectorTrack=" + track);
+    }
+
+    /*
+     * Blue/green : bascule atomique du trafic du modèle vers le track cible.
+     * Le selector du Service stable passe de serving-track=X à serving-track=Y.
+     * Aucun redémarrage de pod : les pods des deux versions restent en place.
+     */
+    public void switchStableServiceTrack(
+            String stableServiceName,
+            String registeredModelName,
+            String targetTrack
+    ) {
+        if (stableServiceName == null || stableServiceName.isBlank()
+                || registeredModelName == null || registeredModelName.isBlank()) {
+            System.out.println("[TRAFFIC_SWITCH] Skipped: missing stableServiceName/registeredModelName.");
+            return;
+        }
+
+        String cleanServiceName = stableServiceName.trim();
+        String modelLabel = sanitizeLabelValue(registeredModelName.trim());
+        String track = normalizeTrack(targetTrack);
+
+        io.fabric8.kubernetes.api.model.Service existing = kubernetesClient.services()
+                .inNamespace(namespace)
+                .withName(cleanServiceName)
+                .get();
+
+        if (existing == null) {
+            System.out.println("[TRAFFIC_SWITCH] Stable service not found. "
+                    + "Creating it on track " + track + ". "
+                    + "service=" + cleanServiceName);
+            ensureStableService(cleanServiceName, registeredModelName.trim(), track);
+            return;
+        }
+
+        io.fabric8.kubernetes.api.model.Service updated = new ServiceBuilder(existing)
+                .editSpec()
+                    .withSelector(Map.of(
+                            "model", modelLabel,
+                            "serving-track", track
+                    ))
+                .endSpec()
+                .build();
+
+        kubernetesClient.services()
+                .inNamespace(namespace)
+                .resource(updated)
+                .createOrReplace();
+
+        System.out.println("[TRAFFIC_SWITCH] Stable service selector switched to track="
+                + track
+                + ". service=" + cleanServiceName
+                + ", model=" + registeredModelName.trim());
+    }
+
+    /*
+     * Blue/green : smoke test de prédiction avant bascule du trafic.
+     *
+     * Règle : toute réponse HTTP du serveur (2xx, 3xx, 4xx, 5xx) prouve que
+     * le routage fonctionne et que le serveur répond. Seule une erreur de
+     * connexion/timeout est considérée comme un échec (serveur pas prêt).
+     */
+    public boolean probePredictionEndpoint(String predictionEndpoint) {
+        if (predictionEndpoint == null || predictionEndpoint.isBlank()) {
+            return false;
+        }
+
+        try {
+            SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+            requestFactory.setConnectTimeout(serviceHealthTimeoutMs);
+            requestFactory.setReadTimeout(serviceHealthTimeoutMs);
+
+            RestTemplate probeTemplate = new RestTemplate(requestFactory);
+            String url = normalizeBaseUrl(predictionEndpoint);
+
+            probeTemplate.postForEntity(
+                    url,
+                    new HashMap<String, Object>(),
+                    String.class
+            );
+
+            System.out.println("[BLUE_GREEN_SMOKE] Prediction endpoint responded. url=" + url);
+            return true;
+
+        } catch (HttpStatusCodeException e) {
+            /*
+             * 4xx/5xx = le serveur répond (routing OK), le body n'est pas
+             * celui attendu. On considère la vérification comme réussie.
+             */
+            System.out.println("[BLUE_GREEN_SMOKE] Prediction endpoint responded with HTTP "
+                    + e.getStatusCode().value() + ". url="
+                    + normalizeBaseUrl(predictionEndpoint));
+            return true;
+
+        } catch (ResourceAccessException e) {
+            System.out.println("[BLUE_GREEN_SMOKE] Prediction endpoint unreachable. url="
+                    + normalizeBaseUrl(predictionEndpoint)
+                    + ", reason=" + e.getMessage());
+            return false;
+
+        } catch (Exception e) {
+            System.out.println("[BLUE_GREEN_SMOKE] Prediction endpoint probe failed. url="
+                    + normalizeBaseUrl(predictionEndpoint)
+                    + ", reason=" + e.getMessage());
+            return false;
+        }
     }
 
     public void deleteModelServer(String deploymentName, String serviceName) {
@@ -327,6 +533,13 @@ public class KubernetesModelServingService {
         }
 
         return "TABULAR";
+    }
+
+    private String normalizeTrack(String track) {
+        if (track != null && "green".equalsIgnoreCase(track.trim())) {
+            return "green";
+        }
+        return "blue";
     }
 
     private String sanitizeLabelValue(String value) {

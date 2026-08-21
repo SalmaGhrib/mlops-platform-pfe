@@ -33,11 +33,25 @@ ONNX_EXTENSIONS = {
     ".onnx",
 }
 
+# Formats boostés natifs (CatBoost/XGBoost/LightGBM) et TorchScript,
+# alignés sur le contrat du runner Custom Docker (model_artifact_detector).
+BOOSTING_EXTENSIONS = {
+    ".cbm",
+    ".bst",
+    ".ubj",
+}
+
+TORCHSCRIPT_EXTENSIONS = {
+    ".torchscript",
+}
+
 ALL_SUPPORTED_EXTENSIONS = (
     AUTO_SKLEARN_EXTENSIONS
     | KERAS_EXTENSIONS
     | PYTORCH_EXTENSIONS
     | ONNX_EXTENSIONS
+    | BOOSTING_EXTENSIONS
+    | TORCHSCRIPT_EXTENSIONS
 )
 
 PREFERRED_MODEL_NAMES = [
@@ -58,6 +72,10 @@ PREFERRED_MODEL_NAMES = [
     "model.onnx",
     "model.pt",
     "model.pth",
+    "model.cbm",
+    "model.bst",
+    "model.ubj",
+    "model.torchscript",
 ]
 
 
@@ -77,14 +95,36 @@ def safe_short_text(value: Any, limit: int = 3500) -> str:
 
 
 def has_mlmodel_file(path: Path) -> bool:
+    """
+    True si un fichier MLmodel valide existe, directement ou imbriqué
+    (ex. dans un sous-dossier standardized_model/ produit par un run
+    de standardisation précédent). Indispensable pour ne JAMAIS
+    re-loguer un modèle déjà au format MLflow.
+    """
     if not path.exists():
         return False
 
     if path.is_file() and path.name == "MLmodel":
         return True
 
-    if path.is_dir() and (path / "MLmodel").exists():
-        return True
+    if path.is_dir():
+        if (path / "MLmodel").exists():
+            return True
+
+        ignored_parts = {
+            "__pycache__",
+            ".git",
+            ".venv",
+            "venv",
+            "env",
+            "site-packages",
+            "logs",
+        }
+
+        for candidate in path.rglob("MLmodel"):
+            if set(candidate.parts).intersection(ignored_parts):
+                continue
+            return True
 
     return False
 
@@ -267,6 +307,10 @@ def get_latest_version_for_run(
     registered_model_name: str,
     run_id: str,
 ) -> Optional[str]:
+    """
+    Version la plus élevée déjà enregistrée pour ce run dans ce registered model.
+    Lecture seule : ne crée rien.
+    """
     try:
         versions = client.search_model_versions(f"name = '{registered_model_name}'")
     except Exception:
@@ -867,6 +911,38 @@ def main() -> int:
                 artifact_path=args.artifact_path,
                 dst_path=str(tmp_dir),
             )
+
+            client = MlflowClient()
+
+            # ============================================================
+            # IDEMPOTENCE : si le run possède DÉJÀ une version enregistrée
+            # dans le registered model, on ne crée JAMAIS une nouvelle
+            # version. On renvoie la version existante.
+            # ============================================================
+            existing_version = get_latest_version_for_run(
+                client=client,
+                registered_model_name=args.registered_model_name,
+                run_id=args.run_id,
+            )
+
+            if existing_version is not None:
+                result.update(
+                    {
+                        "success": True,
+                        "already_mlflow_model": True,
+                        "standardized": False,
+                        "standardization_type": "idempotent_reuse",
+                        "target_artifact_path": args.target_artifact_path,
+                        "new_version": existing_version,
+                        "message": (
+                            "Run already registered as MLflow model version "
+                            f"v{existing_version}. Idempotent reuse, no new "
+                            "version created."
+                        ),
+                    }
+                )
+                print_json(result)
+                return 0
 
             if has_mlmodel_file(artifact_root):
                 try:

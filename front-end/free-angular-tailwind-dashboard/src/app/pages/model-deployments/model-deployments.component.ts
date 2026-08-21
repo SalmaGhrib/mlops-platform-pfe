@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { catchError, of } from 'rxjs';
+import { Observable, catchError, of } from 'rxjs';
 
 import {
   DeploymentVisibility,
@@ -9,16 +9,24 @@ import {
   ModelRegistryService,
   UserSearchResult
 } from '../../core/services/model-registry.service';
+import { SmartSearchComponent } from '../../shared/components/common/smart-search/smart-search.component';
+import {
+  SearchPageResponse,
+  SmartSearchParams
+} from '../../shared/components/common/smart-search/smart-search.types';
 
 @Component({
   selector: 'app-model-deployments',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, SmartSearchComponent],
   templateUrl: './model-deployments.component.html',
   styleUrls: ['./model-deployments.component.css']
 })
 export class ModelDeploymentsComponent implements OnInit, OnDestroy {
+  @ViewChild(SmartSearchComponent) smartSearch!: SmartSearchComponent<ModelDeploymentResponse>;
+
   deployments: ModelDeploymentResponse[] = [];
+  totalDeployments = 0;
 
   loading = false;
   refreshing = false;
@@ -64,39 +72,38 @@ export class ModelDeploymentsComponent implements OnInit, OnDestroy {
     }
 
     this.errorMessage = '';
+    this.smartSearch?.reload();
+  }
 
-    this.modelRegistryService.getOwnedDeployments()
-      .pipe(
-        catchError((error) => {
-          console.error('[ModelDeployments] load owned deployments error', error);
+  searchDeployments = (params: SmartSearchParams): Observable<SearchPageResponse<ModelDeploymentResponse>> =>
+    this.modelRegistryService.searchDeployments('owned', params);
 
-          this.errorMessage = this.extractErrorMessage(
-            error,
-            'Impossible de charger vos modèles réellement déployés.'
-          );
+  onSearchItems(deployments: ModelDeploymentResponse[]): void {
+    const cleanDeployments = (deployments || [])
+      .filter((deployment) => this.isVisibleAndReallyDeployed(deployment))
+      .sort((a, b) => this.compareDeploymentsForDisplay(a, b));
 
-          return of([]);
-        })
-      )
-      .subscribe((deployments) => {
-        const cleanDeployments = (deployments || [])
-          .filter((deployment) => this.isVisibleAndReallyDeployed(deployment))
-          .sort((a, b) => this.compareDeploymentsForDisplay(a, b));
+    this.deployments = cleanDeployments;
 
-        this.deployments = cleanDeployments;
+    for (const deployment of this.deployments) {
+      this.initVisibilityDraft(deployment);
 
-        for (const deployment of this.deployments) {
-          this.initVisibilityDraft(deployment);
+      if (this.getVisibility(deployment) === 'SHARED') {
+        this.loadDeploymentShares(deployment);
+      }
+    }
 
-          if (this.getVisibility(deployment) === 'SHARED') {
-            this.loadDeploymentShares(deployment);
-          }
-        }
+    this.lastRefreshAt = new Date();
+    this.loading = false;
+    this.refreshing = false;
+  }
 
-        this.lastRefreshAt = new Date();
-        this.loading = false;
-        this.refreshing = false;
-      });
+  onTotalChange(total: number): void {
+    this.totalDeployments = total;
+  }
+
+  refresh(): void {
+    this.smartSearch?.resetAndReload();
   }
 
   private isVisibleAndReallyDeployed(model: ModelDeploymentResponse): boolean {

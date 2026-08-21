@@ -1,0 +1,221 @@
+@if (experiment) {
+  <div class="ai-hero relative overflow-hidden rounded-2xl border border-gray-200 p-5 dark:border-gray-800">
+    <div class="relative z-10">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-3">
+          <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-gray-400 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-800">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 4v8m0 0l4-4m-4 4l-4-4"/>
+            </svg>
+          </span>
+          <div>
+            <p class="text-sm font-bold text-gray-900 dark:text-white">
+              Suivi du pipeline · {{ experiment.experimentName || '-' }}
+            </p>
+            <div class="mt-1 flex flex-wrap items-center gap-2">
+              <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-bold" [ngClass]="statusBadgeClass">
+                @if (isLive || status === 'RUNNING' || isDeploymentRunning) {
+                  <span class="h-1.5 w-1.5 rounded-full bg-current mlops-pulse"></span>
+                }
+                {{ statusLabel }}
+              </span>
+              <span class="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-0.5 text-[11px] font-semibold text-gray-500 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-400 dark:ring-gray-800">
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                </svg>
+                {{ runtimeLabel }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <div class="h-2 w-36 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-800">
+            <div class="h-full rounded-full bg-gradient-to-r from-brand-500 to-cyan-500 transition-all duration-700"
+              [style.width.%]="progressPercent">
+            </div>
+          </div>
+          <span class="text-xs font-bold text-gray-700 dark:text-gray-300">{{ progressPercent }}%</span>
+        </div>
+      </div>
+
+      <div class="mt-6">
+        <ol class="flex items-start">
+          @for (step of steps; track step.key; let i = $index) {
+            <li class="relative flex-1">
+              @if (i > 0) {
+                <div class="absolute left-0 top-5 -right-2 h-0.5"
+                  [ngClass]="step.state === 'pending' || step.state === 'skipped'
+                    ? 'bg-gray-200 dark:bg-gray-800'
+                    : step.state === 'failed' ? 'bg-error-500'
+                    : 'bg-gradient-to-r from-brand-500 to-cyan-500'">
+                </div>
+              }
+
+              <div class="relative flex flex-col items-center text-center">
+                <span class="flex h-10 w-10 items-center justify-center rounded-full border-2 transition"
+                  [ngClass]="step.state === 'done'
+                    ? 'border-success-500 bg-success-500 text-white'
+                    : step.state === 'active'
+                      ? 'border-brand-500 bg-white text-brand-600 dark:bg-gray-900'
+                      : step.state === 'failed'
+                        ? 'border-error-500 bg-error-500 text-white'
+                        : step.state === 'skipped'
+                          ? 'border-gray-300 bg-gray-100 text-gray-400 dark:border-gray-700 dark:bg-gray-800'
+                          : 'border-gray-200 bg-white text-gray-400 dark:border-gray-700 dark:bg-gray-900'">
+
+                  @if (step.state === 'done') {
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+                    </svg>
+                  } @else if (step.state === 'failed') {
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                  } @else if (step.state === 'active') {
+                    <span class="h-4 w-4 rounded-full border-2 border-brand-500 border-t-transparent mlops-spinner"></span>
+                  } @else if (step.state === 'skipped') {
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                  } @else {
+                    <span class="h-2.5 w-2.5 rounded-full bg-gray-300 dark:bg-gray-600"></span>
+                  }
+                </span>
+
+                <p class="mt-2 text-xs font-bold"
+                  [ngClass]="step.state === 'pending' || step.state === 'skipped'
+                    ? 'text-gray-400 dark:text-gray-500'
+                    : 'text-gray-800 dark:text-gray-200'">
+                  {{ step.label }}
+                </p>
+                <p class="mt-0.5 hidden max-w-[11rem] text-[11px] leading-4 text-gray-400 dark:text-gray-500 lg:block">
+                  {{ step.hint }}
+                </p>
+
+                @if (step.duration) {
+                  <p class="mt-0.5 text-[10px] font-semibold text-gray-400 dark:text-gray-500">
+                    {{ step.duration }}
+                  </p>
+                }
+
+                @if (step.errorCode) {
+                  <span class="mt-1 inline-flex items-center gap-1 rounded-full bg-error-50 px-2 py-0.5 text-[10px] font-bold text-error-700 dark:bg-error-900/30 dark:text-error-300">
+                    {{ step.errorCode }}
+                  </span>
+                }
+
+                @if (step.hasLogs) {
+                  <button type="button"
+                    (click)="loadStepLogs(step)"
+                    class="mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold text-brand-600 transition hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-900/20">
+                    <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 12a6 6 0 106 6c0-1.657-.67-3.16-1.757-4.243a6 6 0 00-8.486 0M12 6h.01M16 6h.01M20 6h.01"/>
+                    </svg>
+                    {{ hasLoadedLogs(step) ? 'Masquer' : 'Logs' }}
+                  </button>
+                }
+              </div>
+            </li>
+          }
+        </ol>
+      </div>
+
+      @if (usesBackendSteps && pipeline?.steps?.length) {
+        <div class="mt-5 space-y-2">
+          @for (step of steps; track step.key) {
+            @if (getStepMessage(step) || (hasLoadedLogs(step) && stepLogs[step.key])) {
+              <div class="rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900/60">
+                @if (getStepMessage(step)) {
+                  <div class="flex items-start gap-2 px-4 py-2.5 text-xs text-gray-600 dark:text-gray-300">
+                    <span class="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+                      [ngClass]="step.state === 'failed' ? 'bg-error-500' : step.state === 'done' ? 'bg-success-500' : 'bg-brand-500'"></span>
+                    <span class="font-semibold text-gray-800 dark:text-gray-200">{{ step.label }}</span>
+                    <span class="truncate">{{ getStepMessage(step) }}</span>
+                  </div>
+                }
+
+                @if (hasLoadedLogs(step) && stepLogs[step.key]) {
+                  <div class="overflow-hidden border-t border-gray-200 bg-gray-950 dark:border-gray-800">
+                    <div class="flex items-center gap-2 border-b border-gray-800 px-4 py-2">
+                      <span class="h-2.5 w-2.5 rounded-full bg-red-500"></span>
+                      <span class="h-2.5 w-2.5 rounded-full bg-amber-500"></span>
+                      <span class="h-2.5 w-2.5 rounded-full bg-green-500"></span>
+                      <span class="ml-2 text-[11px] font-semibold text-gray-400">Logs · {{ step.label }}</span>
+                    </div>
+                    <pre class="max-h-48 overflow-y-auto px-4 py-3 text-xs leading-5 text-gray-300">{{ stepLogs[step.key] }}</pre>
+                  </div>
+                }
+              </div>
+            }
+          }
+
+          @if (logsError) {
+            <p class="text-xs font-medium text-error-600 dark:text-error-400">{{ logsError }}</p>
+          }
+        </div>
+      }
+
+      @if (logSnippet) {
+        <div class="mt-5 overflow-hidden rounded-xl bg-gray-950">
+          <div class="flex items-center gap-2 border-b border-gray-800 px-4 py-2">
+            <span class="h-2.5 w-2.5 rounded-full bg-red-500"></span>
+            <span class="h-2.5 w-2.5 rounded-full bg-amber-500"></span>
+            <span class="h-2.5 w-2.5 rounded-full bg-green-500"></span>
+            <span class="ml-2 text-[11px] font-semibold text-gray-400">Build logs</span>
+          </div>
+          <pre class="max-h-40 overflow-y-auto px-4 py-3 text-xs leading-5 text-gray-300">{{ logSnippet }}</pre>
+        </div>
+      }
+
+      <div class="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-xs text-gray-500 dark:text-gray-400">
+        @if (experiment.startedAt) {
+          <span>Début : <span class="font-semibold text-gray-700 dark:text-gray-300">{{ formatDate(experiment.startedAt) }}</span></span>
+        }
+        @if (experiment.finishedAt) {
+          <span>Fin : <span class="font-semibold text-gray-700 dark:text-gray-300">{{ formatDate(experiment.finishedAt) }}</span></span>
+        }
+        @if (hasModelVersion) {
+          <span>Version enregistrée : <span class="font-semibold text-brand-600 dark:text-brand-400">v{{ experiment.modelVersion ?? experiment.mlflowModelVersion }}</span></span>
+        }
+        @if (isTerminalSuccess && experiment.globalScore != null) {
+          <span>Score global : <span class="font-semibold text-brand-600 dark:text-brand-400">{{ experiment.globalScore }}</span></span>
+        }
+        @if (deployment) {
+          @if (deployment.predictionEndpoint) {
+            <span class="flex items-center gap-1.5">
+              Endpoint :
+              <code class="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold text-gray-700 dark:bg-gray-900 dark:text-gray-300">
+                {{ deployment.predictionEndpoint }}
+              </code>
+            </span>
+          }
+          @if (isDeploymentDone) {
+            <span class="inline-flex items-center gap-1.5 font-semibold text-success-600 dark:text-success-400">
+              <span class="h-1.5 w-1.5 rounded-full bg-success-500 mlops-pulse"></span>
+              Déployé et actif
+            </span>
+          }
+        }
+      </div>
+
+      @if (isFailed && experiment.errorMessage) {
+        <div class="mt-4 flex items-start gap-2 rounded-xl border border-error-200 bg-error-50 px-4 py-3 text-sm font-medium text-error-700 dark:border-error-900/50 dark:bg-error-900/20 dark:text-error-300">
+          <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+          </svg>
+          {{ experiment.errorMessage }}
+        </div>
+      }
+
+      @if (isDeploymentFailed && deployment?.errorMessage) {
+        <div class="mt-4 flex items-start gap-2 rounded-xl border border-error-200 bg-error-50 px-4 py-3 text-sm font-medium text-error-700 dark:border-error-900/50 dark:bg-error-900/20 dark:text-error-300">
+          <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+          </svg>
+          {{ deployment?.errorMessage }}
+        </div>
+      }
+    </div>
+  </div>
+}

@@ -2,6 +2,7 @@ import { Component, OnInit, ElementRef, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
+import { Observable } from 'rxjs';
 
 import {
   MlProjectRequest,
@@ -13,6 +14,11 @@ import {
 } from '../../core/services/project.service';
 
 import { PageBreadcrumbComponent } from '../../shared/components/common/page-breadcrumb/page-breadcrumb.component';
+import { SmartSearchComponent } from '../../shared/components/common/smart-search/smart-search.component';
+import {
+  SearchPageResponse,
+  SmartSearchParams
+} from '../../shared/components/common/smart-search/smart-search.types';
 
 import {
   RetrainingConfigRequest,
@@ -24,6 +30,12 @@ import {
   ProjectRetrainingStatusResponse,
   isRetrainingNonTerminalStatus
 } from '../../core/services/retraining.service';
+
+import {
+  GitHubRetrainingConfigDto,
+  GitHubRetrainingService,
+  GitHubKeyResponse
+} from '../../core/services/github-retraining.service';
 
 type DataType = 'TABULAR' | 'TEXT' | 'IMAGE';
 
@@ -41,6 +53,8 @@ type ProjectFormModel = MlProjectRequest & {
   maxPredictionErrorRatePercent: number;
   performanceDropThresholdPercent: number;
   dataDriftThresholdPercent: number;
+  globalScoreThreshold: number;
+  retrainingDataPolicy: string;
 };
 
 @Component({
@@ -50,15 +64,18 @@ type ProjectFormModel = MlProjectRequest & {
     CommonModule,
     FormsModule,
     RouterModule,
-    PageBreadcrumbComponent
+    PageBreadcrumbComponent,
+    SmartSearchComponent
   ],
   templateUrl: './my-projects.component.html',
   styles: ``
 })
 export class MyProjectsComponent implements OnInit {
   @ViewChild('projectFormSection') projectFormSection?: ElementRef<HTMLElement>;
+  @ViewChild(SmartSearchComponent) smartSearch!: SmartSearchComponent<MlProjectResponse>;
 
   projects: MlProjectResponse[] = [];
+  totalProjects = 0;
 
   loading = false;
   saving = false;
@@ -80,11 +97,23 @@ export class MyProjectsComponent implements OnInit {
 
   retrainingConfigs: Record<number, RetrainingConfigResponse | null> = {};
 
+  githubConfigs: Record<number, GitHubRetrainingConfigDto | null> = {};
+  githubDraftRepos: Record<number, string> = {};
+  githubDraftBranches: Record<number, string> = {};
+  githubDraftEnabled: Record<number, boolean> = {};
+  githubSaving = new Set<number>();
+  githubKeying = new Set<number>();
+  githubRevoking = new Set<number>();
+  githubWorkflowLoading = new Set<number>();
+  revealedKeys: Record<number, string | null> = {};
+  githubPanelOpen: number | null = null;
+
   projectForm: ProjectFormModel = this.getDefaultProjectForm();
 
   constructor(
     private projectService: ProjectService,
-    private retrainingService: RetrainingService
+    private retrainingService: RetrainingService,
+    private githubRetrainingService: GitHubRetrainingService
   ) {}
 
   ngOnInit(): void {
@@ -159,11 +188,13 @@ export class MyProjectsComponent implements OnInit {
       failureMonitoringEnabled: false,
       performanceMonitoringEnabled: false,
       dataDriftMonitoringEnabled: false,
-      monitoringLookbackHours: 24,
+monitoringLookbackHours: 24,
       minPredictionsForMonitoring: 5,
       maxPredictionErrorRatePercent: 20,
       performanceDropThresholdPercent: 10,
-      dataDriftThresholdPercent: 25
+      dataDriftThresholdPercent: 25,
+      globalScoreThreshold: 0.75,
+      retrainingDataPolicy: 'ORIGINAL_DATASET'
     };
   }
 
@@ -184,28 +215,26 @@ export class MyProjectsComponent implements OnInit {
   }
 
   loadProjects(): void {
-    this.loading = true;
-    this.errorMessage = '';
-    this.successMessage = '';
+    this.smartSearch?.resetAndReload();
+  }
 
-    this.projectService.getMyProjects().subscribe({
-      next: (response: MlProjectResponse[]) => {
-        this.projects = (response || []).map((project) => this.normalizeProject(project));
-        this.loading = false;
+  refresh(): void {
+    this.smartSearch?.resetAndReload();
+  }
 
-        this.projects.forEach((project) => {
-          this.loadRetrainingConfigForProjectCard(project.id);
-        });
-      },
-      error: (error) => {
-        console.error('Load projects error:', error);
-        this.loading = false;
-        this.errorMessage = this.getBackendErrorMessage(
-          error,
-          'Impossible de charger vos projets.'
-        );
-      }
+  searchProjects = (params: SmartSearchParams): Observable<SearchPageResponse<MlProjectResponse>> =>
+    this.projectService.searchProjects(params);
+
+  onSearchItems(projects: MlProjectResponse[]): void {
+    this.projects = (projects || []).map((project) => this.normalizeProject(project));
+    this.projects.forEach((project) => {
+      this.loadRetrainingConfigForProjectCard(project.id);
+      this.loadGitHubConfigForProjectCard(project.id);
     });
+  }
+
+  onTotalChange(total: number): void {
+    this.totalProjects = total;
   }
 
   private loadRetrainingConfigForProjectCard(projectId: number): void {
@@ -223,6 +252,289 @@ export class MyProjectsComponent implements OnInit {
         this.retrainingConfigs[projectId] = null;
       }
     });
+  }
+
+  private loadGitHubConfigForProjectCard(projectId: number): void {
+    if (!projectId) {
+      return;
+    }
+
+    this.githubRetrainingService.getConfig(projectId).subscribe({
+      next: (config: GitHubRetrainingConfigDto) => {
+        this.githubConfigs[projectId] = config;
+        this.githubDraftRepos[projectId] = config.repository || '';
+        this.githubDraftBranches[projectId] = config.branch || '';
+        this.githubDraftEnabled[projectId] = config.enabled === true;
+      },
+      error: () => {
+        this.githubConfigs[projectId] = null;
+      }
+    });
+  }
+
+  getGitHubConfig(project: MlProjectResponse): GitHubRetrainingConfigDto | null {
+    return this.githubConfigs[project.id] ?? null;
+  }
+
+  isGitHubEnabled(project: MlProjectResponse): boolean {
+    return !!this.getGitHubConfig(project)?.enabled;
+  }
+
+  getGitHubRepoDraft(project: MlProjectResponse): string {
+    return this.githubDraftRepos[project.id] ?? '';
+  }
+
+  getGitHubBranchDraft(project: MlProjectResponse): string {
+    return this.githubDraftBranches[project.id] ?? '';
+  }
+
+  onGitHubRepoDraft(projectId: number, value: string): void {
+    this.githubDraftRepos[projectId] = value;
+  }
+
+  onGitHubBranchDraft(projectId: number, value: string): void {
+    this.githubDraftBranches[projectId] = value;
+  }
+
+  onGitHubEnabledDraft(projectId: number, value: boolean): void {
+    this.githubDraftEnabled[projectId] = value;
+  }
+
+  saveGitHubConfig(project: MlProjectResponse): void {
+    if (this.githubSaving.has(project.id)) {
+      return;
+    }
+
+    const enabled = this.githubDraftEnabled[project.id] === true;
+
+    if (enabled) {
+      const repository = (this.githubDraftRepos[project.id] || '').trim();
+      const branch = (this.githubDraftBranches[project.id] || '').trim();
+
+      if (!repository) {
+        this.errorMessage =
+          'Indiquez le dépôt GitHub (format owner/repository).';
+        return;
+      }
+
+      if (!branch) {
+        this.errorMessage = 'Indiquez la branche GitHub à écouter.';
+        return;
+      }
+    }
+
+    const repository = (this.githubDraftRepos[project.id] || '').trim();
+    const branch = (this.githubDraftBranches[project.id] || '').trim();
+
+    this.githubSaving.add(project.id);
+    this.errorMessage = '';
+    this.successMessage = '';
+
+    this.githubRetrainingService
+      .saveConfig(project.id, { enabled, repository, branch })
+      .subscribe({
+        next: (config: GitHubRetrainingConfigDto) => {
+          this.githubSaving.delete(project.id);
+          this.githubConfigs[project.id] = config;
+          this.githubDraftRepos[project.id] = config.repository || '';
+          this.githubDraftBranches[project.id] = config.branch || '';
+          this.githubDraftEnabled[project.id] = config.enabled === true;
+
+          if (enabled) {
+            this.successMessage =
+              'Intégration GitHub activée : les pushs déclencheront ' +
+              'automatiquement un réentraînement.';
+          } else {
+            this.successMessage = 'Intégration GitHub désactivée.';
+          }
+        },
+        error: (error) => {
+          this.githubSaving.delete(project.id);
+          this.errorMessage = this.getBackendErrorMessage(
+            error,
+            'Impossible d’enregistrer la configuration GitHub.'
+          );
+        }
+      });
+  }
+
+  generateGitHubKey(project: MlProjectResponse): void {
+    if (this.githubKeying.has(project.id)) {
+      return;
+    }
+
+    this.githubKeying.add(project.id);
+    this.errorMessage = '';
+    this.successMessage = '';
+
+    this.githubRetrainingService.generateKey(project.id).subscribe({
+      next: (key: GitHubKeyResponse) => {
+        this.githubKeying.delete(project.id);
+        this.revealedKeys[project.id] = key.secretKey;
+
+        const config = this.githubConfigs[project.id];
+        this.githubConfigs[project.id] = {
+          ...(config as GitHubRetrainingConfigDto),
+          keyConfigured: true,
+          secretSuffix: key.secretSuffix
+        };
+
+        this.successMessage =
+          'Clé générée. Copiez-la maintenant : elle ne sera plus ' +
+          'jamais affichée.';
+      },
+      error: (error) => {
+        this.githubKeying.delete(project.id);
+        this.errorMessage = this.getBackendErrorMessage(
+          error,
+          'Impossible de générer la clé GitHub.'
+        );
+      }
+    });
+  }
+
+  revokeGitHubKey(project: MlProjectResponse): void {
+    const config = this.getGitHubConfig(project);
+
+    if (!config?.keyConfigured) {
+      this.errorMessage = 'Aucune clé à révoquer pour ce projet.';
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Révoquer la clé de retraining GitHub de ce projet ? ' +
+        'Tout workflow utilisant cette clé sera refusé.'
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    if (this.githubRevoking.has(project.id)) {
+      return;
+    }
+
+    this.githubRevoking.add(project.id);
+    this.errorMessage = '';
+    this.successMessage = '';
+
+    this.githubRetrainingService.revokeKey(project.id).subscribe({
+      next: () => {
+        this.githubRevoking.delete(project.id);
+        this.revealedKeys[project.id] = null;
+
+        const current = this.githubConfigs[project.id];
+        this.githubConfigs[project.id] = {
+          ...(current as GitHubRetrainingConfigDto),
+          keyConfigured: false,
+          secretSuffix: null
+        };
+
+        this.successMessage = 'Clé GitHub révoquée avec succès.';
+      },
+      error: (error) => {
+        this.githubRevoking.delete(project.id);
+        this.errorMessage = this.getBackendErrorMessage(
+          error,
+          'Impossible de révoquer la clé GitHub.'
+        );
+      }
+    });
+  }
+
+  copyGitHubWorkflow(project: MlProjectResponse): void {
+    if (this.githubWorkflowLoading.has(project.id)) {
+      return;
+    }
+
+    this.githubWorkflowLoading.add(project.id);
+    this.errorMessage = '';
+    this.successMessage = '';
+
+    this.githubRetrainingService.getWorkflow(project.id).subscribe({
+      next: (workflow) => {
+        this.githubWorkflowLoading.delete(project.id);
+        this.copyToClipboard(workflow.workflow);
+        this.successMessage =
+          'Workflow GitHub Actions copié. Créez ' +
+          '.github/workflows/retraining.yml dans votre dépôt et ' +
+          'collez-le.';
+      },
+      error: (error) => {
+        this.githubWorkflowLoading.delete(project.id);
+        this.errorMessage = this.getBackendErrorMessage(
+          error,
+          'Impossible de récupérer le workflow GitHub.'
+        );
+      }
+    });
+  }
+
+  hideRevealedGitHubKey(project: MlProjectResponse): void {
+    this.revealedKeys[project.id] = null;
+  }
+
+  copyToClipboard(text: string): void {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+  }
+
+  getGitHubStatusLabel(config: GitHubRetrainingConfigDto | null): string {
+    if (!config) {
+      return 'Non configuré';
+    }
+
+    if (config.enabled !== true) {
+      return config.keyConfigured
+        ? 'Désactivé (clé configurée)'
+        : 'Désactivé';
+    }
+
+    return config.repository
+      ? config.repository + ' @ ' + (config.branch || 'main')
+      : 'Activé, dépôt non défini';
+  }
+
+  getGitHubKeyBadge(config: GitHubRetrainingConfigDto | null): string {
+    if (!config?.keyConfigured) {
+      return 'Aucune clé';
+    }
+
+    const suffix = config.secretSuffix || '****';
+    return 'Clé configurée · …' + suffix;
+  }
+
+  getGitHubLastTriggerLabel(
+    config: GitHubRetrainingConfigDto | null
+  ): string {
+    if (!config) {
+      return '';
+    }
+
+    const parts: string[] = [];
+
+    if (config.lastTriggerAt) {
+      parts.push(this.formatDateTime(config.lastTriggerAt));
+    }
+
+    const status = config.lastTriggerStatus;
+    const message = config.lastTriggerMessage;
+
+    if (status && status !== 'ACCEPTED') {
+      parts.push(status);
+    }
+
+    if (message) {
+      parts.push(message);
+    }
+
+    return parts.join(' · ');
   }
 
   openCreateForm(): void {
@@ -266,7 +578,9 @@ export class MyProjectsComponent implements OnInit {
       minPredictionsForMonitoring: 5,
       maxPredictionErrorRatePercent: 20,
       performanceDropThresholdPercent: 10,
-      dataDriftThresholdPercent: 25
+      dataDriftThresholdPercent: 25,
+      globalScoreThreshold: 0.75,
+      retrainingDataPolicy: 'ORIGINAL_DATASET'
     };
 
     this.loadRetrainingConfigIntoForm(project.id);
@@ -317,6 +631,10 @@ export class MyProjectsComponent implements OnInit {
           config.performanceDropThresholdPercent ?? 10;
         this.projectForm.dataDriftThresholdPercent =
           config.dataDriftThresholdPercent ?? 25;
+        this.projectForm.globalScoreThreshold =
+          config.globalScoreThreshold ?? 0.75;
+        this.projectForm.retrainingDataPolicy =
+          config.dataPolicy || 'ORIGINAL_DATASET';
       },
       error: () => {
         this.retrainingConfigs[projectId] = null;
@@ -335,6 +653,7 @@ export class MyProjectsComponent implements OnInit {
         this.projectForm.maxPredictionErrorRatePercent = 20;
         this.projectForm.performanceDropThresholdPercent = 10;
         this.projectForm.dataDriftThresholdPercent = 25;
+        this.projectForm.globalScoreThreshold = 0.75;
       }
     });
   }
@@ -396,6 +715,7 @@ export class MyProjectsComponent implements OnInit {
       this.projectForm.maxPredictionErrorRatePercent = this.projectForm.maxPredictionErrorRatePercent ?? 20;
       this.projectForm.performanceDropThresholdPercent = this.projectForm.performanceDropThresholdPercent ?? 10;
       this.projectForm.dataDriftThresholdPercent = this.projectForm.dataDriftThresholdPercent ?? 25;
+      this.projectForm.globalScoreThreshold = this.projectForm.globalScoreThreshold ?? 0.75;
     }
   }
 
@@ -652,6 +972,15 @@ export class MyProjectsComponent implements OnInit {
           'Le seuil de data drift doit être entre 0 et 100 %.';
         return false;
       }
+
+      if (
+        this.projectForm.globalScoreThreshold < 0 ||
+        this.projectForm.globalScoreThreshold > 1
+      ) {
+        this.errorMessage =
+          'Le seuil de score global doit être entre 0 et 1.';
+        return false;
+      }
     }
 
     return true;
@@ -741,7 +1070,7 @@ export class MyProjectsComponent implements OnInit {
                   );
 
                   this.closeForm();
-                  this.loadProjects();
+                  this.refresh();
                 },
                 'Projet modifié, mais impossible de mettre à jour le réentraînement automatique.'
               );
@@ -783,7 +1112,7 @@ export class MyProjectsComponent implements OnInit {
 
             this.projects = [normalizedCreatedProject, ...this.projects];
             this.closeForm();
-            this.loadProjects();
+            this.refresh();
           },
           'Projet créé, mais impossible de configurer le réentraînement automatique.'
         );
@@ -842,7 +1171,10 @@ export class MyProjectsComponent implements OnInit {
       performanceDropThresholdPercent:
         this.projectForm.performanceDropThresholdPercent ?? 10,
       dataDriftThresholdPercent:
-        this.projectForm.dataDriftThresholdPercent ?? 25
+        this.projectForm.dataDriftThresholdPercent ?? 25,
+      globalScoreThreshold:
+        this.projectForm.globalScoreThreshold ?? 0.75,
+      dataPolicy: this.projectForm.retrainingDataPolicy || 'ORIGINAL_DATASET'
     };
 
     this.retrainingService.saveProjectConfig(projectId, request).subscribe({
@@ -931,6 +1263,14 @@ export class MyProjectsComponent implements OnInit {
         ) {
           message =
             'Un réentraînement est déjà en cours pour ce projet.';
+        } else if (
+          status === 422 ||
+          backendCode === 'BLOCKED_NO_SOURCE'
+        ) {
+          message =
+            error?.error?.message ||
+            'Réentraînement impossible : aucun modèle Production ' +
+              'valide n\'a été trouvé pour ce projet.';
         } else if (status === 401 || status === 403) {
           message =
             'Session expirée. Reconnectez-vous puis réessayez.';
@@ -961,6 +1301,8 @@ export class MyProjectsComponent implements OnInit {
         this.successMessage = 'Projet supprimé avec succès.';
         this.projects = this.projects.filter((item) => item.id !== project.id);
         delete this.retrainingConfigs[project.id];
+        delete this.githubConfigs[project.id];
+        this.smartSearch?.reload();
       },
       error: (error) => {
         console.error('Delete project error:', error);
@@ -1217,6 +1559,46 @@ export class MyProjectsComponent implements OnInit {
     return String(
       strategy || 'SCHEDULED_ONLY'
     ).toUpperCase() !== 'SCHEDULED_ONLY';
+  }
+
+  /**
+   * Affiche la bonne date selon la stratégie RÉELLEMENT persistée en base.
+   *  - SMART_MONITORING_ONLY                  -> Prochain contrôle (nextMonitoringCheckAt)
+   *  - SCHEDULED_WITH_MONITORING / FULL_SMART -> les deux dates
+   *  - SCHEDULED_ONLY / autres                -> Prochaine exécution (nextRetrainingAt)
+   * Ne reconstruit jamais la logique : lit la config du backend.
+   */
+  getRetrainingNextDateHint(
+    config: RetrainingConfigResponse | null
+  ): string {
+    if (!config || !config.enabled) {
+      return 'Réentraînement désactivé';
+    }
+
+    const strategy = String(
+      config.strategy || 'SCHEDULED_ONLY'
+    ).toUpperCase();
+
+    if (strategy === 'SMART_MONITORING_ONLY') {
+      return config.nextMonitoringCheckAt
+        ? 'Prochain contrôle : ' + this.formatDateTime(config.nextMonitoringCheckAt)
+        : 'Monitoring intelligent activé';
+    }
+
+    if (strategy === 'SCHEDULED_WITH_MONITORING' || strategy === 'FULL_SMART') {
+      const scheduled = config.nextRetrainingAt
+        ? 'Échéance planifiée : ' + this.formatDateTime(config.nextRetrainingAt)
+        : '';
+      const monitor = config.nextMonitoringCheckAt
+        ? 'Prochain contrôle : ' + this.formatDateTime(config.nextMonitoringCheckAt)
+        : '';
+      return [scheduled, monitor].filter(Boolean).join(' · ') ||
+        'Planifié avec monitoring';
+    }
+
+    return config.nextRetrainingAt
+      ? 'Prochaine exécution : ' + this.formatDateTime(config.nextRetrainingAt)
+      : 'Aucun réentraînement planifié';
   }
 
   shouldShowMonitoringControls(

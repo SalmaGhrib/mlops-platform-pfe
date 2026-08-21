@@ -1,7 +1,8 @@
 package com.mlops.platform.service;
 
-import com.mlops.platform.dto.RetrainingDecisionResult;
+import com.mlops.platform.dto.RetrainingDecision;
 import com.mlops.platform.entity.RetrainingConfig;
+import com.mlops.platform.entity.RetrainingSecurityLevel;
 import com.mlops.platform.entity.RetrainingStrategy;
 import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.RetrainingConfigRepository;
@@ -21,6 +22,7 @@ public class MonitoringRetrainingTriggerService {
     private final RetrainingConfigRepository retrainingConfigRepository;
     private final MlExperimentRepository mlExperimentRepository;
     private final RetrainingDecisionService retrainingDecisionService;
+    private final RetrainingSourceResolverService sourceResolver;
     private final PlatformTransactionManager transactionManager;
 
     @Value("${monitoring.retraining.cooldown-minutes:120}")
@@ -30,11 +32,13 @@ public class MonitoringRetrainingTriggerService {
             RetrainingConfigRepository retrainingConfigRepository,
             MlExperimentRepository mlExperimentRepository,
             RetrainingDecisionService retrainingDecisionService,
+            RetrainingSourceResolverService sourceResolver,
             PlatformTransactionManager transactionManager
     ) {
         this.retrainingConfigRepository = retrainingConfigRepository;
         this.mlExperimentRepository = mlExperimentRepository;
         this.retrainingDecisionService = retrainingDecisionService;
+        this.sourceResolver = sourceResolver;
         this.transactionManager = transactionManager;
     }
 
@@ -130,9 +134,18 @@ public class MonitoringRetrainingTriggerService {
                     continue;
                 }
 
-                RetrainingDecisionResult decision =
-                        retrainingDecisionService
-                                .evaluateMonitoringSignals(config);
+                boolean sourceReady =
+                        sourceResolver.resolveSourceExperimentIdOrNull(
+                                projectId,
+                                config.getSourceExperimentId()
+                        ) != null;
+
+                RetrainingDecision decision =
+                        retrainingDecisionService.buildDecision(
+                                config,
+                                utcNow(),
+                                sourceReady
+                        );
 
                 if (decision == null) {
                     System.out.println(
@@ -149,12 +162,14 @@ public class MonitoringRetrainingTriggerService {
                                 + projectId
                                 + ", shouldRetrain="
                                 + decision.isShouldRetrain()
-                                + ", recentPredictions="
-                                + decision.getRecentPredictionCount()
-                                + ", errorRate="
-                                + decision.getPredictionErrorRatePercent()
-                                + ", drift="
-                                + decision.getDataDriftScorePercent()
+                                + ", trigger="
+                                + decision.getTriggerType()
+                                + ", severity="
+                                + decision.getSeverity()
+                                + ", security="
+                                + decision.getSecurityLevel()
+                                + ", reasonCodes="
+                                + decision.getReasonCodes()
                                 + ", reason="
                                 + safeMessage(decision.getReason())
                 );

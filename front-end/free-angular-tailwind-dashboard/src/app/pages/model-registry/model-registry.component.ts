@@ -1,6 +1,6 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit } from '@angular/core';
-import { catchError, finalize, forkJoin, map, of } from 'rxjs';
+import { Component, OnInit, ViewChild } from '@angular/core';
+import { Observable, catchError, finalize, forkJoin, map, of } from 'rxjs';
 import {
   ModelApiKeyItem,
   ModelApiKeyStats,
@@ -8,16 +8,24 @@ import {
   ModelRegistryItem,
   ModelRegistryService
 } from '../../core/services/model-registry.service';
+import { SmartSearchComponent } from '../../shared/components/common/smart-search/smart-search.component';
+import {
+  SearchPageResponse,
+  SmartSearchParams
+} from '../../shared/components/common/smart-search/smart-search.types';
 
 @Component({
   selector: 'app-model-registry',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, SmartSearchComponent],
   templateUrl: './model-registry.component.html',
   styleUrls: ['./model-registry.component.css']
 })
 export class ModelRegistryComponent implements OnInit {
+  @ViewChild(SmartSearchComponent) smartSearch!: SmartSearchComponent<ModelRegistryItem>;
+
   models: ModelRegistryItem[] = [];
+  totalModels = 0;
 
   loading = false;
   syncing = false;
@@ -29,33 +37,27 @@ export class ModelRegistryComponent implements OnInit {
   constructor(private modelRegistryService: ModelRegistryService) {}
 
   ngOnInit(): void {
-    this.loadModels();
+    // Le composant app-smart-search charge automatiquement la première page.
   }
 
   loadModels(): void {
-    this.loading = true;
-    this.errorMessage = '';
-    this.successMessage = '';
+    this.smartSearch?.resetAndReload();
+  }
 
-    this.modelRegistryService.getMyModels()
-      .pipe(
-        catchError((error) => {
-          console.error('[ModelRegistry] Failed to load models', error);
-          this.errorMessage = this.extractErrorMessage(
-            error,
-            'Impossible de charger le Model Registry.'
-          );
-          return of([]);
-        }),
-        map((models) => models || []),
-        finalize(() => {
-          this.loading = false;
-        })
-      )
-      .subscribe((models) => {
-        this.models = models;
-        this.enrichModelsWithActiveDeployments();
-      });
+  searchModels = (params: SmartSearchParams): Observable<SearchPageResponse<ModelRegistryItem>> =>
+    this.modelRegistryService.searchMyModels(params);
+
+  onSearchItems(models: ModelRegistryItem[]): void {
+    this.models = models || [];
+    this.enrichModelsWithActiveDeployments();
+  }
+
+  onTotalChange(total: number): void {
+    this.totalModels = total;
+  }
+
+  refresh(): void {
+    this.smartSearch?.resetAndReload();
   }
 
   syncModels(): void {
@@ -79,10 +81,9 @@ export class ModelRegistryComponent implements OnInit {
         })
       )
       .subscribe((models) => {
-        this.models = models;
         this.successMessage = 'Model Registry synchronisé avec succès.';
         this.clearSuccessAfterDelay();
-        this.enrichModelsWithActiveDeployments();
+        this.smartSearch?.reload();
       });
   }
 
@@ -138,12 +139,109 @@ export class ModelRegistryComponent implements OnInit {
       namespaceName: deployment.namespaceName,
 
       modelVersion: deployment.modelVersion ?? model['modelVersion'],
-      productionVersion: model.productionVersion || deployment.modelVersion
+      productionVersion:
+        model.productionVersion ||
+        deployment.mlflowProductionVersion ||
+        deployment.productionVersion ||
+        deployment.modelVersion
     };
   }
 
   trackModel(index: number, model: ModelRegistryItem): string {
     return `${model?.projectId || 'project'}-${model?.registeredModelName || index}`;
+  }
+
+  /*
+   * =========================================================
+   * MODEL CARD
+   * =========================================================
+   */
+
+  modelCardModel: ModelRegistryItem | null = null;
+
+  openModelCard(model: ModelRegistryItem): void {
+    this.modelCardModel = model;
+    document.body.style.overflow = 'hidden';
+  }
+
+  closeModelCard(): void {
+    this.modelCardModel = null;
+    document.body.style.overflow = '';
+  }
+
+  getModelCardDescription(model: ModelRegistryItem): string {
+    return (
+      model?.['description'] ||
+      model?.['modelDescription'] ||
+      model?.['registeredModelDescription'] ||
+      model?.['projectDescription'] ||
+      ''
+    );
+  }
+
+  hasAlgorithmInfo(model: ModelRegistryItem): boolean {
+    return (
+      !!model?.usedAlgorithms ||
+      !!model?.detectedAlgorithms ||
+      this.hasReplacement(model)
+    );
+  }
+
+  getAlgorithmsList(model: ModelRegistryItem): string[] {
+    const used = model?.usedAlgorithms;
+    const detected = model?.detectedAlgorithms;
+
+    const values = [
+      ...this.normalizeAlgorithmList(used),
+      ...this.normalizeAlgorithmList(detected)
+    ];
+
+    return [...new Set(values)];
+  }
+
+  private normalizeAlgorithmList(value: string | any[] | null | undefined): string[] {
+    if (!value) {
+      return [];
+    }
+
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => {
+          if (typeof item === 'string') {
+            return item;
+          }
+          if (item?.name) {
+            return item.name;
+          }
+          if (item?.algorithm) {
+            return item.algorithm;
+          }
+          return String(item);
+        })
+        .filter((item) => item && String(item).trim() !== '');
+    }
+
+    return String(value).split(',').map((item) => item.trim()).filter(Boolean);
+  }
+
+  getModelCardHealthLevel(model: ModelRegistryItem): 'success' | 'warning' | 'error' {
+    if (this.isFailed(model)) {
+      return 'error';
+    }
+
+    if (this.isDeploymentFailed(model)) {
+      return 'error';
+    }
+
+    if (model?.hasProduction && this.isDeploymentDeployed(model)) {
+      return 'success';
+    }
+
+    if (model?.hasProduction) {
+      return 'warning';
+    }
+
+    return 'warning';
   }
 
   isDeploymentDeployed(model: ModelRegistryItem): boolean {
@@ -284,6 +382,11 @@ export class ModelRegistryComponent implements OnInit {
   hasMetrics(model: ModelRegistryItem): boolean {
     const metrics = this.getMetrics(model);
     return !!metrics && Object.keys(metrics).length > 0;
+  }
+
+  isFailed(model: ModelRegistryItem): boolean {
+    const normalized = String(model?.status || '').toUpperCase();
+    return normalized === 'FAILED' || normalized === 'ERROR' || normalized === 'BUILD_FAILED';
   }
 
   getMetrics(model: ModelRegistryItem): Record<string, number> {
@@ -517,7 +620,25 @@ export class ModelRegistryComponent implements OnInit {
   }
 
   getProductionVersion(model: ModelRegistryItem): string {
-    return model?.['modelVersion'] || model?.['model_version'] || '—';
+    const version =
+      model?.productionVersion ||
+      model?.['mlflowProductionVersion'] ||
+      model?.['mlflow_production_version'] ||
+      model?.['modelVersion'] ||
+      model?.['model_version'];
+
+    return version != null && String(version).trim() !== '' ? String(version) : '—';
+  }
+
+  getModelVersion(model: ModelRegistryItem): string {
+    const version =
+      model?.latestVersion ||
+      model?.['modelVersion'] ||
+      model?.['model_version'] ||
+      model?.['mlflowVersion'] ||
+      model?.['mlflow_version'];
+
+    return version != null && String(version).trim() !== '' ? String(version) : '—';
   }
 
   getGatewayNewName(deploymentId?: number | null): string {

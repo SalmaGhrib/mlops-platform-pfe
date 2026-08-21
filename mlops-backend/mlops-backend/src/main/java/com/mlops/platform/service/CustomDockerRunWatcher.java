@@ -15,6 +15,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @Service
@@ -34,6 +35,8 @@ public class CustomDockerRunWatcher {
     private final ModelArtifactStandardizerService modelArtifactStandardizerService;
     private final TrainingOutputAnalyzerService trainingOutputAnalyzerService;
     private final CustomDockerPersistenceService customDockerPersistenceService;
+    private final MlflowTrackingClientService mlflowTrackingClientService;
+    private final RunPipelineStepService runPipelineStepService;
 
     @Value("${app.custom-docker.watcher.enabled:true}")
     private boolean watcherEnabled;
@@ -50,7 +53,9 @@ public class CustomDockerRunWatcher {
             ModelArtifactResolver modelArtifactResolver,
             ModelArtifactStandardizerService modelArtifactStandardizerService,
             TrainingOutputAnalyzerService trainingOutputAnalyzerService,
-            CustomDockerPersistenceService customDockerPersistenceService
+            CustomDockerPersistenceService customDockerPersistenceService,
+            MlflowTrackingClientService mlflowTrackingClientService,
+            RunPipelineStepService runPipelineStepService
     ) {
         this.mlExperimentRepository = mlExperimentRepository;
         this.metricRepository = metricRepository;
@@ -61,6 +66,8 @@ public class CustomDockerRunWatcher {
         this.modelArtifactStandardizerService = modelArtifactStandardizerService;
         this.trainingOutputAnalyzerService = trainingOutputAnalyzerService;
         this.customDockerPersistenceService = customDockerPersistenceService;
+        this.mlflowTrackingClientService = mlflowTrackingClientService;
+        this.runPipelineStepService = runPipelineStepService;
     }
 
     @Scheduled(
@@ -224,6 +231,22 @@ public class CustomDockerRunWatcher {
             experiment.setBuildLogs("Custom image URI already provided. Build step skipped.");
             experiment.setMessage("Custom image already available. Training job will be launched.");
             mlExperimentRepository.saveAndFlush(experiment);
+
+            runPipelineStepService.markSucceeded(
+                    experiment,
+                    RunPipelineStepService.IMAGE_BUILD_STARTED,
+                    "Image fournie — build Kaniko non requis."
+            );
+            runPipelineStepService.markSucceeded(
+                    experiment,
+                    RunPipelineStepService.IMAGE_BUILD_COMPLETED,
+                    "Image personnalisée déjà disponible: " + experiment.getCustomImageUri()
+            );
+            runPipelineStepService.markSucceeded(
+                    experiment,
+                    RunPipelineStepService.ACR_PUSH_COMPLETED,
+                    "Image déjà poussée dans le registry."
+            );
             return;
         }
 
@@ -256,6 +279,25 @@ public class CustomDockerRunWatcher {
             System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
                     + " launched Kaniko build job=" + result.getBuildJobName()
                     + " image=" + result.getImageUri());
+
+            runPipelineStepService.markRunning(
+                    experiment,
+                    RunPipelineStepService.IMAGE_BUILD_STARTED,
+                    "Job Kaniko " + result.getBuildJobName() + " lancé."
+            );
+            runPipelineStepService.updateJobDetails(
+                    experiment,
+                    RunPipelineStepService.IMAGE_BUILD_STARTED,
+                    result.getBuildJobName(),
+                    null,
+                    null
+            );
+            runPipelineStepService.appendLogs(
+                    experiment,
+                    RunPipelineStepService.IMAGE_BUILD_STARTED,
+                    "Image build job launched: " + result.getBuildJobName()
+                            + "\nGenerated image: " + result.getImageUri()
+            );
 
             mlExperimentRepository.saveAndFlush(experiment);
 
@@ -305,6 +347,34 @@ public class CustomDockerRunWatcher {
                                 logs
                         );
 
+                runPipelineStepService.markSucceeded(
+                        updatedExperiment,
+                        RunPipelineStepService.IMAGE_BUILD_STARTED,
+                        "Build image terminé (Kaniko)."
+                );
+                runPipelineStepService.markSucceeded(
+                        updatedExperiment,
+                        RunPipelineStepService.IMAGE_BUILD_COMPLETED,
+                        "Image construite: " + updatedExperiment.getCustomImageUri()
+                );
+                runPipelineStepService.markSucceeded(
+                        updatedExperiment,
+                        RunPipelineStepService.ACR_PUSH_COMPLETED,
+                        "Image poussée dans ACR."
+                );
+                runPipelineStepService.appendLogs(
+                        updatedExperiment,
+                        RunPipelineStepService.IMAGE_BUILD_STARTED,
+                        logs
+                );
+                runPipelineStepService.updateJobDetails(
+                        updatedExperiment,
+                        RunPipelineStepService.IMAGE_BUILD_STARTED,
+                        buildJobName,
+                        null,
+                        null
+                );
+
                 System.out.println(
                         "[CUSTOM-DOCKER] Build synchronized successfully. "
                                 + "experimentId="
@@ -334,6 +404,16 @@ public class CustomDockerRunWatcher {
         if ("FAILED".equalsIgnoreCase(status)) {
             experiment.setBuildStatus("IMAGE_BUILD_FAILED");
             experiment.setBuildLogs(logs);
+
+            runPipelineStepService.markFailed(
+                    experiment,
+                    RunPipelineStepService.IMAGE_BUILD_STARTED,
+                    RunFailureAnalyzer.classifyErrorCode(logs),
+                    safe(logs).lines().findFirst().orElse("Build Kaniko en échec"),
+                    "Le build Kaniko de l'image a échoué.",
+                    logs
+            );
+
             markFailedWithAnalyzer(experiment, logs);
             return;
         }
@@ -465,6 +545,24 @@ public class CustomDockerRunWatcher {
                     jobName
             );
 
+            runPipelineStepService.markSucceeded(
+                    freshExperiment,
+                    RunPipelineStepService.TRAINING_JOB_CREATED,
+                    "Job Kubernetes d'entraînement créé: " + jobName
+            );
+            runPipelineStepService.markRunning(
+                    freshExperiment,
+                    RunPipelineStepService.TRAINING_RUNNING,
+                    "Exécution de platform_runner.py dans le Job Kubernetes."
+            );
+            runPipelineStepService.updateJobDetails(
+                    freshExperiment,
+                    RunPipelineStepService.TRAINING_RUNNING,
+                    jobName,
+                    null,
+                    null
+            );
+
             System.out.println(
                     "[CUSTOM-DOCKER] Experiment id="
                             + freshExperiment.getId()
@@ -529,6 +627,16 @@ public class CustomDockerRunWatcher {
             experiment.setBuildStatus("CUSTOM_IMAGE_JOB_FAILED");
             experiment.setKubeflowStatus("FAILED");
             experiment.setTrainingLogs(logs);
+
+            runPipelineStepService.markFailed(
+                    experiment,
+                    RunPipelineStepService.TRAINING_RUNNING,
+                    RunFailureAnalyzer.classifyErrorCode(logs),
+                    safe(logs).lines().findFirst().orElse("Job Kubernetes en échec"),
+                    "Le Job Kubernetes d'entraînement a échoué.",
+                    logs
+            );
+
             markFailedWithAnalyzer(experiment, logs);
             return;
         }
@@ -560,6 +668,27 @@ public class CustomDockerRunWatcher {
         markDockerTrainingFinishedIfNeeded(experiment);
         experiment.setMessage("Custom Docker training completed successfully.");
         experiment.setErrorMessage(null);
+
+        runPipelineStepService.markSucceeded(
+                experiment,
+                RunPipelineStepService.TRAINING_JOB_CREATED,
+                "Job Kubernetes d'entraînement créé et terminé."
+        );
+        runPipelineStepService.markSucceeded(
+                experiment,
+                RunPipelineStepService.TRAINING_RUNNING,
+                "Le Job Kubernetes d'entraînement s'est terminé avec succès."
+        );
+        runPipelineStepService.markSucceeded(
+                experiment,
+                RunPipelineStepService.USER_SCRIPT_COMPLETED,
+                "platform_runner.py a exécuté le script utilisateur et produit des métriques."
+        );
+        runPipelineStepService.appendLogs(
+                experiment,
+                RunPipelineStepService.TRAINING_RUNNING,
+                logs
+        );
 
         TrainingOutputAnalyzerService.DetectedTrainingOutput analyzedOutput =
                 trainingOutputAnalyzerService.analyze(logs);
@@ -771,6 +900,17 @@ public class CustomDockerRunWatcher {
                 );
                 refreshed.setErrorMessage(null);
 
+                runPipelineStepService.markSucceeded(
+                        refreshed,
+                        RunPipelineStepService.MODEL_ARTIFACT_DETECTED,
+                        "Artifact détecté et standardisé: " + result.getSourceModelFile()
+                );
+                runPipelineStepService.markSucceeded(
+                        refreshed,
+                        RunPipelineStepService.MLFLOW_REGISTERED,
+                        "Modèle enregistré dans MLflow (version " + result.getNewVersion() + ")."
+                );
+
                 mlExperimentRepository.saveAndFlush(refreshed);
                 return true;
             }
@@ -897,6 +1037,23 @@ public class CustomDockerRunWatcher {
         );
 
         mlExperimentRepository.saveAndFlush(managedExperiment);
+
+        runPipelineStepService.markSucceeded(
+                managedExperiment,
+                RunPipelineStepService.MODEL_ARTIFACT_DETECTED,
+                "Artifact détecté via MLflow Registry: models:/"
+                        + registeredModelName
+                        + "@production."
+        );
+        runPipelineStepService.markSucceeded(
+                managedExperiment,
+                RunPipelineStepService.MLFLOW_REGISTERED,
+                "Modèle enregistré: "
+                        + registeredModelName
+                        + " (version production "
+                        + productionVersion
+                        + ")."
+        );
 
         System.out.println("[CUSTOM-DOCKER-WATCHER] No local model artifact found, "
                 + "but valid MLflow Registry production model exists. "
@@ -1052,6 +1209,39 @@ public class CustomDockerRunWatcher {
             return true;
         }
 
+        /*
+         * La référence de vérité est le Registry MLflow : si le run possède
+         * déjà une version enregistrée, la standardisation est finale.
+         * On ne dépend plus des marqueurs stockés dans message (fragiles).
+         */
+        if (hasText(experiment.getRegisteredModelName())
+                && hasText(experiment.getMlflowRunId())
+                && hasText(experiment.getModelVersion())) {
+            try {
+                String registeredVersion =
+                        mlflowTrackingClientService.findModelVersionByRunId(
+                                experiment.getRegisteredModelName(),
+                                experiment.getMlflowRunId()
+                        );
+
+                if (hasText(registeredVersion)
+                        && experiment.getModelVersion()
+                        .trim()
+                        .equalsIgnoreCase(registeredVersion.trim())) {
+                    return true;
+                }
+            } catch (Exception e) {
+                System.out.println("[CUSTOM-DOCKER-WATCHER] "
+                        + "isStandardizationAlreadyFinal registry check failed. "
+                        + "experimentId=" + experiment.getId()
+                        + ", reason=" + e.getMessage());
+            }
+        }
+
+        /*
+         * Fallback sur les marqueurs historiques pour ne pas re-standardiser
+         * des runs déjà traités par l'ancienne logique.
+         */
         String message = safe(experiment.getMessage()).toLowerCase();
 
         boolean standardizedWithVersion =
@@ -1101,7 +1291,38 @@ public class CustomDockerRunWatcher {
         experiment.setFailureSourceFile("custom-docker-runtime");
         experiment.setMessage(message);
 
+        clearExperimentPerformanceMetrics(experiment);
+
+        String stepCode = mapPhaseToStepCode(phase);
+        if (stepCode != null) {
+            runPipelineStepService.markFailed(
+                    experiment,
+                    stepCode,
+                    "KUBERNETES_JOB_FAILED",
+                    message,
+                    message,
+                    null
+            );
+        }
+
         mlExperimentRepository.saveAndFlush(experiment);
+    }
+
+    private String mapPhaseToStepCode(String phase) {
+        if (phase == null) {
+            return null;
+        }
+        String p = phase.toUpperCase(Locale.ROOT);
+        if (p.contains("VALIDAT")) {
+            return RunPipelineStepService.FILES_VALIDATED;
+        }
+        if (p.contains("BUILD")) {
+            return RunPipelineStepService.IMAGE_BUILD_STARTED;
+        }
+        if (p.contains("TRAIN")) {
+            return RunPipelineStepService.TRAINING_RUNNING;
+        }
+        return null;
     }
 
     private void saveDetectedMetrics(MlExperiment experiment, Map<String, Double> metrics) {

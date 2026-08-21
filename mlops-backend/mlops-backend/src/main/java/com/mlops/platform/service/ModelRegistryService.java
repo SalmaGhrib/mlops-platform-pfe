@@ -10,11 +10,20 @@ import com.mlops.platform.repository.MlExperimentMetricRepository;
 import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.UserRepository;
 import com.mlops.platform.security.JwtService;
-import jakarta.transaction.Transactional;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import com.mlops.platform.entity.ModelDeployment;
 import com.mlops.platform.entity.DeploymentStatus;
 import com.mlops.platform.repository.ModelDeploymentRepository;
+import com.mlops.platform.dto.SearchPageResponse;
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.Expression;
+import jakarta.persistence.criteria.Join;
+import jakarta.persistence.criteria.JoinType;
+import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -156,32 +165,7 @@ public class ModelRegistryService {
         List<ModelRegistryResponse> result = new ArrayList<>();
 
         for (List<MlExperiment> group : grouped.values()) {
-            if (group == null || group.isEmpty()) {
-                continue;
-            }
-
-            group.sort(this::compareExperimentsByVersionDescThenDateDesc);
-
-            MlExperiment latestExperiment = group.get(0);
-
-            String registeredModelName = latestExperiment.getRegisteredModelName();
-            String latestVersion = findLatestVersion(group);
-            String productionVersion = resolveProductionVersionFromMysqlOrMlflow(group, registeredModelName);
-
-            MlExperiment productionExperiment = findProductionExperiment(group, productionVersion);
-
-            if (productionExperiment == null) {
-                productionExperiment = latestExperiment;
-            }
-
-            ModelRegistryResponse response = mapToRegistryResponse(
-                    latestExperiment,
-                    productionExperiment,
-                    latestVersion,
-                    productionVersion
-            );
-
-            result.add(response);
+            result.add(buildRegistryResponse(group));
         }
 
         result.sort((a, b) -> {
@@ -191,6 +175,155 @@ public class ModelRegistryService {
         });
 
         return result;
+    }
+
+    /**
+     * Recherche dynamique des modèles du user connecté avec filtres
+     * (projectType / dataType) et pagination sur le regroupement par modèle.
+     *
+     * Pas de @Transactional : la construction des réponses peut déclencher des
+     * appels MLflow (resolveProductionVersionFromMysqlOrMlflow) ; on ne garde
+     * jamais une connexion DB ouverte pendant des appels réseau.
+     */
+    public SearchPageResponse<ModelRegistryResponse> searchMyRegisteredModels(
+            String authHeader,
+            String q,
+            String projectType,
+            String dataType,
+            int page,
+            int size
+    ) {
+        User owner = getUserFromAuthorizationHeader(authHeader);
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(size, 50));
+
+        Specification<MlExperiment> spec =
+                modelRegistrySearchSpecification(owner, q, projectType, dataType);
+
+        List<MlExperiment> matching = mlExperimentRepository.findAll(spec);
+
+        Map<String, List<MlExperiment>> grouped = matching.stream()
+                .filter(exp -> exp.getProject() != null)
+                .filter(exp -> exp.getRegisteredModelName() != null && !exp.getRegisteredModelName().isBlank())
+                .collect(Collectors.groupingBy(
+                        exp -> exp.getProject().getId() + "::" + exp.getRegisteredModelName(),
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+
+        List<ModelRegistryResponse> all = new ArrayList<>();
+        for (List<MlExperiment> group : grouped.values()) {
+            all.add(buildRegistryResponse(group));
+        }
+
+        long total = all.size();
+        int from = Math.min(safePage * safeSize, all.size());
+        int to = Math.min(from + safeSize, all.size());
+        List<ModelRegistryResponse> items = from >= all.size()
+                ? List.of()
+                : all.subList(from, to);
+
+        return new SearchPageResponse<>(items, total, safePage, safeSize, to < all.size());
+    }
+
+    private Specification<MlExperiment> modelRegistrySearchSpecification(
+            User owner,
+            String q,
+            String projectType,
+            String dataType
+    ) {
+        return (Root<MlExperiment> root, CriteriaQuery<?> query, CriteriaBuilder cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            List<Expression<Integer>> tokenScores = new ArrayList<>();
+
+            Join<Object, Object> project = root.join("project", JoinType.INNER);
+
+            predicates.add(cb.equal(project.get("owner"), owner));
+            predicates.add(cb.isNotNull(root.get("registeredModelName")));
+            predicates.add(cb.notEqual(root.get("registeredModelName"), ""));
+
+            if (projectType != null && !projectType.isBlank()) {
+                predicates.add(cb.equal(
+                        cb.lower(project.get("projectType")),
+                        projectType.trim().toLowerCase()
+                ));
+            }
+            if (dataType != null && !dataType.isBlank()) {
+                predicates.add(cb.equal(
+                        cb.upper(project.get("dataType")),
+                        dataType.trim().toUpperCase()
+                ));
+            }
+
+            if (q != null && !q.isBlank()) {
+                String[] tokens = q.trim().toLowerCase().split("\\s+");
+                for (String token : tokens) {
+                    String like = "%" + token + "%";
+
+                    Expression<Integer> score = cb.<Integer>selectCase()
+                            .when(cb.like(cb.lower(root.get("registeredModelName")), like), 100)
+                            .otherwise(0);
+                    score = cb.sum(score, cb.<Integer>selectCase()
+                            .when(cb.like(cb.lower(root.get("modelName")), like), 60)
+                            .otherwise(0));
+                    score = cb.sum(score, cb.<Integer>selectCase()
+                            .when(cb.like(cb.lower(root.get("experimentName")), like), 50)
+                            .otherwise(0));
+                    score = cb.sum(score, cb.<Integer>selectCase()
+                            .when(cb.like(cb.lower(project.get("name")), like), 40)
+                            .otherwise(0));
+                    score = cb.sum(score, cb.<Integer>selectCase()
+                            .when(cb.like(cb.lower(project.get("description")), like), 30)
+                            .otherwise(0));
+
+                    predicates.add(cb.greaterThan(score, 0));
+                    tokenScores.add(score);
+                }
+            }
+
+            if (query.getResultType() != Long.class && query.getResultType() != long.class) {
+                if (tokenScores.isEmpty()) {
+                    query.orderBy(cb.desc(root.get("createdAt")));
+                } else {
+                    Expression<Integer> total = tokenScores.stream()
+                            .reduce(cb::sum)
+                            .orElse(cb.literal(0));
+                    query.orderBy(
+                            cb.desc(total),
+                            cb.desc(root.get("createdAt"))
+                    );
+                }
+            }
+
+            return cb.and(predicates.toArray(new Predicate[0]));
+        };
+    }
+
+    private ModelRegistryResponse buildRegistryResponse(List<MlExperiment> group) {
+        if (group == null || group.isEmpty()) {
+            return null;
+        }
+
+        group.sort(this::compareExperimentsByVersionDescThenDateDesc);
+
+        MlExperiment latestExperiment = group.get(0);
+
+        String registeredModelName = latestExperiment.getRegisteredModelName();
+        String latestVersion = findLatestVersion(group);
+        String productionVersion = resolveProductionVersionFromMysqlOrMlflow(group, registeredModelName);
+
+        MlExperiment productionExperiment = findProductionExperiment(group, productionVersion);
+
+        if (productionExperiment == null) {
+            productionExperiment = latestExperiment;
+        }
+
+        return mapToRegistryResponse(
+                latestExperiment,
+                productionExperiment,
+                latestVersion,
+                productionVersion
+        );
     }
 
     private ModelRegistryResponse mapToRegistryResponse(

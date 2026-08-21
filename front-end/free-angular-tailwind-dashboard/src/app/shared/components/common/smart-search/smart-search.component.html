@@ -1,0 +1,112 @@
+<div class="space-y-4">
+  <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+    <div class="relative w-full lg:max-w-md">
+      <svg
+        class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+      >
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z"/>
+      </svg>
+      <input
+        type="text"
+        [(ngModel)]="q"
+        (ngModelChange)="onInputChange()"
+        [placeholder]="placeholder"
+        class="w-full rounded-xl border border-gray-200 bg-white py-2 pl-9 pr-4 text-sm text-gray-900 shadow-sm outline-none transition placeholder:text-gray-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+      />
+    </div>
+
+    <div class="flex flex-wrap items-center gap-3">
+      @if (showProjectType) {
+        <select
+          [(ngModel)]="projectType"
+          (ngModelChange)="onFilterChange()"
+          class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+        >
+          <option value="">Type de modèle : tous</option>
+          <option value="classification">Classification</option>
+          <option value="regression">Régression</option>
+        </select>
+      }
+
+      @if (showDataType) {
+        <select
+          [(ngModel)]="dataType"
+          (ngModelChange)="onFilterChange()"
+          class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+        >
+          <option value="">Type de data : toutes</option>
+          <option value="TABULAR">Tabulaire</option>
+          <option value="IMAGE">Image</option>
+          <option value="TEXT">Texte / NLP</option>
+        </select>
+      }
+
+      @if (showStatus) {
+        <select
+          [(ngModel)]="status"
+          (ngModelChange)="onFilterChange()"
+          class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+        >
+          <option value="">Statut : tous</option>
+          <option value="ACTIVE">Actif</option>
+          <option value="BLOCKED">Bloqué</option>
+          <option value="PENDING">En attente</option>
+        </select>
+      }
+
+      @if (showRole) {
+        <select
+          [(ngModel)]="role"
+          (ngModelChange)="onFilterChange()"
+          class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+        >
+          <option value="">Rôle : tous</option>
+          <option value="ADMIN">Administrateur</option>
+          <option value="USER">Utilisateur</option>
+        </select>
+      }
+
+      <div class="flex items-center gap-1">
+        <button
+          type="button"
+          (click)="previousPage()"
+          [disabled]="page === 0 || loading"
+          class="inline-flex items-center gap-1 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
+        >
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+          Précédent
+        </button>
+
+        <button
+          type="button"
+          (click)="nextPage()"
+          [disabled]="!hasMore || loading"
+          class="inline-flex items-center gap-1 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
+        >
+          Suivant
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+    <p class="text-xs text-gray-500 dark:text-gray-400">
+      {{ total }} résultat{{ total === 1 ? '' : 's' }} au total
+    </p>
+
+    @if (total > 0) {
+      <p class="text-xs text-gray-500 dark:text-gray-400">
+        Affichage {{ fromCount }} - {{ toCount }} sur {{ total }}
+      </p>
+    }
+  </div>
+</div>

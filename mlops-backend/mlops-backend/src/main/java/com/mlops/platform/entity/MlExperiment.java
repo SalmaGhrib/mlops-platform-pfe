@@ -196,6 +196,12 @@ public class MlExperiment {
     @Column(name = "last_error_at")
     private LocalDateTime lastErrorAt;
 
+    @Column(name = "trigger_type", length = 40)
+    private String triggerType;
+
+    @Column(name = "trigger_metadata", columnDefinition = "TEXT")
+    private String triggerMetadata;
+
     @PrePersist
     public void onCreate() {
         LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
@@ -619,6 +625,22 @@ public class MlExperiment {
 
     public LocalDateTime getLastErrorAt() {
         return lastErrorAt;
+    }
+
+    public String getTriggerType() {
+        return triggerType;
+    }
+
+    public void setTriggerType(String triggerType) {
+        this.triggerType = triggerType;
+    }
+
+    public String getTriggerMetadata() {
+        return triggerMetadata;
+    }
+
+    public void setTriggerMetadata(String triggerMetadata) {
+        this.triggerMetadata = triggerMetadata;
     }
 
     public void setId(Long id) {

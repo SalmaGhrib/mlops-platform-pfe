@@ -3,9 +3,12 @@ package com.mlops.platform.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mlops.platform.dto.ModelDeploymentResponse;
+import com.mlops.platform.entity.DeploymentStatus;
 import com.mlops.platform.entity.ExperimentStatus;
 import com.mlops.platform.entity.MlExperiment;
+import com.mlops.platform.entity.ModelDeployment;
 import com.mlops.platform.repository.MlExperimentRepository;
+import com.mlops.platform.repository.ModelDeploymentRepository;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
@@ -24,7 +27,10 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 @Service
 public class AutoProductionDeploymentReconcilerService {
@@ -32,11 +38,15 @@ public class AutoProductionDeploymentReconcilerService {
     private static final String PRODUCTION_ALIAS = "production";
     private static final String STANDARDIZED_MARKER_PREFIX =
             "[MODEL_ARTIFACT_STANDARDIZED_VERSION=";
+    private static final long STALE_PROMOTION_MINUTES = 15;
 
     private final MlExperimentRepository mlExperimentRepository;
     private final ModelDeploymentService modelDeploymentService;
     private final ModelArtifactStandardizerService modelArtifactStandardizerService;
+    private final MlflowTrackingClientService mlflowTrackingClientService;
     private final PlatformTransactionManager transactionManager;
+    private final RunPipelineStepService runPipelineStepService;
+    private final ModelDeploymentRepository modelDeploymentRepository;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -55,12 +65,18 @@ public class AutoProductionDeploymentReconcilerService {
             MlExperimentRepository mlExperimentRepository,
             ModelDeploymentService modelDeploymentService,
             ModelArtifactStandardizerService modelArtifactStandardizerService,
-            PlatformTransactionManager transactionManager
+            MlflowTrackingClientService mlflowTrackingClientService,
+            PlatformTransactionManager transactionManager,
+            RunPipelineStepService runPipelineStepService,
+            ModelDeploymentRepository modelDeploymentRepository
     ) {
         this.mlExperimentRepository = mlExperimentRepository;
         this.modelDeploymentService = modelDeploymentService;
         this.modelArtifactStandardizerService = modelArtifactStandardizerService;
+        this.mlflowTrackingClientService = mlflowTrackingClientService;
         this.transactionManager = transactionManager;
+        this.runPipelineStepService = runPipelineStepService;
+        this.modelDeploymentRepository = modelDeploymentRepository;
     }
 
     @Scheduled(
@@ -73,16 +89,23 @@ public class AutoProductionDeploymentReconcilerService {
             lockAtLeastFor = "PT2S"
     )
     public void reconcileProductionDeployments() {
-        if (!autoDeployEnabled || !reconcilerEnabled) {
-            return;
-        }
-
         if (!running.compareAndSet(false, true)) {
             log("Previous reconciliation still running. Skip.");
             return;
         }
 
         try {
+            /*
+             * Finalisation des étapes Production/Déploiement du tracker :
+             * indépendante des flags auto-deploy/reconciler, pour que le statut
+             * des étapes reste toujours cohérent.
+             */
+            reconcilePipelineSteps();
+
+            if (!autoDeployEnabled || !reconcilerEnabled) {
+                return;
+            }
+
             log("===================================");
             log("Start Production -> Deployment check");
             log("===================================");
@@ -151,6 +174,325 @@ public class AutoProductionDeploymentReconcilerService {
         } catch (Exception e) {
             log("Deployment reconciliation failed before candidate evaluation: "
                     + safeMessage(e));
+        }
+    }
+
+    /**
+     * Finalise les étapes PRODUCTION_PROMOTED / DEPLOYMENT_READY de tous les runs.
+     *
+     * Règles :
+     * - Run promu (production=true, version alignée sur l'alias @production) :
+     *   PRODUCTION_PROMOTED -> SUCCEEDED ; DEPLOYMENT_READY -> SUCCEEDED si un
+     *   déploiement actif existe, RUNNING si un déploiement est en cours.
+     * - Run terminal non promu : PRODUCTION_PROMOTED/DEPLOYMENT_READY -> SKIPPED
+     *   avec une raison claire, uniquement quand la décision est définitive
+     *   (évite de "skippar" un futur vainqueur encore en cours de scoring).
+     * - Run actif : on laisse PENDING (rien n'est décidé).
+     */
+    private void reconcilePipelineSteps() {
+        List<MlExperiment> experiments;
+
+        try {
+            experiments = mlExperimentRepository.findAllForProductionReconciliation();
+        } catch (Exception e) {
+            log("Pipeline step reconciliation query failed. reason=" + safeMessage(e));
+            return;
+        }
+
+        if (experiments == null || experiments.isEmpty()) {
+            return;
+        }
+
+        Map<String, MlExperiment> bestCandidates = new LinkedHashMap<>();
+
+        for (MlExperiment experiment : experiments) {
+            if (!isEligibleScoredCandidate(experiment)) {
+                continue;
+            }
+
+            String key = buildModelKey(experiment);
+            MlExperiment currentBest = bestCandidates.get(key);
+
+            if (currentBest == null
+                    || compareScoredCandidates(experiment, currentBest) > 0) {
+                bestCandidates.put(key, experiment);
+            }
+        }
+
+        Set<Long> contenderIds = bestCandidates.values().stream()
+                .map(MlExperiment::getId)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        for (MlExperiment experiment : experiments) {
+            try {
+                finalizeExperimentPipelineSteps(experiment, contenderIds);
+            } catch (Exception e) {
+                log("Pipeline step finalization failed. experimentId="
+                        + safeExperimentId(experiment)
+                        + ", reason=" + safeMessage(e));
+            }
+        }
+    }
+
+    private void finalizeExperimentPipelineSteps(
+            MlExperiment experiment,
+            Set<Long> contenderIds
+    ) {
+        if (experiment == null || experiment.getId() == null) {
+            return;
+        }
+
+        /*
+         * On utilise directement l'entité chargée par findAllForProductionReconciliation
+         * (JOIN FETCH project) : ses champs scalaires sont initialisés même après
+         * la clôture de la session, contrairement à un reload() qui renverrait un
+         * proxy Lazy de project. Les faits Promotion/Déploiement proviennent du
+         * Registry MLflow (lecture HTTP fraîche) et non du cache d'entité.
+         */
+        MlExperiment current = experiment;
+
+        boolean terminal = current.getStatus() == ExperimentStatus.COMPLETED
+                || current.getStatus() == ExperimentStatus.FAILED
+                || current.getStatus() == ExperimentStatus.CANCELLED;
+
+        String modelName = resolveRegisteredModelName(current);
+        String modelVersion = trimToNull(current.getModelVersion());
+        boolean hasVersion = hasText(modelName) && hasText(modelVersion);
+
+        String registryVersion = hasVersion
+                ? getProductionVersionFromRegistryAlias(modelName)
+                : null;
+
+        boolean isPromoted = Boolean.TRUE.equals(current.getProduction())
+                && hasText(current.getProductionVersion())
+                && hasVersion
+                && current.getProductionVersion().equalsIgnoreCase(modelVersion);
+
+        if (isPromoted) {
+            resolveTrailingStepsIfCompleted(current);
+            runPipelineStepService.markProductionPromoted(
+                    current,
+                    "Version " + modelVersion + " promue en Production."
+            );
+            markDeploymentStepFromState(current, modelVersion);
+            runPipelineStepService.resolveTerminalSteps(current);
+            return;
+        }
+
+        /*
+         * Alias @production == version de ce run : PROMU. On exige aussi que le
+         * flag production de la ligne soit vrai : une ligne non-production dont la
+         * version coïnciderait par hasard avec l'alias ne décrit PAS la version
+         * promue, on la traite donc comme non-promue.
+         */
+        if (hasVersion
+                && registryVersion != null
+                && registryVersion.equalsIgnoreCase(modelVersion)
+                && Boolean.TRUE.equals(current.getProduction())) {
+            resolveTrailingStepsIfCompleted(current);
+            runPipelineStepService.markProductionPromoted(
+                    current,
+                    "Version " + modelVersion + " alignée sur l'alias @production."
+            );
+            markDeploymentStepFromState(current, modelVersion);
+            runPipelineStepService.resolveTerminalSteps(current);
+            return;
+        }
+
+        /*
+         * Non promu : on ne marque SKIPPED que si c'est définitif.
+         */
+        if (!terminal) {
+            return;
+        }
+
+        if (current.getStatus() == ExperimentStatus.FAILED
+                || current.getStatus() == ExperimentStatus.CANCELLED) {
+            markProductionSkipped(
+                    current,
+                    "Run " + current.getStatus()
+                            + " : version non promue en Production."
+            );
+            return;
+        }
+
+        boolean autoPromoteOff =
+                current.getProject() != null
+                        && Boolean.FALSE.equals(
+                        current.getProject().getAutoPromoteBestModel());
+
+        if (autoPromoteOff) {
+            markProductionSkipped(
+                    current,
+                    "Promotion automatique désactivée pour ce projet : "
+                            + "version non promue en Production."
+            );
+            return;
+        }
+
+        /*
+         * Le Registry est la seule preuve irréversible de non-promotion : si
+         * l'alias @production pointe vers une AUTRE version de ce modèle, ce run
+         * ne sera jamais promu. Un candidat encore en course (contender) est
+         * laissé PENDING : il peut être promu à ce tick ou au suivant.
+         */
+        if (modelVersion != null
+                && registryVersion != null
+                && !registryVersion.equalsIgnoreCase(modelVersion)
+                && !contenderIds.contains(current.getId())) {
+            markProductionSkipped(
+                    current,
+                    "Version " + modelVersion
+                            + " non promue en Production : l'alias @production "
+                            + "pointe vers la version " + registryVersion + "."
+            );
+            return;
+        }
+
+        boolean scored = current.getGlobalScore() != null
+                && current.getPrimaryMetricValue() != null;
+
+        LocalDateTime deadlineBase = current.getFinishedAt() != null
+                ? current.getFinishedAt()
+                : (current.getUpdatedAt() != null
+                ? current.getUpdatedAt()
+                : current.getCreatedAt());
+
+        boolean stale = deadlineBase != null
+                && deadlineBase.isBefore(
+                LocalDateTime.now().minusMinutes(STALE_PROMOTION_MINUTES));
+
+        /*
+         * Non-promotion définitive par renoncement : le mécanisme de promotion a
+         * eu amplement le temps de promouvoir ce run s'il était gagnant. Après le
+         * délai sans alias @production correspondant, il ne sera jamais promu.
+         */
+        if (scored && stale && !contenderIds.contains(current.getId())) {
+            markProductionSkipped(
+                    current,
+                    "Version non promue en Production : aucune promotion après "
+                            + STALE_PROMOTION_MINUTES + " minutes."
+            );
+            return;
+        }
+
+        /*
+         * Sinon la décision est encore possible (scoring en cours, enregistrement
+         * en cours, promotion à retenter au prochain tick) : on laisse PENDING.
+         */
+    }
+
+    private void resolveTrailingStepsIfCompleted(MlExperiment experiment) {
+        if (experiment == null
+                || experiment.getId() == null
+                || experiment.getStatus() != ExperimentStatus.COMPLETED) {
+            return;
+        }
+
+        boolean hasMetrics = experiment.getPrimaryMetricValue() != null
+                || experiment.getGlobalScore() != null;
+
+        String modelVersion = trimToNull(experiment.getModelVersion());
+        boolean hasVersion = hasText(modelVersion);
+
+        if (hasMetrics) {
+            runPipelineStepService.markSucceeded(
+                    experiment,
+                    RunPipelineStepService.METRICS_EXTRACTED,
+                    "Métriques extraites du run."
+            );
+        } else {
+            runPipelineStepService.markSkipped(
+                    experiment,
+                    RunPipelineStepService.METRICS_EXTRACTED,
+                    "Aucune métrique détectée pour ce run."
+            );
+        }
+
+        if (hasVersion) {
+            runPipelineStepService.markModelRegistered(
+                    experiment,
+                    resolveRegisteredModelName(experiment),
+                    modelVersion,
+                    "Modèle enregistré dans le Registry MLflow (version "
+                            + modelVersion + ")."
+            );
+        } else {
+            /*
+             * MLFLOW_REGISTERED (index > MODEL_ARTIFACT_DETECTED) marqué en premier :
+             * la cascade de markSkipped(MODEL_ARTIFACT_DETECTED) est alors sans effet
+             * et le message spécifique de MLFLOW_REGISTERED est conservé.
+             */
+            runPipelineStepService.markSkipped(
+                    experiment,
+                    RunPipelineStepService.MLFLOW_REGISTERED,
+                    "Aucun modèle enregistré dans le Registry MLflow."
+            );
+            runPipelineStepService.markSkipped(
+                    experiment,
+                    RunPipelineStepService.MODEL_ARTIFACT_DETECTED,
+                    "Aucun artefact modèle pour ce run."
+            );
+        }
+    }
+
+    private void markProductionSkipped(MlExperiment experiment, String reason) {
+        resolveTrailingStepsIfCompleted(experiment);
+
+        /*
+         * Ordre important : DEPLOYMENT_READY est marqué AVANT PRODUCTION_PROMOTED.
+         * markSkipped cascade en aval ; en marquant d'abord la dernière étape avec
+         * un message spécifique, la cascade de PRODUCTION_PROMOTED devient sans
+         * effet (étape terminale) et le message spécifique est conservé.
+         */
+        runPipelineStepService.markSkipped(
+                experiment,
+                RunPipelineStepService.DEPLOYMENT_READY,
+                "Aucun déploiement : version non promue en Production."
+        );
+
+        runPipelineStepService.markSkipped(
+                experiment,
+                RunPipelineStepService.PRODUCTION_PROMOTED,
+                reason
+        );
+
+        runPipelineStepService.resolveTerminalSteps(experiment);
+    }
+
+    private void markDeploymentStepFromState(
+            MlExperiment experiment,
+            String modelVersion
+    ) {
+        if (experiment == null || experiment.getId() == null) {
+            return;
+        }
+
+        Optional<ModelDeployment> activeDeployment =
+                modelDeploymentRepository.findByExperimentIdAndActiveTrue(experiment.getId());
+
+        if (activeDeployment.isPresent()) {
+            runPipelineStepService.markDeploymentReady(
+                    experiment,
+                    "Déploiement actif en Production (version "
+                            + modelVersion + ")."
+            );
+            return;
+        }
+
+        boolean deployingExists = modelDeploymentRepository
+                .findByExperimentIdOrderByCreatedAtDesc(experiment.getId())
+                .stream()
+                .anyMatch(deployment -> DeploymentStatus.DEPLOYING.equals(
+                        deployment.getDeploymentStatus()));
+
+        if (deployingExists) {
+            runPipelineStepService.markRunning(
+                    experiment,
+                    RunPipelineStepService.DEPLOYMENT_READY,
+                    "Déploiement en cours (version " + modelVersion + ")."
+            );
         }
     }
 
@@ -713,6 +1055,13 @@ public class AutoProductionDeploymentReconcilerService {
         mlExperimentRepository.saveAndFlush(experiment);
     }
 
+    /**
+     * Une expérience est considérée comme "déjà préparée" uniquement si :
+     * 1. sa version est alignée sur l'alias @production du Registry, ET
+     * 2. le run possède réellement cette version enregistrée dans MLflow.
+     * La vérification du Registry remplace l'ancien marqueur stocké dans le
+     * message (fragile : écrasé par les synchronisations et tronqué).
+     */
     private boolean isAlreadyPrepared(
             MlExperiment experiment,
             String registryProductionVersion
@@ -723,7 +1072,6 @@ public class AutoProductionDeploymentReconcilerService {
 
         String modelVersion = trimToNull(experiment.getModelVersion());
         String productionVersion = trimToNull(registryProductionVersion);
-        String message = experiment.getMessage();
 
         if (modelVersion == null || productionVersion == null) {
             return false;
@@ -732,13 +1080,32 @@ public class AutoProductionDeploymentReconcilerService {
         boolean versionsAligned =
                 modelVersion.equalsIgnoreCase(productionVersion);
 
-        boolean hasMarker =
-                message != null
-                        && message.contains(
-                                buildStandardizedMarker(modelVersion)
-                        );
+        if (!versionsAligned) {
+            return false;
+        }
 
-        return versionsAligned && hasMarker;
+        String registeredModelName = resolveRegisteredModelName(experiment);
+
+        if (!hasText(registeredModelName)
+                || !hasText(experiment.getMlflowRunId())) {
+            return false;
+        }
+
+        try {
+            String registeredVersion =
+                    mlflowTrackingClientService.findModelVersionByRunId(
+                            registeredModelName,
+                            experiment.getMlflowRunId()
+                    );
+
+            return hasText(registeredVersion)
+                    && modelVersion.equalsIgnoreCase(registeredVersion.trim());
+        } catch (Exception e) {
+            log("isAlreadyPrepared registry check failed. experimentId="
+                    + experiment.getId()
+                    + ", reason=" + safeMessage(e));
+            return false;
+        }
     }
 
     private String buildStandardizedMarker(String version) {

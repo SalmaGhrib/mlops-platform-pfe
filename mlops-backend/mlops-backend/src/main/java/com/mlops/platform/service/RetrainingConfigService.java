@@ -324,6 +324,16 @@ public class RetrainingConfigService {
             );
         }
 
+        if (request.getGlobalScoreThreshold() != null) {
+            config.setGlobalScoreThreshold(
+                    request.getGlobalScoreThreshold()
+            );
+        }
+
+        if (request.getDataPolicy() != null) {
+            config.setDataPolicy(request.getDataPolicy());
+        }
+
         config.normalizeMonitoringSettings();
     }
 

@@ -204,6 +204,15 @@
   line-height: 1.5;
 }
 
+.quality-badge-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+  align-self: center;
+}
+
 :host-context(.dark) .focus-desc {
   color: #98a2b3;
 }

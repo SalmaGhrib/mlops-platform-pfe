@@ -1,20 +1,30 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Observable } from 'rxjs';
 import { AuthService, UserResponse } from '../../core/services/auth.service';
 import { PageBreadcrumbComponent } from '../../shared/components/common/page-breadcrumb/page-breadcrumb.component';
+import { SmartSearchComponent } from '../../shared/components/common/smart-search/smart-search.component';
+import {
+  SearchPageResponse,
+  SmartSearchParams
+} from '../../shared/components/common/smart-search/smart-search.types';
 
 @Component({
   selector: 'app-users-management',
   standalone: true,
   imports: [
     CommonModule,
-    PageBreadcrumbComponent
+    PageBreadcrumbComponent,
+    SmartSearchComponent
   ],
   templateUrl: './users-management.component.html',
   styles: ``
 })
 export class UsersManagementComponent implements OnInit {
+  @ViewChild(SmartSearchComponent) smartSearch!: SmartSearchComponent<UserResponse>;
+
   users: UserResponse[] = [];
+  totalUsers = 0;
 
   loading = false;
   errorMessage = '';
@@ -27,32 +37,22 @@ export class UsersManagementComponent implements OnInit {
   constructor(private authService: AuthService) {}
 
   ngOnInit(): void {
-    this.loadUsers();
+    // Le composant app-smart-search charge automatiquement la première page.
   }
 
-  loadUsers(): void {
-    this.loading = true;
-    this.errorMessage = '';
-    this.successMessage = '';
+  searchUsers = (params: SmartSearchParams): Observable<SearchPageResponse<UserResponse>> =>
+    this.authService.searchUsers(params);
 
-    this.authService.getAllUsers().subscribe({
-      next: (response: UserResponse[]) => {
-        this.users = response;
-        this.loading = false;
-      },
-      error: (error) => {
-        console.error('Load users error:', error);
-        this.loading = false;
+  onSearchItems(users: UserResponse[]): void {
+    this.users = users;
+  }
 
-        if (error.status === 401 || error.status === 403) {
-          this.errorMessage = 'Accès refusé. Vous devez être connecté avec un compte ADMIN.';
-        } else if (error.status === 0) {
-          this.errorMessage = 'Impossible de contacter le backend. Vérifiez que Spring Boot est lancé.';
-        } else {
-          this.errorMessage = 'Impossible de charger la liste des utilisateurs.';
-        }
-      }
-    });
+  onTotalChange(total: number): void {
+    this.totalUsers = total;
+  }
+
+  refresh(): void {
+    this.smartSearch?.resetAndReload();
   }
 
   toggleUserRole(user: UserResponse): void {
@@ -143,6 +143,7 @@ export class UsersManagementComponent implements OnInit {
 
         this.deleteLoadingId = null;
         this.successMessage = `L'utilisateur ${user.firstName} ${user.lastName} a été supprimé avec succès.`;
+        this.smartSearch?.reload();
       },
       error: (error) => {
         console.error('Delete user error:', error);

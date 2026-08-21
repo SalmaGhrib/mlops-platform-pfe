@@ -1,5 +1,6 @@
 package com.mlops.platform.dto;
 
+import com.mlops.platform.entity.RetrainingDataPolicy;
 import com.mlops.platform.entity.RetrainingFrequencyType;
 import com.mlops.platform.entity.RetrainingStrategy;
 
@@ -22,6 +23,8 @@ public class RetrainingConfigRequest {
     private Double maxPredictionErrorRatePercent;
     private Double performanceDropThresholdPercent;
     private Double dataDriftThresholdPercent;
+    private RetrainingDataPolicy dataPolicy;
+    private Double globalScoreThreshold;
 
     public boolean isEnabled() {
         return enabled;
@@ -117,5 +120,21 @@ public class RetrainingConfigRequest {
 
     public void setDataDriftThresholdPercent(Double dataDriftThresholdPercent) {
         this.dataDriftThresholdPercent = dataDriftThresholdPercent;
+    }
+
+    public RetrainingDataPolicy getDataPolicy() {
+        return dataPolicy;
+    }
+
+    public void setDataPolicy(RetrainingDataPolicy dataPolicy) {
+        this.dataPolicy = dataPolicy;
+    }
+
+    public Double getGlobalScoreThreshold() {
+        return globalScoreThreshold;
+    }
+
+    public void setGlobalScoreThreshold(Double globalScoreThreshold) {
+        this.globalScoreThreshold = globalScoreThreshold;
     }
 }

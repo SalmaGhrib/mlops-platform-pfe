@@ -1,7 +1,10 @@
 package com.mlops.platform.service;
 
+import com.mlops.platform.config.UploadsStorageProperties;
 import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.MlProject;
+import com.mlops.platform.entity.UploadedFileType;
+import com.mlops.platform.entity.UploadedProjectFile;
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.ContainerBuilder;
 import io.fabric8.kubernetes.api.model.EnvVar;
@@ -13,6 +16,7 @@ import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientBuilder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -43,6 +47,9 @@ public class KubernetesJobService {
     @Value("${app.docker.image-pull-secret:dockerhub-secret}")
     private String imagePullSecret;
 
+    @Autowired
+    private UploadsStorageProperties uploadsStorageProperties;
+
     /*
      * Shared uploads PVC.
      *
@@ -51,14 +58,24 @@ public class KubernetesJobService {
      * - datasets remain under /app/uploads/...
      * - the custom training job must mount the same PVC at /app/uploads
      */
-    @Value("${app.uploads.pvc-enabled:true}")
-    private boolean uploadsPvcEnabled;
+    private boolean isUploadsPvcEnabled() {
+        return uploadsStorageProperties.getPvcName() != null
+                && !uploadsStorageProperties.getPvcName().isBlank();
+    }
 
-    @Value("${app.uploads.pvc-name:mlops-uploads-pvc}")
-    private String uploadsPvcName;
+    private String getUploadsPvcName() {
+        return uploadsStorageProperties.getPvcName();
+    }
 
-    @Value("${app.uploads.mount-path:/app/uploads}")
-    private String uploadsMountPath;
+    private String getUploadsMountPath() {
+        return uploadsStorageProperties.getMountPath();
+    }
+
+    private final DatasetFileResolverService datasetFileResolverService;
+
+    public KubernetesJobService(DatasetFileResolverService datasetFileResolverService) {
+        this.datasetFileResolverService = datasetFileResolverService;
+    }
 
     public String launchCustomImageTrainingJob(
             MlProject project,
@@ -96,8 +113,8 @@ public class KubernetesJobService {
                 validateUploadsPvcExists(client);
 
                 System.out.println("[KubernetesJobService] Shared uploads PVC will be mounted. "
-                        + "pvc=" + uploadsPvcName
-                        + ", mountPath=" + uploadsMountPath
+                        + "pvc=" + getUploadsPvcName()
+                        + ", mountPath=" + getUploadsMountPath()
                         + ", jobName=" + jobName);
             } else {
                 System.out.println("[KubernetesJobService] Shared uploads PVC mount is disabled or not configured. "
@@ -277,7 +294,7 @@ public class KubernetesJobService {
             trainingContainerBuilder
                     .addNewVolumeMount()
                         .withName(UPLOADS_VOLUME_NAME)
-                        .withMountPath(normalizeMountPath(uploadsMountPath))
+                        .withMountPath(normalizeMountPath(getUploadsMountPath()))
                     .endVolumeMount();
         }
 
@@ -293,7 +310,7 @@ public class KubernetesJobService {
                     .addNewVolume()
                         .withName(UPLOADS_VOLUME_NAME)
                         .withNewPersistentVolumeClaim()
-                            .withClaimName(uploadsPvcName.trim())
+                            .withClaimName(getUploadsPvcName().trim())
                         .endPersistentVolumeClaim()
                     .endVolume();
         }
@@ -374,6 +391,49 @@ public class KubernetesJobService {
               echo "[CUSTOM-TRAINING] ERROR: platform_runner.py not found in /app or /workspace"
               ls -la /app || true
               ls -la /workspace || true
+              exit 1
+            fi
+
+            # PREFLIGHT DATASET CHECK
+            # Verify the shared uploads PVC is mounted and dataset is visible
+            echo "[DATASET-PREFLIGHT] pvc=${MLOPS_UPLOADS_PVC_NAME:-backend-uploads-rwx-pvc}"
+            echo "[DATASET-PREFLIGHT] mount=${MLOPS_UPLOADS_MOUNT_PATH:-/app/uploads}"
+            DATASET_PATH_VISIBLE="${DATASET_PATH:-}"
+            if [ -z "$DATASET_PATH_VISIBLE" ]; then
+              echo "[DATASET-PREFLIGHT] dataset="
+            else
+              echo "[DATASET-PREFLIGHT] dataset=${DATASET_PATH_VISIBLE}"
+            fi
+            echo "[DATASET-PREFLIGHT] mountExists=${TEST_MOUNT_PATH:-true}"
+            # Check if the mount path directory exists
+            TEST_MOUNT_PATH=""
+            if [ -d "${MLOPS_UPLOADS_MOUNT_PATH:-/app/uploads}" ]; then
+              TEST_MOUNT_PATH="true"
+            else
+              TEST_MOUNT_PATH="false"
+            fi
+            echo "[DATASET-PREFLIGHT] mountExists=${TEST_MOUNT_PATH}"
+            # Check if the dataset file exists
+            TEST_DATASET_EXISTS="false"
+            if [ -n "${DATASET_PATH_VISIBLE:-}" ] && [ -f "${DATASET_PATH_VISIBLE}" ]; then
+              TEST_DATASET_EXISTS="true"
+            fi
+            echo "[DATASET-PREFLIGHT] datasetExists=${TEST_DATASET_EXISTS}"
+            # Distinguish storage error from dataset error
+            if [ "$TEST_MOUNT_PATH" = "false" ]; then
+              echo "[STEP] STORAGE_MOUNT_MISSING"
+              echo "[CUSTOM-TRAINING] The shared uploads PVC is not mounted at ${MLOPS_UPLOADS_MOUNT_PATH:-/app/uploads}"
+              ls -la /app/uploads/projects/ || true
+              exit 1
+            fi
+            if [ "$TEST_DATASET_EXISTS" = "false" ]; then
+              echo "[STEP] DATASET_NOT_VISIBLE"
+              echo "[CUSTOM-TRAINING] Dataset not visible at ${DATASET_PATH_VISIBLE:-<no path>}"
+              # Show limited useful content without secrets
+              if [ -d "/app/uploads/projects" ]; then
+                echo "[CUSTOM-TRAINING] Available projects under /app/uploads/projects/:"
+                ls /app/uploads/projects/ 2>/dev/null | head -5 || true
+              fi
               exit 1
             fi
 
@@ -494,23 +554,23 @@ public class KubernetesJobService {
     }
 
     private boolean shouldAttachUploadsPvc() {
-        return uploadsPvcEnabled
-                && hasText(uploadsPvcName)
-                && hasText(uploadsMountPath);
+        return isUploadsPvcEnabled()
+                && hasText(getUploadsPvcName())
+                && hasText(getUploadsMountPath());
     }
 
     private void validateUploadsPvcExists(KubernetesClient client) {
         try {
             if (client.persistentVolumeClaims()
                     .inNamespace(namespace)
-                    .withName(uploadsPvcName.trim())
+                    .withName(getUploadsPvcName().trim())
                     .get() == null) {
-                throw new RuntimeException("Shared uploads PVC '" + uploadsPvcName
+                throw new RuntimeException("Shared uploads PVC '" + getUploadsPvcName()
                         + "' not found in namespace '" + namespace + "'.");
             }
         } catch (Exception e) {
             throw new RuntimeException("Failed to validate shared uploads PVC '"
-                    + uploadsPvcName + "': " + e.getMessage(), e);
+                    + getUploadsPvcName() + "': " + e.getMessage(), e);
         }
     }
 
@@ -565,12 +625,72 @@ public class KubernetesJobService {
         addOptionalEnv(envVars, "ML_TARGET_COLUMN", targetColumn);
 
         /*
-         * Do not set DATASET_PATH here.
+         * DATASET_PATH / DATA_PATH.
          *
-         * DATASET_PATH is injected into the generated Docker image by KubernetesBuildService.
-         * If we set DATASET_PATH here with an empty value, Kubernetes would override the image ENV
-         * and the dataset path would be lost.
+         * ARCHITECTURE FIX:
+         * Le dataset n'est PLUS figé dans l'image Docker. Il est résolu ici,
+         * par expérience, et injecté comme variable d'environnement du Pod au
+         * moment du lancement du Job. C'est la SEULE source de vérité.
+         *
+         * Règles :
+         *  - le chemin est résolu via DatasetFileResolverService (rôle-based) ;
+         *  - un script Python n'est JAMAIS accepté comme dataset : on lève une
+         *    exception claire avant de créer le Job ;
+         *  - on n'injecte la variable QUE si le fichier existe réellement sur
+         *    le PVC partagé /app/uploads (vérifié par le resolver).
          */
+        UploadedProjectFile resolvedDataset = datasetFileResolverService.resolveDatasetFile(project, experiment);
+
+        String datasetPath = null;
+        if (resolvedDataset != null && hasText(resolvedDataset.getFilePath())) {
+            datasetPath = normalizeMountPath(resolvedDataset.getFilePath());
+        }
+
+        if (datasetPath != null && datasetPath.toLowerCase(Locale.ROOT).endsWith(".py")) {
+            throw new IllegalStateException(
+                    "Invalid dataset path: Python script selected as dataset: " + datasetPath
+                            + " (file=" + resolvedDataset.getOriginalFileName()
+                            + ", role=" + (resolvedDataset.getRole() == null ? "-" : resolvedDataset.getRole().name())
+                            + "). La plateforme ne transmet jamais un script comme dataset."
+            );
+        }
+
+        if (datasetPath != null) {
+            addEnv(envVars, "DATASET_PATH", datasetPath);
+            addEnv(envVars, "DATA_PATH", datasetPath);
+            System.out.println("[DATASET_SELECTION] DATASET_PATH=" + datasetPath
+                    + ", file=" + resolvedDataset.getOriginalFileName()
+                    + ", role=" + (resolvedDataset.getRole() == null ? "-" : resolvedDataset.getRole().name()));
+        }
+
+        String trainingScriptPath = experiment.getModelFile() != null && hasText(experiment.getModelFile().getFilePath())
+                ? normalizeMountPath(experiment.getModelFile().getFilePath())
+                : "-";
+        UploadedProjectFile preprocessingScript = datasetFileResolverService.findPreprocessingScript(project);
+        String preprocessingScriptPath = preprocessingScript != null && hasText(preprocessingScript.getFilePath())
+                ? normalizeMountPath(preprocessingScript.getFilePath())
+                : "-";
+        String requirementsPath = hasText(experiment.getRequirementsPath())
+                ? normalizeMountPath(experiment.getRequirementsPath())
+                : "-";
+        String dockerfilePath = hasText(experiment.getDockerfilePath())
+                ? normalizeMountPath(experiment.getDockerfilePath())
+                : "-";
+
+        System.out.println("[TRAINING-FILES] datasetPath=" + (datasetPath != null ? datasetPath : "-"));
+        System.out.println("[TRAINING-FILES] trainingScriptPath=" + trainingScriptPath);
+        System.out.println("[TRAINING-FILES] preprocessingScriptPath=" + preprocessingScriptPath);
+        System.out.println("[TRAINING-FILES] requirementsPath=" + requirementsPath);
+        System.out.println("[TRAINING-FILES] dockerfilePath=" + dockerfilePath);
+        System.out.println("[TRAINING-FILES] trainingScriptRuntimeName=" + (experiment.getModelFile() != null
+                ? UploadFileNameNormalizer.runtimeName(experiment.getModelFile().getOriginalFileName(), UploadedFileType.TRAINING_SCRIPT) : "-"));
+        System.out.println("[TRAINING-FILES] datasetRuntimeName=" + (resolvedDataset != null
+                ? UploadFileNameNormalizer.runtimeName(
+                        resolvedDataset.getOriginalFileName(),
+                        resolvedDataset.getRole() != null ? resolvedDataset.getRole() : resolvedDataset.getFileType()) : "-"));
+        System.out.println("[TRAINING-FILES] requirementsRuntimeName=" + UploadFileNameNormalizer.REQUIREMENTS_RUNTIME_NAME
+                + ", dockerfileRuntimeName=" + UploadFileNameNormalizer.DOCKERFILE_RUNTIME_NAME);
+
         addEnv(envVars, "USER_SCRIPT", "train.py");
         addEnv(envVars, "WORKSPACE_DIR", "/workspace");
 
@@ -581,9 +701,9 @@ public class KubernetesJobService {
         /*
          * Inform the platform runner and user scripts where shared uploads are mounted.
          */
-        addEnv(envVars, "APP_UPLOAD_DIR", normalizeMountPath(uploadsMountPath));
-        addEnv(envVars, "MLOPS_UPLOADS_MOUNT_PATH", normalizeMountPath(uploadsMountPath));
-        addEnv(envVars, "MLOPS_UPLOADS_PVC_NAME", safe(uploadsPvcName));
+        addEnv(envVars, "APP_UPLOAD_DIR", normalizeMountPath(getUploadsMountPath()));
+        addEnv(envVars, "MLOPS_UPLOADS_MOUNT_PATH", normalizeMountPath(getUploadsMountPath()));
+        addEnv(envVars, "MLOPS_UPLOADS_PVC_NAME", safe(getUploadsPvcName()));
 
         addEnv(envVars, "MLOPS_AUTO_MODEL_DISCOVERY", "true");
         addEnv(envVars, "MLOPS_DEFAULT_OUTPUT_DIR", "/workspace/outputs");

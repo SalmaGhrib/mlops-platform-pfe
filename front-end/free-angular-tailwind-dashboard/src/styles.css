@@ -998,6 +998,34 @@ pre[class*="language-"].line-numbers {
   transform: translateY(-2px);
 }
 
+/* Widget sidebar : carte IA dégradée */
+.ai-widget {
+  background: linear-gradient(135deg, #4f46e5 0%, #6d28d9 45%, #0ea5e9 100%);
+}
+:host-context(.dark) .ai-widget {
+  background: linear-gradient(135deg, #4338ca 0%, #6d28d9 45%, #0284c7 100%);
+}
+
+/* Grille de points décorative */
+.ai-grid {
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.35) 1px, transparent 1px);
+  background-size: 14px 14px;
+}
+
+/* Halo flou décoratif */
+.ai-blob {
+  border-radius: 9999px;
+  filter: blur(40px);
+}
+
+/* Fond hero IA : voiles de couleurs + grille */
+.ai-hero {
+  background:
+    radial-gradient(60% 80% at 12% 15%, rgba(99, 102, 241, 0.14) 0%, transparent 70%),
+    radial-gradient(50% 70% at 88% 20%, rgba(34, 211, 238, 0.12) 0%, transparent 70%),
+    radial-gradient(45% 60% at 55% 100%, rgba(139, 92, 246, 0.12) 0%, transparent 70%);
+}
+
 /* Contrôles file : curseur pointeur cohérent */
 input[type="file"]::file-selector-button {
   cursor: pointer;

@@ -83,6 +83,66 @@ public class RunFailureAnalyzer {
         return new FailureAnalysis("UNKNOWN", "Erreur non classifiée", extractFirstLine(logs), "Consultez les logs détaillés.", "unknown", excerpt);
     }
 
+    /**
+     * Classe une erreur en code stable (String), utilisé par les étapes de
+     * pipeline (colonne error_code de run_pipeline_steps). Complémentaire de
+     * analyze() qui, lui, produit le contenu FR du FailureAnalysis.
+     */
+    public static String classifyErrorCode(String logs) {
+        if (logs == null) logs = "";
+        String lower = logs.toLowerCase(Locale.ROOT);
+
+        if (lower.contains("no matching distribution found")
+                || lower.contains("could not find a version that satisfies the requirement")
+                || lower.contains("failed to get fileinfo")
+                || lower.contains("no such file or directory")
+                || lower.contains("copy failed")
+                || lower.contains("failed to stat")) {
+            return "BUILD_FAILED";
+        }
+
+        if (lower.contains("manifest for ") && lower.contains(" not found")
+                || lower.contains("pull access denied")) {
+            return "IMAGE_PULL_FAILED";
+        }
+
+        if (lower.contains("cannot allocate memory")
+                || lower.contains("killed process")
+                || lower.contains("oom-kill")) {
+            return "OOM_KILLED";
+        }
+
+        if (lower.contains("no module named")
+                || lower.contains("modulenotfounderror")
+                || lower.contains("syntaxerror")
+                || lower.contains("traceback (most recent call last)")) {
+            return "USER_SCRIPT_FAILED";
+        }
+
+        if (lower.contains("dataset") && lower.contains("not found")
+                || lower.contains("no such file") && lower.contains("dataset")
+                || lower.contains("dataset path")) {
+            return "DATASET_PATH_MISMATCH";
+        }
+
+        if (lower.contains("mlflow") && lower.contains("exception")) {
+            return "MLFLOW_REGISTRATION_FAILED";
+        }
+
+        if (lower.contains("cuda")
+                || lower.contains("libcudart")
+                || lower.contains("out of memory")
+                || lower.contains("killed")) {
+            return "OOM_KILLED";
+        }
+
+        if (lower.contains("permission denied")) {
+            return "USER_SCRIPT_FAILED";
+        }
+
+        return "KUBERNETES_JOB_FAILED";
+    }
+
     private static String extractFirstLine(String text) {
         if (text == null || text.isBlank()) return "";
         String[] lines = text.split("\\r?\\n");

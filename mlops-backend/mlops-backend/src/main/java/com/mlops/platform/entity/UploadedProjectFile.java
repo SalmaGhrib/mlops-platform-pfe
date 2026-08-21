@@ -14,19 +14,27 @@ public class UploadedProjectFile {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-
-    @Column(nullable = false)
+    @Column(nullable = false, length = 50)
     private String originalFileName;
-
-    @Column(nullable = false)
+    @Column(nullable = false, length = 50)
     private String storedFileName;
 
     @Column(nullable = false, length = 1000)
     private String filePath;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
+    @Column(nullable = false, length = 50)
     private UploadedFileType fileType;
+
+    /**
+     * Rôle explicite du fichier, validé à l'enregistrement (source de vérité).
+     * Complete/converge avec {@link #fileType} mais ne dépend jamais de l'extension :
+     * uploader un script de préparation force DATASET_PREPARATION_SCRIPT même si son
+     * fichier est un .py (et inversement un .py ne peut JAMAIS devenir DATASET_FILE).
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "file_role", length = 60)
+    private UploadedFileType role = UploadedFileType.OTHER;
 
     /**
      * Type de données métier :
@@ -45,8 +53,7 @@ public class UploadedProjectFile {
     private String contentType;
 
     private Long sizeBytes;
-
-    @Column(nullable = false)
+    @Column(nullable = false, length = 50)
     private LocalDateTime uploadedAt;
 
     /**
@@ -176,6 +183,14 @@ public class UploadedProjectFile {
 
     public void setFileType(UploadedFileType fileType) {
         this.fileType = fileType;
+    }
+
+    public UploadedFileType getRole() {
+        return role;
+    }
+
+    public void setRole(UploadedFileType role) {
+        this.role = role != null ? role : UploadedFileType.OTHER;
     }
 
     public void setDataType(String dataType) {

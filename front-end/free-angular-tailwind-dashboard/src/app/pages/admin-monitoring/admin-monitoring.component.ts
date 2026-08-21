@@ -1,6 +1,9 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Subscription, interval } from 'rxjs';
 import {
+  AdminMonitoringOverview,
+  AdminProjectHealthItem,
   MonitoringService,
   MonitoringSummary
 } from '../../core/services/monitoring.service';
@@ -12,8 +15,12 @@ import {
   templateUrl: './admin-monitoring.component.html',
   styleUrl: './admin-monitoring.component.css'
 })
-export class AdminMonitoringComponent implements OnInit {
+export class AdminMonitoringComponent implements OnInit, OnDestroy {
+  private readonly pollingIntervalMs = 20000;
+  private pollingSubscription: Subscription | null = null;
+
   summary: MonitoringSummary | null = null;
+  overview: AdminMonitoringOverview | null = null;
   loading = false;
   errorMessage = '';
 
@@ -24,21 +31,57 @@ export class AdminMonitoringComponent implements OnInit {
 
   ngOnInit(): void {
     this.loadMonitoringSummary();
+    this.loadMonitoringOverview();
+
+    this.pollingSubscription = interval(this.pollingIntervalMs).subscribe(() => {
+      this.loadMonitoringSummary(true);
+      this.loadMonitoringOverview(true);
+    });
   }
 
-  loadMonitoringSummary(): void {
-    this.loading = true;
-    this.errorMessage = '';
+  ngOnDestroy(): void {
+    if (this.pollingSubscription) {
+      this.pollingSubscription.unsubscribe();
+      this.pollingSubscription = null;
+    }
+  }
+
+  loadMonitoringSummary(silent = false): void {
+    if (!silent) {
+      this.loading = true;
+      this.errorMessage = '';
+    }
 
     this.monitoringService.getSummary().subscribe({
       next: (data) => {
         this.summary = data;
-        this.loading = false;
+
+        if (!silent) {
+          this.loading = false;
+        }
       },
       error: (error) => {
         console.error('Monitoring loading error:', error);
-        this.errorMessage = 'Impossible de charger les métriques de monitoring.';
-        this.loading = false;
+
+        if (!silent) {
+          this.errorMessage = 'Impossible de charger les métriques de monitoring.';
+          this.loading = false;
+        }
+      }
+    });
+  }
+
+  loadMonitoringOverview(silent = false): void {
+    this.monitoringService.getOverview().subscribe({
+      next: (data) => {
+        this.overview = data;
+      },
+      error: (error) => {
+        console.error('Monitoring overview loading error:', error);
+
+        if (!silent) {
+          this.errorMessage = 'Impossible de charger la vue d’ensemble du monitoring.';
+        }
       }
     });
   }
@@ -343,5 +386,82 @@ getRuntimePieStyle(): string {
     #f97316 ${standard}% ${standard + docker}%,
     #374151 ${standard + docker}% 100%
   )`;
+}
+
+formatOverviewDate(value: string | null | undefined): string {
+  if (!value) {
+    return '-';
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString('fr-FR', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+qualityStatusLabel(status: string | null | undefined): string {
+  const value = (status ?? '').toUpperCase();
+
+  if (value === 'CONFORMING') {
+    return 'Conforme';
+  }
+
+  if (value === 'INSUFFICIENT') {
+    return 'Insuffisante';
+  }
+
+  if (value === 'NO_PRODUCTION_MODEL') {
+    return 'Aucun modèle';
+  }
+
+  return 'Non configuré';
+}
+
+qualityStatusClass(status: string | null | undefined): string {
+  const value = (status ?? '').toUpperCase();
+
+  if (value === 'CONFORMING') {
+    return 'status-ok';
+  }
+
+  if (value === 'INSUFFICIENT') {
+    return 'status-danger';
+  }
+
+  if (value === 'NO_PRODUCTION_MODEL') {
+    return 'status-warning';
+  }
+
+  return 'status-info';
+}
+
+severityClass(severity: string | null | undefined): string {
+  const value = (severity ?? '').toLowerCase();
+
+  if (value.includes('critical') || value.includes('high')) {
+    return 'status-danger';
+  }
+
+  if (value.includes('warning') || value.includes('medium')) {
+    return 'status-warning';
+  }
+
+  return 'status-ok';
+}
+
+trackByProject(_: number, item: AdminProjectHealthItem): number {
+  return item.projectId;
+}
+
+trackByAlert(_: number, item: { id: number }): number {
+  return item.id;
 }
 }

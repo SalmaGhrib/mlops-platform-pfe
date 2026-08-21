@@ -36,64 +36,64 @@ export const routes: Routes = [
         path: '',
         component: LandingComponent,
         pathMatch: 'full',
-        title: 'Accueil | MLOps Platform'
+        title: 'Accueil | MLOps Pilot'
       },
       {
         path: 'dashboard',
         component: EcommerceComponent,
-        title: 'Dashboard | MLOps Platform'
+        title: 'Tableau de bord | MLOps Pilot'
       },
       {
         path: 'my-monitoring',
         component: UserMonitoringComponent,
-        title: 'My Monitoring | MLOps Platform'
+        title: 'My Monitoring | MLOps Pilot'
       },
       {
         path: 'my-projects',
         component: MyProjectsComponent,
-        title: 'Mes Projets | MLOps Platform'
+        title: 'Mes Projets | MLOps Pilot'
       },
       {
         path: 'upload-training',
         component: UploadTrainingComponent,
-        title: 'Upload & Training | MLOps Platform'
+        title: 'Upload & Training | MLOps Pilot'
       },
       {
         path: 'model-registry',
         component: ModelRegistryComponent,
-        title: 'Model Registry | MLOps Platform'
+        title: 'Model Registry | MLOps Pilot'
       },
       {
         path: 'prediction-test',
         component: PredictionTestComponent,
-        title: 'Prediction Test | MLOps Platform'
+        title: 'Prediction Test | MLOps Pilot'
       },
       {
         path: 'users-management',
         component: UsersManagementComponent,
         canActivate: [adminGuard],
-        title: 'Users Management | MLOps Platform'
+        title: 'Users Management | MLOps Pilot'
       },
       {
         path: 'admin-monitoring',
         component: AdminMonitoringComponent,
         canActivate: [adminGuard],
-        title: 'Admin Monitoring | MLOps Platform'
+        title: 'Admin Monitoring | MLOps Pilot'
       },
       {
         path: 'profile',
         component: ProfileComponent,
-        title: 'Profile | MLOps Platform'
+        title: 'Profile | MLOps Pilot'
       },
       {
         path: 'accessible-models',
         component: AccessibleModelsComponent,
-        title: 'Accessible Models | MLOps Platform'
+        title: 'Accessible Models | MLOps Pilot'
       },
       {
         path: 'model-deployments',
         component: ModelDeploymentsComponent,
-        title: 'Deployed Models | MLOps Platform'
+        title: 'Deployed Models | MLOps Pilot'
       }
     ]
   },
@@ -101,32 +101,32 @@ export const routes: Routes = [
     path: 'signin',
     component: SignInComponent,
     canActivate: [guestGuard],
-    title: 'Sign In | MLOps Platform'
+    title: 'Connexion | MLOps Pilot'
   },
   {
     path: 'signup',
     component: SignUpComponent,
     canActivate: [guestGuard],
-    title: 'Sign Up | MLOps Platform'
+    title: 'Inscription | MLOps Pilot'
   },
   {
     path: 'verify-email',
     component: VerifyEmailComponent,
-    title: 'Verify Email | MLOps Platform'
+    title: 'Verify Email | MLOps Pilot'
   },
   {
     path: 'forgot-password',
     component: ForgotPasswordComponent,
-    title: 'Forgot Password | MLOps Platform'
+    title: 'Mot de passe oublié | MLOps Pilot'
   },
   {
     path: 'reset-password',
     component: ResetPasswordComponent,
-    title: 'Reset Password | MLOps Platform'
+    title: 'Reset Password | MLOps Pilot'
   },
   {
     path: '**',
     component: NotFoundComponent,
-    title: 'Not Found | MLOps Platform'
+    title: 'Not Found | MLOps Pilot'
   }
 ];

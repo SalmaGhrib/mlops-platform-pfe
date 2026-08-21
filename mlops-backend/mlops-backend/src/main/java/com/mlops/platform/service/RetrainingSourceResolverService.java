@@ -205,6 +205,52 @@ public class RetrainingSourceResolverService {
     }
 
     /**
+     * Version non bloquante de resolveSourceExperimentId.
+     *
+     * Retourne null (sans exception) lorsqu'aucune Production valide n'existe
+     * pour le projet. Utilisée par la validation du claim : une configuration
+     * sans source ne doit pas être réclamée, mais son échéance doit pouvoir
+     * être avancée proprement.
+     */
+    public Long resolveSourceExperimentIdOrNull(
+            Long projectId,
+            Long preferredSourceExperimentId
+    ) {
+        try {
+            return resolveSourceExperimentId(
+                    projectId,
+                    preferredSourceExperimentId
+            );
+        } catch (IllegalStateException noProduction) {
+            System.out.println(
+                    "[RETRAINING_SOURCE] No Production source available. "
+                            + "projectId="
+                            + projectId
+                            + ", preferredSourceExperimentId="
+                            + preferredSourceExperimentId
+                            + ", reason="
+                            + safeMessage(
+                                    noProduction.getMessage()
+                            )
+            );
+
+            return null;
+        } catch (RuntimeException unexpected) {
+            System.err.println(
+                    "[RETRAINING_SOURCE] Source resolution failed. "
+                            + "projectId="
+                            + projectId
+                            + ", reason="
+                            + safeMessage(
+                                    unexpected.getMessage()
+                            )
+            );
+
+            return null;
+        }
+    }
+
+    /**
      * Répare le cache sourceExperimentId d'une configuration active.
      */
     public void repairEnabledConfig(

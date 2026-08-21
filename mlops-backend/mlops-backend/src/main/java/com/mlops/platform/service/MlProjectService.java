@@ -4,6 +4,7 @@ import com.mlops.platform.dto.DeleteProjectResponse;
 import com.mlops.platform.dto.MlProjectMetricsRequest;
 import com.mlops.platform.dto.MlProjectRequest;
 import com.mlops.platform.dto.MlProjectResponse;
+import com.mlops.platform.dto.SearchPageResponse;
 import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.entity.UploadedProjectFile;
@@ -14,17 +15,24 @@ import com.mlops.platform.repository.UploadedProjectFileRepository;
 import com.mlops.platform.repository.UserRepository;
 import com.mlops.platform.security.JwtService;
 import com.mlops.platform.dto.RetrainingConfigRequest;
+import jakarta.persistence.criteria.Expression;
+import jakarta.persistence.criteria.Predicate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class MlProjectService {
@@ -46,6 +54,14 @@ public class MlProjectService {
      * à travers le proxy Spring.
      */
     private final ApplicationContext applicationContext;
+
+    /*
+     * Verrous par projet : deux mises à jour simultanées des priorités sur le
+     * même projet sont sérialisées pour éviter d'intercaler les recalculs de
+     * scores et la réévaluation de la Production.
+     */
+    private final ConcurrentHashMap<Long, Object> projectMetricLocks =
+            new ConcurrentHashMap<>();
 
     @Value("${app.upload.dir:uploads}")
     private String uploadDir;
@@ -251,6 +267,164 @@ public class MlProjectService {
                 .stream()
                 .map(this::mapToResponse)
                 .toList();
+    }
+
+    /**
+     * Recherche dynamique et intelligente des projets.
+     *
+     * La recherche est effectuée côté base de données (requêtes indexées,
+     * pagination LIMIT/OFFSET) et ordonnée par pertinence :
+     * - correspondance exacte sur le nom (score 100)
+     * - préfixe du nom (score 80)
+     * - occurrence dans le nom (score 60)
+     * - description (score 40) puis colonne cible (30) puis métriques (20)
+     *
+     * Les filtres projectType (classification/regression) et dataType
+     * (TABULAR/IMAGE/TEXT) sont appliqués comme prédicats SQL purs.
+     *
+     * @param q           texte libre (tokens AND sur nom/description/cible/métriques)
+     * @param projectType filtre exact "classification" | "regression"
+     * @param dataType    filtre exact "TABULAR" | "IMAGE" | "TEXT"
+     * @param page        numéro de page (0-based)
+     * @param size        taille de page (1..50)
+     */
+    @Transactional(readOnly = true, timeout = 15)
+    public SearchPageResponse<MlProjectResponse> searchProjects(
+            String authHeader,
+            String q,
+            String projectType,
+            String dataType,
+            int page,
+            int size
+    ) {
+        User owner = getUserFromAuthorizationHeader(authHeader);
+
+        int safePage = Math.max(0, page);
+        int safeSize = Math.min(Math.max(1, size), 50);
+
+        Specification<MlProject> spec =
+                projectSearchSpecification(owner, q, projectType, dataType);
+
+        Page<MlProject> result = mlProjectRepository.findAll(
+                spec,
+                PageRequest.of(safePage, safeSize)
+        );
+
+        List<MlProjectResponse> items = result
+                .getContent()
+                .stream()
+                .map(this::mapToResponse)
+                .toList();
+
+        return new SearchPageResponse<>(
+                items,
+                result.getTotalElements(),
+                safePage,
+                safeSize
+        );
+    }
+
+    /**
+     * Construit la Specification dynamique de recherche des projets :
+     * prédicats AND (owner + filtres + tokens) et tri par score de pertinence.
+     */
+    private Specification<MlProject> projectSearchSpecification(
+            User owner,
+            String q,
+            String projectType,
+            String dataType
+    ) {
+        return (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+
+            predicates.add(cb.equal(root.get("owner"), owner));
+
+            if (projectType != null && !projectType.isBlank()) {
+                predicates.add(cb.equal(
+                        cb.lower(root.get("projectType")),
+                        projectType.trim().toLowerCase()
+                ));
+            }
+
+            if (dataType != null && !dataType.isBlank()) {
+                predicates.add(cb.equal(
+                        cb.lower(root.get("dataType")),
+                        dataType.trim().toUpperCase()
+                ));
+            }
+
+            String cleanQuery = q != null ? q.trim() : null;
+
+            if (cleanQuery != null && !cleanQuery.isBlank()) {
+                String[] tokens = cleanQuery.toLowerCase().split("\\s+");
+
+                Expression<String> name = lowerExpr(cb, root.get("name"));
+                Expression<String> description =
+                        lowerExpr(cb, root.get("description"));
+                Expression<String> targetColumn =
+                        lowerExpr(cb, root.get("targetColumn"));
+                Expression<String> metric1 =
+                        lowerExpr(cb, root.get("primaryMetric1"));
+                Expression<String> metric2 =
+                        lowerExpr(cb, root.get("primaryMetric2"));
+                Expression<String> metric3 =
+                        lowerExpr(cb, root.get("primaryMetric3"));
+
+                List<Expression<Integer>> relevanceTerms = new ArrayList<>();
+
+                for (String token : tokens) {
+                    String any = "%" + token + "%";
+                    String prefix = token + "%";
+
+                    predicates.add(cb.or(
+                            cb.like(name, any),
+                            cb.like(description, any),
+                            cb.like(targetColumn, any),
+                            cb.like(metric1, any),
+                            cb.like(metric2, any),
+                            cb.like(metric3, any)
+                    ));
+
+                    relevanceTerms.add(cb.<Integer>selectCase()
+                            .when(cb.equal(name, token), 100)
+                            .when(cb.like(name, prefix), 80)
+                            .when(cb.like(name, any), 60)
+                            .when(cb.like(description, any), 40)
+                            .when(cb.like(targetColumn, any), 30)
+                            .when(cb.or(
+                                    cb.like(metric1, any),
+                                    cb.like(metric2, any),
+                                    cb.like(metric3, any)
+                            ), 20)
+                            .otherwise(0));
+                }
+
+                Expression<Integer> relevance = relevanceTerms.get(0);
+                for (int i = 1; i < relevanceTerms.size(); i++) {
+                    relevance = cb.sum(relevance, relevanceTerms.get(i));
+                }
+
+                query.orderBy(
+                        cb.desc(relevance),
+                        cb.desc(root.get("createdAt"))
+                );
+            } else {
+                query.orderBy(cb.desc(root.get("createdAt")));
+            }
+
+            return cb.and(predicates.toArray(new Predicate[0]));
+        };
+    }
+
+    /**
+     * Coalesce + lower : évite qu'un champ NULL ne disqualifie le résultat
+     * dans les comparaisons LIKE.
+     */
+    private Expression<String> lowerExpr(
+            jakarta.persistence.criteria.CriteriaBuilder cb,
+            jakarta.persistence.criteria.Path<?> field
+    ) {
+        return cb.lower(cb.coalesce(field.as(String.class), ""));
     }
 
     @Transactional(readOnly = true, timeout = 15)
@@ -549,6 +723,25 @@ public class MlProjectService {
     ) {
         User owner = getUserFromAuthorizationHeader(authHeader);
 
+        Object projectLock = projectMetricLocks.computeIfAbsent(
+                projectId,
+                ignored -> new Object()
+        );
+
+        synchronized (projectLock) {
+            return updateProjectMetricsInternal(
+                    owner,
+                    projectId,
+                    request
+            );
+        }
+    }
+
+    private MlProjectResponse updateProjectMetricsInternal(
+            User owner,
+            Long projectId,
+            MlProjectMetricsRequest request
+    ) {
         MlProject savedProject = applicationContext
                 .getBean(MlProjectService.class)
                 .saveProjectMetricsTransactional(
@@ -556,6 +749,13 @@ public class MlProjectService {
                         projectId,
                         request
                 );
+
+        System.out.println("[METRIC_PRIORITY_UPDATED] projectId="
+                + savedProject.getId()
+                + ", primaryMetric1=" + savedProject.getPrimaryMetric1()
+                + ", primaryMetric2=" + savedProject.getPrimaryMetric2()
+                + ", primaryMetric3=" + savedProject.getPrimaryMetric3()
+                + ", autoPromoteBestModel=" + savedProject.getAutoPromoteBestModel());
 
         String registeredModelName =
                 buildRegisteredModelName(savedProject);
@@ -566,16 +766,16 @@ public class MlProjectService {
          */
         try {
             mlExperimentService
-                    .recalculateGlobalScoresForProject(
-                            savedProject,
-                            registeredModelName
+                    .recalculateAllGlobalScoresForProject(
+                            savedProject
                     );
 
             System.out.println(
-                    "[PROJECT_METRICS] Global scores recalculated. projectId="
+                    "[GLOBAL_SCORE_RECALCULATED] projectId="
                             + savedProject.getId()
-                            + ", model="
+                            + ", all registered models covered ("
                             + registeredModelName
+                            + ") using updated priorities"
             );
 
         } catch (Exception error) {
@@ -598,7 +798,7 @@ public class MlProjectService {
                         );
 
                 System.out.println(
-                        "[PROJECT_METRICS] Auto lifecycle completed. projectId="
+                        "[PRODUCTION_REEVALUATION] completed. projectId="
                                 + savedProject.getId()
                 );
 
@@ -613,9 +813,8 @@ public class MlProjectService {
 
             try {
                 mlExperimentService
-                        .recalculateGlobalScoresForProject(
-                                savedProject,
-                                registeredModelName
+                        .recalculateAllGlobalScoresForProject(
+                                savedProject
                         );
 
             } catch (Exception error) {

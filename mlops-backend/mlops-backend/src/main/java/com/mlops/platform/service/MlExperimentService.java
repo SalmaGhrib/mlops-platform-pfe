@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mlops.platform.dto.DeleteExperimentResponse;
 import com.mlops.platform.dto.MlExperimentResponse;
 import com.mlops.platform.dto.PipelineGatewayResponse;
+import com.mlops.platform.dto.PipelineStatusResponse;
 import com.mlops.platform.entity.ExperimentStatus;
 import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.MlExperimentMetric;
@@ -48,6 +49,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -69,6 +71,9 @@ public class MlExperimentService {
     private final RestTemplate restTemplate;
     private final NotificationService notificationService;
     private final PlatformTransactionManager transactionManager;
+    private final RunPipelineStepService runPipelineStepService;
+    private final MetricNormalizationHelper metricNormalizationHelper;
+    private final DatasetFileResolverService datasetFileResolverService;
 
     @Value("${app.upload.dir:uploads}")
     private String uploadDir;
@@ -92,7 +97,10 @@ public class MlExperimentService {
             KubernetesJobService kubernetesJobService,
             RestTemplate restTemplate,
             NotificationService notificationService,
-            PlatformTransactionManager transactionManager
+            PlatformTransactionManager transactionManager,
+            RunPipelineStepService runPipelineStepService,
+            MetricNormalizationHelper metricNormalizationHelper,
+            DatasetFileResolverService datasetFileResolverService
     ) {
         this.mlExperimentRepository = mlExperimentRepository;
         this.mlProjectRepository = mlProjectRepository;
@@ -108,6 +116,9 @@ public class MlExperimentService {
         this.restTemplate = restTemplate;
         this.notificationService = notificationService;
         this.transactionManager = transactionManager;
+        this.runPipelineStepService = runPipelineStepService;
+        this.metricNormalizationHelper = metricNormalizationHelper;
+        this.datasetFileResolverService = datasetFileResolverService;
     }
 
     /*
@@ -142,7 +153,8 @@ public class MlExperimentService {
                 runtimeMode,
                 customImageUri,
                 dockerfileFile,
-                requirementsFile
+                requirementsFile,
+                null
         );
     }
 
@@ -163,7 +175,8 @@ public class MlExperimentService {
             String runtimeMode,
             String customImageUri,
             MultipartFile dockerfileFile,
-            MultipartFile requirementsFile
+            MultipartFile requirementsFile,
+            String datasetRole
     ) {
         User owner = getUserFromAuthorizationHeader(authHeader);
 
@@ -188,11 +201,26 @@ public class MlExperimentService {
             throw new RuntimeException("Dockerfile or custom image URI is required for CUSTOM_DOCKERFILE mode");
         }
 
-        UploadedProjectFile savedModelFile = saveUploadedFile(project, modelFile, UploadedFileType.MODEL_FILE);
+        UploadFileNameNormalizer.validate(modelFile.getOriginalFilename(), UploadedFileType.TRAINING_SCRIPT);
+        UploadedProjectFile savedModelFile = saveUploadedFile(project, modelFile, UploadedFileType.TRAINING_SCRIPT);
+        System.out.println("[UPLOAD] role=TRAINING_SCRIPT"
+                + " original=" + savedModelFile.getOriginalFileName()
+                + " runtime=" + UploadFileNameNormalizer.runtimeName(
+                        savedModelFile.getOriginalFileName(), UploadedFileType.TRAINING_SCRIPT));
 
         UploadedProjectFile savedDatasetFile = null;
         if (datasetFile != null && !datasetFile.isEmpty()) {
-            savedDatasetFile = saveUploadedFile(project, datasetFile, UploadedFileType.DATASET);
+            UploadedFileType resolvedDatasetRole = resolveDatasetRole(
+                    datasetRole,
+                    datasetFile.getOriginalFilename()
+            );
+            UploadFileNameNormalizer.validate(datasetFile.getOriginalFilename(), resolvedDatasetRole);
+            validateUploadedDatasetRole(resolvedDatasetRole, datasetFile.getOriginalFilename());
+            savedDatasetFile = saveUploadedFile(project, datasetFile, resolvedDatasetRole);
+            System.out.println("[UPLOAD] role=" + resolvedDatasetRole.name()
+                    + " original=" + savedDatasetFile.getOriginalFileName()
+                    + " runtime=" + UploadFileNameNormalizer.runtimeName(
+                            savedDatasetFile.getOriginalFileName(), resolvedDatasetRole));
         }
 
         String dockerfilePath = null;
@@ -200,11 +228,21 @@ public class MlExperimentService {
 
         if (customDockerMode) {
             if (dockerfileFile != null && !dockerfileFile.isEmpty()) {
+                UploadFileNameNormalizer.validate(dockerfileFile.getOriginalFilename(), UploadedFileType.DOCKERFILE);
                 dockerfilePath = saveRuntimeSupportFile(project, dockerfileFile, "docker", "Dockerfile");
+                System.out.println("[UPLOAD] role=DOCKERFILE"
+                        + " original=" + dockerfileFile.getOriginalFilename()
+                        + " runtime=" + UploadFileNameNormalizer.runtimeName(
+                                dockerfileFile.getOriginalFilename(), UploadedFileType.DOCKERFILE));
             }
 
             if (requirementsFile != null && !requirementsFile.isEmpty()) {
+                UploadFileNameNormalizer.validate(requirementsFile.getOriginalFilename(), UploadedFileType.REQUIREMENTS);
                 requirementsPath = saveRuntimeSupportFile(project, requirementsFile, "docker", "requirements.txt");
+                System.out.println("[UPLOAD] role=REQUIREMENTS"
+                        + " original=" + requirementsFile.getOriginalFilename()
+                        + " runtime=" + UploadFileNameNormalizer.runtimeName(
+                                requirementsFile.getOriginalFilename(), UploadedFileType.REQUIREMENTS));
             }
         }
 
@@ -293,6 +331,13 @@ public class MlExperimentService {
 
                 MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(experiment);
 
+                runPipelineStepService.initializeForExperiment(savedExperiment);
+                runPipelineStepService.markSucceeded(
+                        savedExperiment,
+                        RunPipelineStepService.FILES_VALIDATED,
+                        "Fichiers validés (mode Dockerfile personnalisé, image fournie)."
+                );
+
                 try {
                     String jobName = kubernetesJobService.launchCustomImageTrainingJob(
                             project,
@@ -309,6 +354,17 @@ public class MlExperimentService {
                             "Custom Docker image Job launched successfully. Waiting for MLflow synchronization."
                     );
 
+                    runPipelineStepService.markSucceeded(
+                            savedExperiment,
+                            RunPipelineStepService.TRAINING_JOB_CREATED,
+                            "Job Kubernetes créé: " + jobName
+                    );
+                    runPipelineStepService.markRunning(
+                            savedExperiment,
+                            RunPipelineStepService.TRAINING_RUNNING,
+                            "Exécution du Job d'entraînement Kubernetes en cours."
+                    );
+
                     MlExperiment updatedExperiment = mlExperimentRepository.saveAndFlush(savedExperiment);
                     triggerImmediateProjectSync(project.getId());
                     return mapToResponse(updatedExperiment);
@@ -320,6 +376,15 @@ public class MlExperimentService {
                     savedExperiment.setBuildLogs(e.getMessage());
                     savedExperiment.setErrorMessage(e.getMessage());
                     savedExperiment.setMessage("Failed to launch custom Docker image Job.");
+
+                    runPipelineStepService.markFailed(
+                            savedExperiment,
+                            RunPipelineStepService.TRAINING_JOB_CREATED,
+                            "KUBERNETES_JOB_FAILED",
+                            e.getMessage(),
+                            "Échec de la création du Job Kubernetes d'entraînement.",
+                            null
+                    );
 
                     MlExperiment failedExperiment = mlExperimentRepository.saveAndFlush(savedExperiment);
                     notifyExperimentStatusChangedIfNeeded(ExperimentStatus.RUNNING, failedExperiment);
@@ -334,6 +399,19 @@ experiment.setMessage(
 );
 
             MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(experiment);
+
+            runPipelineStepService.initializeForExperiment(savedExperiment);
+            runPipelineStepService.markSucceeded(
+                    savedExperiment,
+                    RunPipelineStepService.FILES_VALIDATED,
+                    "Fichiers validés (mode Dockerfile personnalisé)."
+            );
+            runPipelineStepService.markRunning(
+                    savedExperiment,
+                    RunPipelineStepService.IMAGE_BUILD_STARTED,
+                    "En attente du job Kaniko de construction de l'image."
+            );
+
             return mapToResponse(savedExperiment);
         }
 
@@ -381,12 +459,35 @@ experiment.setMessage(
             );
 
             MlExperiment failedExperiment = mlExperimentRepository.saveAndFlush(experiment);
+
+            runPipelineStepService.initializeForExperiment(failedExperiment);
+            runPipelineStepService.markSucceeded(
+                    failedExperiment,
+                    RunPipelineStepService.SUBMITTED,
+                    "Fichiers validés."
+            );
+            runPipelineStepService.markFailed(
+                    failedExperiment,
+                    RunPipelineStepService.KFP_PIPELINE_CREATED,
+                    "UNSUPPORTED_DEPENDENCY_STANDARD_RUNTIME",
+                    errorMsg,
+                    "Le script utilise des dépendances indisponibles dans le Runtime standard.",
+                    null
+            );
+
             notifyExperimentStatusChangedIfNeeded(ExperimentStatus.RUNNING, failedExperiment);
             return mapToResponse(failedExperiment);
         }
 
         experiment.setMessage("Script compatible with STANDARD_RUNTIME. Launching Kubeflow pipeline without replacement.");
         MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(experiment);
+
+        runPipelineStepService.initializeForExperiment(savedExperiment);
+        runPipelineStepService.markSucceeded(
+                savedExperiment,
+                RunPipelineStepService.SUBMITTED,
+                "Fichiers validés et script analysé pour le Runtime standard."
+        );
 
         try {
             PipelineGatewayResponse gatewayResponse = pipelineClientService.launchCustomModelPipeline(
@@ -437,12 +538,37 @@ experiment.setMessage(
             if (gatewayStatus == ExperimentStatus.FAILED) {
                 savedExperiment.setErrorMessage(gatewayResponse.getMessage());
                 savedExperiment.setMessage("Kubeflow pipeline launch failed: " + gatewayResponse.getMessage());
+
+                runPipelineStepService.markFailed(
+                        savedExperiment,
+                        RunPipelineStepService.KFP_PIPELINE_CREATED,
+                        "KUBEFLOW_RUN_FAILED",
+                        gatewayResponse.getMessage(),
+                        "Échec de la création/soumission du run Kubeflow.",
+                        null
+                );
             } else {
                 savedExperiment.setErrorMessage(null);
                 savedExperiment.setMessage(
                         gatewayResponse.getMessage() != null && !gatewayResponse.getMessage().isBlank()
                                 ? gatewayResponse.getMessage()
                                 : "Kubeflow pipeline launched. Waiting for MLflow synchronization."
+                );
+
+                runPipelineStepService.markSucceeded(
+                        savedExperiment,
+                        RunPipelineStepService.KFP_PIPELINE_CREATED,
+                        "Pipeline Kubeflow créée (runId=" + savedExperiment.getKubeflowRunId() + ")."
+                );
+                runPipelineStepService.markSucceeded(
+                        savedExperiment,
+                        RunPipelineStepService.KFP_RUN_SUBMITTED,
+                        "Run Kubeflow soumis."
+                );
+                runPipelineStepService.markRunning(
+                        savedExperiment,
+                        RunPipelineStepService.KFP_TRAINING_RUNNING,
+                        "Entraînement Kubeflow en cours."
                 );
             }
 
@@ -455,6 +581,15 @@ experiment.setMessage(
             applyExecutionTimestampsForStatus(savedExperiment, ExperimentStatus.FAILED);
             savedExperiment.setErrorMessage(e.getMessage());
             savedExperiment.setMessage("Failed to launch Kubeflow pipeline, but the experiment remains saved in MySQL.");
+
+            runPipelineStepService.markFailed(
+                    savedExperiment,
+                    RunPipelineStepService.KFP_PIPELINE_CREATED,
+                    "KUBEFLOW_RUN_FAILED",
+                    e.getMessage(),
+                    "Échec de la soumission du run Kubeflow.",
+                    null
+            );
 
             MlExperiment failedExperiment = mlExperimentRepository.saveAndFlush(savedExperiment);
             notifyExperimentStatusChangedIfNeeded(ExperimentStatus.RUNNING, failedExperiment);
@@ -684,10 +819,32 @@ experiment.setMessage(
             experiment.setBuildStatus("FAILED");
         }
 
+        // Un run en échec ne conserve aucune métrique métier ni score global :
+        // exposer des valeurs obsolètes masquerait le vrai état du run.
+        clearPerformanceMetricsIfPresent(experiment);
+
         MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(experiment);
         notifyExperimentStatusChangedIfNeeded(previousStatus, savedExperiment);
 
         return savedExperiment;
+    }
+
+    private void clearPerformanceMetricsIfPresent(MlExperiment experiment) {
+        if (experiment == null || experiment.getId() == null) {
+            return;
+        }
+
+        try {
+            metricRepository.deleteByExperimentId(experiment.getId());
+            metricRepository.flush();
+        } catch (Exception ignored) {
+            // Le nettoyage des métriques ne doit jamais faire échouer le marquage en échec.
+        }
+
+        experiment.setPrimaryMetric(null);
+        experiment.setDirection(null);
+        experiment.setPrimaryMetricValue(null);
+        experiment.setGlobalScore(null);
     }
 
     public MlExperimentResponse getExperimentById(String authHeader, Long projectId, Long experimentId) {
@@ -700,6 +857,39 @@ experiment.setMessage(
                 .orElseThrow(() -> new RuntimeException("Experiment not found"));
 
         return mapToResponse(experiment);
+    }
+
+    /**
+     * État courant des étapes de pipeline d'un run (GET /api/experiments/{id}/pipeline-status).
+     * Légère : ne rescannne ni MLflow ni Kubernetes, lit uniquement la table run_pipeline_steps.
+     */
+    public PipelineStatusResponse getPipelineStatus(String authHeader, Long experimentId) {
+        MlExperiment experiment = findOwnedExperiment(authHeader, experimentId);
+        return runPipelineStepService.getPipelineStatus(experiment);
+    }
+
+    /**
+     * Logs détaillés d'une étape précise (GET /api/experiments/{id}/pipeline-steps/{stepCode}/logs).
+     */
+    public String getPipelineStepLogs(String authHeader, Long experimentId, String stepCode) {
+        findOwnedExperiment(authHeader, experimentId);
+        return runPipelineStepService.getStepLogs(experimentId, stepCode);
+    }
+
+    private MlExperiment findOwnedExperiment(String authHeader, Long experimentId) {
+        User owner = getUserFromAuthorizationHeader(authHeader);
+
+        MlExperiment experiment = mlExperimentRepository.findById(experimentId)
+                .orElseThrow(() -> new RuntimeException("Experiment not found"));
+
+        MlProject project = experiment.getProject();
+
+        if (project == null
+                || !owner.getId().equals(project.getOwner().getId())) {
+            throw new RuntimeException("Experiment not accessible");
+        }
+
+        return experiment;
     }
 
     public List<MlExperimentResponse> syncProjectResults(String authHeader, Long projectId) {
@@ -2844,6 +3034,8 @@ private void updateMessageFromFinalStatus(
 
     syncKubeflowRunState(experiment);
 
+    recordStandardKubeflowStepState(experiment);
+
     System.out.println("[AUTO_SYNC] Sync experimentId=" + experiment.getId()
             + ", projectId=" + (project != null ? project.getId() : null)
             + ", kubeflowStatus=" + experiment.getKubeflowStatus()
@@ -2918,6 +3110,12 @@ private void updateMessageFromFinalStatus(
             + ", metrics=" + (runDetails.getMetrics() != null ? runDetails.getMetrics().size() : 0));
 
     String effectiveRunId = runDetails.getRunId();
+
+    runPipelineStepService.markRunning(
+            experiment,
+            RunPipelineStepService.MLFLOW_REGISTERED,
+            "Synchronisation MLflow en cours (runId=" + effectiveRunId + ")."
+    );
 
     if (isMlflowRunAlreadyLinkedToAnotherExperiment(effectiveRunId, experiment.getId())) {
         List<MlExperiment> linkedExperiments = mlExperimentRepository.findAllByMlflowRunId(effectiveRunId);
@@ -3031,6 +3229,22 @@ private void updateMessageFromFinalStatus(
 
     if (modelVersion != null && !modelVersion.isBlank()) {
         experiment.setModelVersion(modelVersion);
+
+        runPipelineStepService.markSucceeded(
+                experiment,
+                RunPipelineStepService.METRICS_EXTRACTED,
+                "Métriques extraites du run MLflow."
+        );
+        runPipelineStepService.markSucceeded(
+                experiment,
+                RunPipelineStepService.MODEL_ARTIFACT_DETECTED,
+                "Artefact modèle détecté (version " + modelVersion + ")."
+        );
+        runPipelineStepService.markSucceeded(
+                experiment,
+                RunPipelineStepService.MLFLOW_REGISTERED,
+                "Modèle enregistré dans le Registry MLflow (version " + modelVersion + ")."
+        );
     }
 
     String productionVersion = firstNotBlank(
@@ -3188,6 +3402,12 @@ private void updateMessageFromFinalStatus(
 
     if (isEligiblePlatformVersion(savedExperiment) && hasText(refreshedProductionVersion)) {
         savedExperiment.setProductionVersion(refreshedProductionVersion);
+
+        runPipelineStepService.markSucceeded(
+                savedExperiment,
+                RunPipelineStepService.PRODUCTION_PROMOTED,
+                "Version " + refreshedProductionVersion + " promue en Production."
+        );
     }
 
     if (isTerminalFailure(savedExperiment)) {
@@ -3218,6 +3438,71 @@ private void updateMessageFromFinalStatus(
             + ", productionVersion=" + finalSavedExperiment.getProductionVersion()
             + ", globalScore=" + finalSavedExperiment.getGlobalScore());
 }
+
+/**
+ * Enregistre les événements d'étapes réels du runtime STANDARD_RUNTIME à partir de
+ * l'état Kubeflow observé (source de vérité : l'API Kubeflow). Ne touche jamais
+ * aux étapes d'un run CUSTOM_DOCKERFILE (gérées par le CustomDockerRunWatcher).
+ */
+private void recordStandardKubeflowStepState(MlExperiment experiment) {
+    if (experiment == null || experiment.getId() == null) {
+        return;
+    }
+
+    if (experiment.getRuntimeMode() != null
+            && !RunPipelineStepService.RUNTIME_STANDARD.equalsIgnoreCase(experiment.getRuntimeMode())) {
+        return;
+    }
+
+    String kfStatus = experiment.getKubeflowStatus() == null
+            ? ""
+            : experiment.getKubeflowStatus().trim().toUpperCase(Locale.ROOT);
+
+    switch (kfStatus) {
+        case "RUNNING" -> {
+            runPipelineStepService.markSucceeded(
+                    experiment,
+                    RunPipelineStepService.DATA_PREPARED,
+                    "Données préparées et validées avant l'entraînement."
+            );
+            runPipelineStepService.markRunning(
+                    experiment,
+                    RunPipelineStepService.KFP_TRAINING_RUNNING,
+                    "Entraînement Kubeflow en cours."
+            );
+        }
+        case "COMPLETED", "SUCCEEDED" -> {
+            runPipelineStepService.markSucceeded(
+                    experiment,
+                    RunPipelineStepService.DATA_PREPARED,
+                    "Données préparées et validées."
+            );
+            runPipelineStepService.markSucceeded(
+                    experiment,
+                    RunPipelineStepService.KFP_TRAINING_RUNNING,
+                    "Entraînement Kubeflow terminé."
+            );
+        }
+        case "FAILED", "ERROR", "CANCELLED", "CANCELED" -> {
+            String reason = firstNotBlank(
+                    experiment.getFailureReason(),
+                    experiment.getErrorMessage()
+            );
+            runPipelineStepService.markFailed(
+                    experiment,
+                    RunPipelineStepService.KFP_TRAINING_RUNNING,
+                    "KUBEFLOW_RUN_FAILED",
+                    reason,
+                    "Le run Kubeflow a échoué.",
+                    experiment.getFailureLogExcerpt()
+            );
+        }
+        default -> {
+            // Statut inconnu ou vide : on ne force aucune transition.
+        }
+    }
+}
+
 
 
 private ExperimentStatus keepStableFinalStatus(
@@ -3373,42 +3658,8 @@ private String limitForDatabase(String value, int maxLength) {
     }
 
     private boolean isDisplayablePerformanceMetric(String metricName) {
-    String normalized = normalizeMetricKey(metricName);
-
-    if (normalized.isBlank()) {
-        return false;
+    return metricNormalizationHelper.isDisplayablePerformanceMetric(metricName);
     }
-
-    if (normalized.equals("prediction")
-            || normalized.equals("prediction_example")
-            || normalized.equals("sample_prediction")
-            || normalized.equals("return_code")
-            || normalized.equals("status")
-            || normalized.equals("epoch")
-            || normalized.equals("step")
-            || normalized.contains("example")) {
-        return false;
-    }
-
-    return normalized.equals("accuracy")
-            || normalized.equals("acc")
-            || normalized.equals("precision")
-            || normalized.equals("precision_weighted")
-            || normalized.equals("recall")
-            || normalized.equals("recall_weighted")
-            || normalized.equals("f1")
-            || normalized.equals("f1_score")
-            || normalized.equals("f1_weighted")
-            || normalized.equals("r2")
-            || normalized.equals("r2_score")
-            || normalized.equals("rmse")
-            || normalized.equals("mae")
-            || normalized.equals("mse")
-            || normalized.equals("log_loss")
-            || normalized.equals("loss")
-            || normalized.contains("loss")
-            || normalized.contains("error");
-}
 
 
    private Map<String, Double> getMetricsMap(MlExperiment experiment) {
@@ -3453,15 +3704,15 @@ private String limitForDatabase(String value, int maxLength) {
         return;
     }
 
-    Map<String, Double> normalizedMetrics = normalizeMetricsMap(metrics);
-    List<String> priorities = getProjectMetricPriorities(project);
+    Map<String, Double> normalizedMetrics = metricNormalizationHelper.normalizeMetricsMap(metrics);
+    List<String> priorities = metricNormalizationHelper.getProjectMetricPriorities(project);
 
     for (String metricName : priorities) {
-        if (!isMetricCompatibleWithProjectType(project, metricName)) {
+        if (!metricNormalizationHelper.isMetricCompatibleWithProjectType(project, metricName)) {
             continue;
         }
 
-        Double value = getMetricValueCompatible(normalizedMetrics, metricName);
+        Double value = metricNormalizationHelper.getMetricValueCompatible(normalizedMetrics, metricName);
 
         if (value != null) {
             String normalizedMetric = normalizeMetricKey(metricName);
@@ -3485,12 +3736,12 @@ private String limitForDatabase(String value, int maxLength) {
         return;
     }
 
-    List<String> priority = isRegressionProject(project)
+    List<String> priority = metricNormalizationHelper.isRegressionProject(project)
             ? List.of("rmse", "mae", "r2", "r2_score", "mse")
             : List.of("f1_score", "f1_weighted", "f1", "accuracy", "precision", "precision_weighted", "recall", "recall_weighted");
 
     for (String metricName : priority) {
-        Double value = getMetricValueCompatible(metrics, metricName);
+        Double value = metricNormalizationHelper.getMetricValueCompatible(metrics, metricName);
 
         if (value != null) {
             String normalizedMetric = normalizeMetricKey(metricName);
@@ -3508,7 +3759,7 @@ private String limitForDatabase(String value, int maxLength) {
 
         String normalizedMetric = normalizeMetricKey(entry.getKey());
 
-        if (!isMetricCompatibleWithProjectType(project, normalizedMetric)) {
+        if (!metricNormalizationHelper.isMetricCompatibleWithProjectType(project, normalizedMetric)) {
             continue;
         }
 
@@ -3521,8 +3772,8 @@ private String limitForDatabase(String value, int maxLength) {
 
 
     private Double calculateSingleExperimentGlobalScore(MlProject project, Map<String, Double> metrics) {
-    return calculatePriorityGlobalScore(project, metrics);
-}
+    return metricNormalizationHelper.calculatePriorityGlobalScore(project, metrics);
+    }
 
     @org.springframework.transaction.annotation.Transactional(propagation = Propagation.REQUIRES_NEW)
 public void recalculateGlobalScoresForProject(MlProject project, String registeredModelName) {
@@ -3677,164 +3928,17 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
 }
 
     private List<String> getProjectMetricPriorities(MlProject project) {
-    List<String> priorities = new ArrayList<>();
-
-    if (project == null) {
-        priorities.add("accuracy");
-        return priorities;
+    return metricNormalizationHelper.getProjectMetricPriorities(project);
     }
-
-    List<String> configured = new ArrayList<>();
-    configured.add(project.getPrimaryMetric1());
-    configured.add(project.getPrimaryMetric2());
-    configured.add(project.getPrimaryMetric3());
-
-    for (String metric : configured) {
-        String normalized = normalizeMetricKey(metric);
-
-        if (normalized.isBlank()) {
-            continue;
-        }
-
-        if (!isMetricCompatibleWithProjectType(project, normalized)) {
-            System.out.println("[METRICS] Ignored incompatible project metric. project="
-                    + project.getName()
-                    + ", projectType="
-                    + project.getProjectType()
-                    + ", metric="
-                    + metric);
-            continue;
-        }
-
-        if (!priorities.contains(normalized)) {
-            priorities.add(normalized);
-        }
-    }
-
-    if (!priorities.isEmpty()) {
-        return priorities;
-    }
-
-    if (isRegressionProject(project)) {
-        priorities.add("rmse");
-        priorities.add("mae");
-        priorities.add("r2");
-        priorities.add("mse");
-        return priorities;
-    }
-
-    priorities.add("f1_score");
-    priorities.add("accuracy");
-    priorities.add("precision");
-    priorities.add("recall");
-    return priorities;
-}
 
 
     private Double calculatePriorityGlobalScore(MlProject project, Map<String, Double> metrics) {
-        if (project == null || metrics == null || metrics.isEmpty()) {
-            return null;
-        }
-
-        Map<String, Double> normalizedMetrics = normalizeMetricsMap(metrics);
-        List<String> priorities = getProjectMetricPriorities(project);
-
-        if (priorities == null || priorities.isEmpty()) {
-            return null;
-        }
-
-        /*
-         * Pondération stable par ordre de priorité :
-         * P1 = 50 %, P2 = 30 %, P3 = 20 %.
-         *
-         * Si une métrique manque dans un ancien run, les poids des métriques
-         * disponibles sont renormalisés. Ainsi, le run reste comparable sans
-         * inventer une valeur et sans conserver un ancien score obsolète.
-         */
-        double[] configuredWeights = {0.50d, 0.30d, 0.20d};
-        double weightedSum = 0.0d;
-        double appliedWeight = 0.0d;
-
-        for (int index = 0; index < priorities.size() && index < configuredWeights.length; index++) {
-            String metricName = priorities.get(index);
-
-            if (metricName == null
-                    || metricName.isBlank()
-                    || !isMetricCompatibleWithProjectType(project, metricName)) {
-                continue;
-            }
-
-            Double metricValue = getMetricValueCompatible(normalizedMetrics, metricName);
-            if (metricValue == null || !Double.isFinite(metricValue)) {
-                continue;
-            }
-
-            Double normalizedScore = normalizeMetricScore(metricName, metricValue);
-            if (normalizedScore == null || !Double.isFinite(normalizedScore)) {
-                continue;
-            }
-
-            double weight = configuredWeights[index];
-            weightedSum += normalizedScore * weight;
-            appliedWeight += weight;
-
-            System.out.println("[METRICS] projectType="
-                    + project.getProjectType()
-                    + ", metric="
-                    + normalizeMetricKey(metricName)
-                    + ", rawValue="
-                    + metricValue
-                    + ", normalized="
-                    + normalizedScore
-                    + ", weight="
-                    + weight);
-        }
-
-        if (appliedWeight <= 0.0d) {
-            return null;
-        }
-
-        Double globalScore = roundDouble(weightedSum / appliedWeight, 6);
-        System.out.println("[METRICS] weightedGlobalScore=" + globalScore
-                + ", appliedWeight=" + appliedWeight
-                + ", priorities=" + priorities);
-        return globalScore;
+        return metricNormalizationHelper.calculatePriorityGlobalScore(project, metrics);
     }
 
     private Double normalizeMetricScore(String metricName, Double value) {
-    if (metricName == null || value == null) {
-        return null;
+    return metricNormalizationHelper.normalizeMetricScore(metricName, value);
     }
-
-    String normalizedMetric = normalizeMetricKey(metricName);
-    String direction = getDirectionFromMetric(normalizedMetric);
-
-    /*
-     * Les métriques à minimiser comme RMSE/MAE/MSE sont transformées en score 0..1 :
-     * plus l'erreur est petite, plus le score est proche de 1.
-     */
-    if ("min".equalsIgnoreCase(direction)) {
-        double safeValue = Math.max(value, 0.0);
-        return roundDouble(1.0 / (1.0 + safeValue), 6);
-    }
-
-    /*
-     * Accuracy/F1/Precision/Recall/R2 sont naturellement des scores.
-     */
-    if (value >= 0.0 && value <= 1.0) {
-        return roundDouble(value, 6);
-    }
-
-    if (value > 1.0 && value <= 100.0) {
-        return roundDouble(value / 100.0, 6);
-    }
-
-    if (value < 0.0) {
-        return 0.0;
-    }
-
-    return 1.0;
-}
 
 
     private void updateMetricRowsGlobalScore(MlExperiment experiment) {
@@ -3921,6 +4025,8 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
             uploadedFile.setStoredFileName(storedFileName);
             uploadedFile.setFilePath(targetPath.toString());
             uploadedFile.setFileType(fileType);
+            uploadedFile.setRole(fileType);
+            uploadedFile.setFileExtension(extension);
             uploadedFile.setContentType(file.getContentType());
             uploadedFile.setSizeBytes(file.getSize());
             uploadedFile.setProject(project);
@@ -3930,6 +4036,76 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
         } catch (Exception e) {
             throw new RuntimeException("Failed to save uploaded file: " + e.getMessage());
         }
+    }
+
+    /**
+     * Résolution du rôle explicite d'un fichier dataset.
+     * Le rôle déclaré par l'utilisateur est source de vérité ; s'il est absent,
+     * on le dérive de l'extension AVEC des règles sûres :
+     *   .py/.py3                -> DATASET_PREPARATION_SCRIPT (jamais DATASET_FILE)
+     *   zip/tar/gz/7z/rar       -> DATASET_ARCHIVE
+     *   sinon                   -> DATASET_FILE
+     */
+    private UploadedFileType resolveDatasetRole(String declaredRole, String fileName) {
+        if (declaredRole != null && !declaredRole.isBlank()) {
+            String normalized = declaredRole.trim().toUpperCase().replace('-', '_');
+            return switch (normalized) {
+                case "DATASET_FILE", "DATASET_ARCHIVE", "DATASET_PREPARATION_SCRIPT",
+                     "PREPROCESSING_SCRIPT", "AUXILIARY", "DOCKERFILE", "REQUIREMENTS" ->
+                        UploadedFileType.valueOf(normalized);
+                default -> deriveDatasetRoleFromExtension(fileName);
+            };
+        }
+        return deriveDatasetRoleFromExtension(fileName);
+    }
+
+    private UploadedFileType deriveDatasetRoleFromExtension(String fileName) {
+        return datasetFileResolverService.deriveRoleFromFileName(fileName);
+    }
+
+    /**
+     * Validation du rôle du fichier envoyé dans le champ dataset_file.
+     *
+     * Un fichier ne peut être le dataset de l'expérience que s'il a un rôle de
+     * dataset (DATASET_FILE, DATASET_ARCHIVE) avec une extension de données
+     * (.csv, .zip, .parquet...).
+     *
+     * Un script Python (.py/.py3) est TOUJOURS rejeté : la plateforme ne
+     * supporte pas de dataset Python et ne transmet jamais un script comme
+     * DATASET_PATH. Les rôles support (AUXILIARY, DOCKERFILE, REQUIREMENTS,
+     * TRAINING_SCRIPT...) sont rejetés également.
+     *
+     * Cette validation à la source empêche de nouveaux entraînements d'associer
+     * train.py / preprocessing.py / requirements.txt / Dockerfile comme dataset.
+     */
+    private void validateUploadedDatasetRole(UploadedFileType role, String originalFileName) {
+        String safeName = originalFileName == null ? "?" : originalFileName;
+
+        if (isPythonExtension(originalFileName)) {
+            throw new RuntimeException(
+                    "Le fichier '" + safeName
+                            + "' est un script Python (.py/.py3) : la plateforme ne transmet "
+                            + "jamais un script comme dataset. Sélectionnez le vrai dataset "
+                            + "(.csv, .zip, .parquet...)."
+            );
+        }
+
+        if (role == null || !datasetFileResolverService.isDatasetRole(role)) {
+            throw new RuntimeException(
+                    "Le fichier '" + safeName + "' n'est pas un dataset (rôle '"
+                            + (role == null ? "-" : role.name())
+                            + "'). Sélectionnez le vrai dataset (.csv, .zip, .parquet...)."
+            );
+        }
+    }
+
+    private boolean isPythonExtension(String fileName) {
+        String ext = getExtension(fileName);
+        if (ext == null || ext.isBlank()) {
+            return false;
+        }
+        String normalized = ext.trim().toLowerCase();
+        return normalized.equals("py") || normalized.equals("py3");
     }
 
     private User getUserFromAuthorizationHeader(String authHeader) {
@@ -4114,271 +4290,44 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
         }
     }
 
-    private String getDirectionFromMetric(String metric) {
-    String normalizedMetric = normalizeMetricKey(metric);
-
-    if (normalizedMetric.isBlank()) {
-        return "max";
+private String getDirectionFromMetric(String metric) {
+    return metricNormalizationHelper.getDirectionFromMetric(metric);
     }
-
-    if (normalizedMetric.equals("loss")
-            || normalizedMetric.equals("log_loss")
-            || normalizedMetric.equals("rmse")
-            || normalizedMetric.equals("mse")
-            || normalizedMetric.equals("mae")
-            || normalizedMetric.equals("error")
-            || normalizedMetric.endsWith("_loss")
-            || normalizedMetric.endsWith("_error")
-            || normalizedMetric.contains("loss")
-            || normalizedMetric.contains("error")) {
-        return "min";
-    }
-
-    return "max";
-}
 
 
     private Double getMetricValueIgnoreCase(Map<String, Double> metrics, String metricName) {
-    if (metrics == null || metrics.isEmpty() || metricName == null || metricName.isBlank()) {
-        return null;
+    return metricNormalizationHelper.getMetricValueCompatible(metrics, metricName);
     }
-
-    String normalizedMetricName = normalizeMetricKey(metricName);
-
-    for (Map.Entry<String, Double> entry : metrics.entrySet()) {
-        if (entry.getKey() == null || entry.getValue() == null) {
-            continue;
-        }
-
-        String key = normalizeMetricKey(entry.getKey());
-
-        if (key.equals(normalizedMetricName)) {
-            return entry.getValue();
-        }
-    }
-
-    return null;
-}
 
 
     private Double getMetricValueCompatible(Map<String, Double> metrics, String metricName) {
-    if (metrics == null || metrics.isEmpty() || metricName == null || metricName.isBlank()) {
-        return null;
+    return metricNormalizationHelper.getMetricValueCompatible(metrics, metricName);
     }
-
-    Map<String, Double> normalizedMetrics = normalizeMetricsMap(metrics);
-    String normalized = normalizeMetricKey(metricName);
-
-    if (normalizedMetrics.containsKey(normalized)) {
-        return normalizedMetrics.get(normalized);
-    }
-
-    if (normalized.equals("f1") || normalized.equals("f1_score")) {
-        return firstMetricValue(normalizedMetrics, "f1_score", "f1", "f1_weighted");
-    }
-
-    if (normalized.equals("precision")) {
-        return firstMetricValue(normalizedMetrics, "precision", "precision_weighted");
-    }
-
-    if (normalized.equals("recall")) {
-        return firstMetricValue(normalizedMetrics, "recall", "recall_weighted");
-    }
-
-    if (normalized.equals("accuracy") || normalized.equals("acc")) {
-        return firstMetricValue(normalizedMetrics, "accuracy", "acc");
-    }
-
-    if (normalized.equals("r2") || normalized.equals("r2_score")) {
-        return firstMetricValue(normalizedMetrics, "r2", "r2_score");
-    }
-
-    if (normalized.equals("rmse")) {
-        return firstMetricValue(normalizedMetrics, "rmse", "root_mean_squared_error");
-    }
-
-    if (normalized.equals("mse")) {
-        return firstMetricValue(normalizedMetrics, "mse", "mean_squared_error");
-    }
-
-    if (normalized.equals("mae")) {
-        return firstMetricValue(normalizedMetrics, "mae", "mean_absolute_error");
-    }
-
-    return null;
-}
 
 
     private String normalizeMetricKey(String metricName) {
-    if (metricName == null) {
-        return "";
+    return metricNormalizationHelper.normalizeMetricKey(metricName);
     }
-
-    String normalized = metricName.trim()
-            .toLowerCase(Locale.ROOT)
-            .replace("-", "_")
-            .replace(" ", "_")
-            .replaceAll("[^a-z0-9_]+", "_")
-            .replaceAll("_+", "_")
-            .replaceAll("^_+", "")
-            .replaceAll("_+$", "");
-
-    if (normalized.equals("f1score") || normalized.equals("f1_score_score")) {
-        return "f1_score";
-    }
-
-    if (normalized.equals("f1_score") || normalized.equals("f1")) {
-        return normalized;
-    }
-
-    if (normalized.equals("acc")
-            || normalized.equals("accuracy_score")
-            || normalized.equals("test_accuracy")
-            || normalized.equals("val_accuracy")
-            || normalized.equals("validation_accuracy")
-            || normalized.equals("model_accuracy")) {
-        return "accuracy";
-    }
-
-    if (normalized.equals("precision_score")
-            || normalized.equals("precision_macro")
-            || normalized.equals("macro_precision")) {
-        return "precision";
-    }
-
-    if (normalized.equals("recall_score")
-            || normalized.equals("recall_macro")
-            || normalized.equals("macro_recall")) {
-        return "recall";
-    }
-
-    if (normalized.equals("f1_macro")
-            || normalized.equals("macro_f1")
-            || normalized.equals("f1_score_macro")) {
-        return "f1_score";
-    }
-
-    if (normalized.equals("r2score") || normalized.equals("r2_score")) {
-        return "r2";
-    }
-
-    if (normalized.equals("root_mean_squared_error")) {
-        return "rmse";
-    }
-
-    if (normalized.equals("mean_absolute_error")) {
-        return "mae";
-    }
-
-    if (normalized.equals("mean_squared_error")) {
-        return "mse";
-    }
-
-    return normalized;
-}
 
 private Map<String, Double> normalizeMetricsMap(Map<String, Double> metrics) {
-    Map<String, Double> normalizedMetrics = new LinkedHashMap<>();
-
-    if (metrics == null || metrics.isEmpty()) {
-        return normalizedMetrics;
-    }
-
-    for (Map.Entry<String, Double> entry : metrics.entrySet()) {
-        if (entry == null || entry.getKey() == null || entry.getValue() == null) {
-            continue;
-        }
-
-        String normalizedKey = normalizeMetricKey(entry.getKey());
-
-        if (normalizedKey.isBlank() || !isDisplayablePerformanceMetric(normalizedKey)) {
-            continue;
-        }
-
-        normalizedMetrics.put(normalizedKey, entry.getValue());
-    }
-
-    return normalizedMetrics;
-}
-
-private Double firstMetricValue(Map<String, Double> metrics, String... names) {
-    if (metrics == null || metrics.isEmpty() || names == null) {
-        return null;
-    }
-
-    for (String name : names) {
-        String normalizedName = normalizeMetricKey(name);
-
-        if (metrics.containsKey(normalizedName)) {
-            return metrics.get(normalizedName);
-        }
-    }
-
-    return null;
+    return metricNormalizationHelper.normalizeMetricsMap(metrics);
 }
 
 private boolean isRegressionProject(MlProject project) {
-    if (project == null || project.getProjectType() == null) {
-        return false;
-    }
-
-    return project.getProjectType().trim().equalsIgnoreCase("regression");
-}
-
-private boolean isClassificationProject(MlProject project) {
-    if (project == null || project.getProjectType() == null) {
-        return true;
-    }
-
-    return project.getProjectType().trim().equalsIgnoreCase("classification");
+    return metricNormalizationHelper.isRegressionProject(project);
 }
 
 private boolean isMetricCompatibleWithProjectType(MlProject project, String metricName) {
-    String normalized = normalizeMetricKey(metricName);
-
-    if (normalized.isBlank()) {
-        return false;
-    }
-
-    if (isRegressionProject(project)) {
-        return normalized.equals("rmse")
-                || normalized.equals("mae")
-                || normalized.equals("mse")
-                || normalized.equals("r2")
-                || normalized.equals("r2_score")
-                || normalized.equals("loss")
-                || normalized.contains("error");
-    }
-
-    return normalized.equals("accuracy")
-            || normalized.equals("acc")
-            || normalized.equals("precision")
-            || normalized.equals("precision_weighted")
-            || normalized.equals("recall")
-            || normalized.equals("recall_weighted")
-            || normalized.equals("f1")
-            || normalized.equals("f1_score")
-            || normalized.equals("f1_weighted")
-            || normalized.equals("log_loss")
-            || normalized.equals("loss");
+    return metricNormalizationHelper.isMetricCompatibleWithProjectType(project, metricName);
 }
 
 private String defaultPrimaryMetricForProject(MlProject project) {
-    if (isRegressionProject(project)) {
-        return "rmse";
-    }
-
-    return "accuracy";
+    return metricNormalizationHelper.defaultPrimaryMetricForProject(project);
 }
 
 
     private Double roundDouble(Double value, int decimals) {
-        if (value == null) {
-            return null;
-        }
-
-        double factor = Math.pow(10, decimals);
-        return Math.round(value * factor) / factor;
+        return metricNormalizationHelper.roundDouble(value, decimals);
     }
 
     private String firstNotBlank(String... values) {
@@ -4497,13 +4446,28 @@ private String defaultPrimaryMetricForProject(MlProject project) {
     }
 
     private String getExtension(String fileName) {
-        int lastDotIndex = fileName.lastIndexOf(".");
-
-        if (lastDotIndex == -1) {
+        if (fileName == null || fileName.isBlank()) {
             return "";
         }
 
-        return fileName.substring(lastDotIndex);
+        int lastDotIndex = fileName.lastIndexOf(".");
+
+        if (lastDotIndex == -1 || lastDotIndex == fileName.length() - 1) {
+            return "";
+        }
+
+        /*
+         * Returns the extension WITHOUT the leading dot ("py", "csv", "zip"...).
+         *
+         * Historical bug: this method used to return ".py" while
+         * deriveDatasetRoleFromExtension() compared against "py".
+         * The comparison never matched, so any Python script uploaded as a
+         * dataset was silently classified as DATASET_FILE instead of
+         * DATASET_PREPARATION_SCRIPT, and its path was transmitted as
+         * DATASET_PATH (the runner then failed with DATASET_INVALID /
+         * "dataset path not found").
+         */
+        return fileName.substring(lastDotIndex + 1);
     }
 
     /**
@@ -4599,6 +4563,16 @@ private String defaultPrimaryMetricForProject(MlProject project) {
         response.setFailureSuggestion(loaded.getFailureSuggestion());
         response.setFailureLogExcerpt(loaded.getFailureLogExcerpt());
         response.setFailureSourceFile(loaded.getFailureSourceFile());
+
+        // Un run FAILED / CANCELLED ne doit JAMAIS exposer de métriques métier
+        // ou de score global à l'interface : celles-ci n'ont pas de sens
+        // (échec d'entraînement) et masquent le vrai état du run.
+        ExperimentStatus status = loaded.getStatus();
+        if (status == ExperimentStatus.FAILED || status == ExperimentStatus.CANCELLED) {
+            response.setGlobalScore(null);
+            response.setPrimaryMetricValue(null);
+            response.setMetrics(null);
+        }
 
         return response;
     }
@@ -5262,6 +5236,20 @@ private void syncSingleProjectAutomatically(Long projectId) {
             Long projectId,
             Long sourceExperimentId
     ) {
+        return retrainFromExistingExperiment(
+                projectId,
+                sourceExperimentId,
+                null,
+                null
+        );
+    }
+
+    public MlExperimentResponse retrainFromExistingExperiment(
+            Long projectId,
+            Long sourceExperimentId,
+            String triggerType,
+            String triggerMetadata
+    ) {
         if (projectId == null) {
             throw new IllegalArgumentException(
                     "projectId is required for scheduled retraining."
@@ -5300,7 +5288,10 @@ private void syncSingleProjectAutomatically(Long projectId) {
         }
 
         UploadedProjectFile sourceModelFile = sourceExperiment.getModelFile();
-        UploadedProjectFile sourceDatasetFile = sourceExperiment.getDatasetFile();
+        UploadedProjectFile sourceDatasetFile = datasetFileResolverService.resolveDatasetFile(
+                project,
+                sourceExperiment
+        );
 
         if (sourceModelFile == null
                 || !hasText(sourceModelFile.getFilePath())) {
@@ -5313,7 +5304,8 @@ private void syncSingleProjectAutomatically(Long projectId) {
         if (sourceDatasetFile == null
                 || !hasText(sourceDatasetFile.getFilePath())) {
             throw new IllegalStateException(
-                    "Production source has no dataset file. sourceExperimentId="
+                    "Production source has no usable dataset file (missing or misassigned script). "
+                            + "sourceExperimentId="
                             + sourceExperimentId
             );
         }
@@ -5370,6 +5362,10 @@ private void syncSingleProjectAutomatically(Long projectId) {
         retraining.setModelType(defaultValue(sourceExperiment.getModelType(), "CUSTOM"));
         retraining.setModelName(modelName);
         retraining.setRegisteredModelName(registeredModelName);
+        if (hasText(triggerType)) {
+            retraining.setTriggerType(triggerType);
+            retraining.setTriggerMetadata(triggerMetadata);
+        }
         retraining.setMlflowExperimentName(
                 customDockerMode
                         ? registeredModelName
@@ -5684,6 +5680,21 @@ private void syncSingleProjectAutomatically(Long projectId) {
             Long projectId,
             Long preferredSourceExperimentId
     ) {
+        return retrainFromCurrentProductionExperiment(
+                projectId,
+                preferredSourceExperimentId,
+                null,
+                null
+        );
+    }
+
+    @Transactional
+    public MlExperimentResponse retrainFromCurrentProductionExperiment(
+            Long projectId,
+            Long preferredSourceExperimentId,
+            String triggerType,
+            String triggerMetadata
+    ) {
         if (projectId == null) {
             throw new IllegalArgumentException(
                     "projectId is required for scheduled retraining."
@@ -5723,7 +5734,9 @@ private void syncSingleProjectAutomatically(Long projectId) {
 
             return retrainFromExistingExperiment(
                     projectId,
-                    preferredSource.getId()
+                    preferredSource.getId(),
+                    triggerType,
+                    triggerMetadata
             );
         }
 
@@ -5763,7 +5776,9 @@ private void syncSingleProjectAutomatically(Long projectId) {
 
         return retrainFromExistingExperiment(
                 projectId,
-                currentProduction.getId()
+                currentProduction.getId(),
+                triggerType,
+                triggerMetadata
         );
     }
 
@@ -5886,8 +5901,10 @@ private void syncSingleProjectAutomatically(Long projectId) {
             );
         }
 
-        UploadedProjectFile datasetFile =
-                experiment.getDatasetFile();
+        UploadedProjectFile datasetFile = datasetFileResolverService.resolveDatasetFile(
+                experiment.getProject(),
+                experiment
+        );
 
         if (datasetFile == null
                 || !hasText(datasetFile.getFilePath())) {

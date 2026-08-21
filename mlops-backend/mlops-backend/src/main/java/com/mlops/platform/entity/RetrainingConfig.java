@@ -56,6 +56,15 @@ public class RetrainingConfig {
     @Column(name = "data_drift_threshold_percent")
     private Double dataDriftThresholdPercent = 25.0;
 
+    /**
+     * Seuil minimum de qualité du modèle (score global normalisé dans [0,1]).
+     * Le modèle ne peut pas être promu / maintenu en production si son score
+     * est strictement inférieur à ce seuil (déclenche MODEL_QUALITY_FAILED).
+     * Nullable : si non renseigné, aucun contrôle de qualité minimal n'est appliqué.
+     */
+    @Column(name = "global_score_threshold")
+    private Double globalScoreThreshold = 0.75;
+
     @Column(name = "manual_trigger_requested", nullable = false)
     private boolean manualTriggerRequested = false;
 
@@ -68,11 +77,67 @@ public class RetrainingConfig {
     @Column(name = "last_monitoring_check_at")
     private LocalDateTime lastMonitoringCheckAt;
 
+    /**
+     * Politique de source de données pour un retraining.
+     * Valeurs : ORIGINAL_DATASET, LATEST_DATASET, MERGED_DATASET.
+     * Conservée en base pour la reproductibilité (le retraining ne dépend pas de
+     * fichiers temporaires déjà supprimés).
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "data_policy", length = 40)
+    private RetrainingDataPolicy dataPolicy = RetrainingDataPolicy.ORIGINAL_DATASET;
+
+    /**
+     * Prochaine échéance du contrôle périodique (stratégies avec monitoring).
+     * Notion DISTINCTE de nextRetrainingAt : le contrôle monitoring peut avoir
+     * lieu avant l'échéance planifiée de retraining.
+     */
+    @Column(name = "next_monitoring_check_at")
+    private LocalDateTime nextMonitoringCheckAt;
+
     private LocalDateTime lastRetrainingAt;
 
     private LocalDateTime nextRetrainingAt;
 
     private boolean running = false;
+
+    /**
+     * Cycle de vie de la configuration.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "state", nullable = false)
+    private RetrainingState state = RetrainingState.IDLE;
+
+    /**
+     * Fenêtre de déclenchement de la tentative en cours (clé d'idempotence).
+     */
+    @Column(name = "last_trigger_window")
+    private LocalDateTime lastTriggerWindow;
+
+    /**
+     * Version du modèle source lors de la dernière tentative
+     * (clé d'idempotence : configId + triggerWindow + sourceModelVersion).
+     */
+    @Column(name = "last_source_model_version", length = 128)
+    private String lastSourceModelVersion;
+
+    /**
+     * Expérience de réentraînement créée lors de la dernière tentative.
+     */
+    @Column(name = "last_experiment_id")
+    private Long lastExperimentId;
+
+    /**
+     * Fin de la période de cooldown, si l'état est COOLDOWN.
+     */
+    @Column(name = "cooldown_until")
+    private LocalDateTime cooldownUntil;
+
+    /**
+     * Nombre d'échecs consécutifs de lancement.
+     */
+    @Column(name = "consecutive_failures", nullable = false)
+    private int consecutiveFailures = 0;
 
     private LocalDateTime createdAt;
 
@@ -87,14 +152,25 @@ public class RetrainingConfig {
         normalizeFrequency();
         normalizeMonitoringSettings();
 
+        if (this.state == null) {
+            this.state = RetrainingState.IDLE;
+        }
+
         if (this.enabled && this.nextRetrainingAt == null) {
             this.nextRetrainingAt = calculateNextRetrainingDate(now);
+        }
+
+        if (this.enabled && this.nextMonitoringCheckAt == null) {
+            scheduleNextMonitoringCheckFrom(now);
         }
 
         if (!this.enabled) {
             this.nextRetrainingAt = null;
             this.running = false;
             this.manualTriggerRequested = false;
+            this.state = RetrainingState.IDLE;
+            this.cooldownUntil = null;
+            this.nextMonitoringCheckAt = null;
         }
     }
 
@@ -104,10 +180,16 @@ public class RetrainingConfig {
         normalizeFrequency();
         normalizeMonitoringSettings();
 
+        if (this.state == null) {
+            this.state = RetrainingState.IDLE;
+        }
+
         if (!this.enabled) {
             this.nextRetrainingAt = null;
             this.running = false;
             this.manualTriggerRequested = false;
+            this.state = RetrainingState.IDLE;
+            this.cooldownUntil = null;
         }
     }
 
@@ -149,6 +231,14 @@ public class RetrainingConfig {
         if (this.dataDriftThresholdPercent == null || this.dataDriftThresholdPercent <= 0) {
             this.dataDriftThresholdPercent = 25.0;
         }
+
+        if (this.globalScoreThreshold == null) {
+            this.globalScoreThreshold = 0.75;
+        } else if (this.globalScoreThreshold < 0) {
+            this.globalScoreThreshold = 0.0;
+        } else if (this.globalScoreThreshold > 1) {
+            this.globalScoreThreshold = 1.0;
+        }
     }
 
     public LocalDateTime calculateNextRetrainingDate(LocalDateTime fromDate) {
@@ -170,6 +260,32 @@ public class RetrainingConfig {
             return;
         }
         this.nextRetrainingAt = calculateNextRetrainingDate(fromDate);
+    }
+
+    /**
+     * Échéance du prochain contrôle périodique de monitoring.
+     * Par défaut aligné sur la période de retraining (même fréquence) mais stocké
+     * dans un champ dédié (nextMonitoringCheckAt) distinct de nextRetrainingAt.
+     */
+    public LocalDateTime calculateNextMonitoringCheckDate(LocalDateTime fromDate) {
+        LocalDateTime base = fromDate != null ? fromDate : LocalDateTime.now(Clock.systemUTC());
+        return switch (frequencyType) {
+            case DAY -> base.plusDays(frequencyValue);
+            case WEEK -> base.plusWeeks(frequencyValue);
+            case MONTH -> base.plusMonths(frequencyValue);
+        };
+    }
+
+    public void scheduleNextMonitoringCheckFrom(LocalDateTime fromDate) {
+        if (!enabled
+                || strategy == null
+                || strategy == RetrainingStrategy.SCHEDULED_ONLY
+                || (strategy != RetrainingStrategy.SMART_MONITORING_ONLY
+                    && strategy != RetrainingStrategy.FULL_SMART
+                    && strategy != RetrainingStrategy.SCHEDULED_WITH_MONITORING)) {
+            return;
+        }
+        this.nextMonitoringCheckAt = calculateNextMonitoringCheckDate(fromDate);
     }
 
     public Long getId() {
@@ -202,6 +318,8 @@ public class RetrainingConfig {
             this.running = false;
             this.nextRetrainingAt = null;
             this.manualTriggerRequested = false;
+            this.state = RetrainingState.IDLE;
+            this.cooldownUntil = null;
         }
     }
 
@@ -293,6 +411,14 @@ public class RetrainingConfig {
         this.dataDriftThresholdPercent = dataDriftThresholdPercent;
     }
 
+    public Double getGlobalScoreThreshold() {
+        return globalScoreThreshold;
+    }
+
+    public void setGlobalScoreThreshold(Double globalScoreThreshold) {
+        this.globalScoreThreshold = globalScoreThreshold;
+    }
+
     public boolean isManualTriggerRequested() {
         return manualTriggerRequested;
     }
@@ -325,6 +451,22 @@ public class RetrainingConfig {
         this.lastMonitoringCheckAt = lastMonitoringCheckAt;
     }
 
+    public LocalDateTime getNextMonitoringCheckAt() {
+        return nextMonitoringCheckAt;
+    }
+
+    public void setNextMonitoringCheckAt(LocalDateTime nextMonitoringCheckAt) {
+        this.nextMonitoringCheckAt = nextMonitoringCheckAt;
+    }
+
+    public RetrainingDataPolicy getDataPolicy() {
+        return dataPolicy != null ? dataPolicy : RetrainingDataPolicy.ORIGINAL_DATASET;
+    }
+
+    public void setDataPolicy(RetrainingDataPolicy dataPolicy) {
+        this.dataPolicy = dataPolicy != null ? dataPolicy : RetrainingDataPolicy.ORIGINAL_DATASET;
+    }
+
     public LocalDateTime getLastRetrainingAt() {
         return lastRetrainingAt;
     }
@@ -347,6 +489,96 @@ public class RetrainingConfig {
 
     public void setRunning(boolean running) {
         this.running = running;
+    }
+
+    public RetrainingState getState() {
+        return state;
+    }
+
+    public void setState(RetrainingState state) {
+        this.state = state != null ? state : RetrainingState.IDLE;
+    }
+
+    public LocalDateTime getLastTriggerWindow() {
+        return lastTriggerWindow;
+    }
+
+    public void setLastTriggerWindow(LocalDateTime lastTriggerWindow) {
+        this.lastTriggerWindow = lastTriggerWindow;
+    }
+
+    public String getLastSourceModelVersion() {
+        return lastSourceModelVersion;
+    }
+
+    public void setLastSourceModelVersion(String lastSourceModelVersion) {
+        this.lastSourceModelVersion = lastSourceModelVersion;
+    }
+
+    public Long getLastExperimentId() {
+        return lastExperimentId;
+    }
+
+    public void setLastExperimentId(Long lastExperimentId) {
+        this.lastExperimentId = lastExperimentId;
+    }
+
+    public LocalDateTime getCooldownUntil() {
+        return cooldownUntil;
+    }
+
+    public void setCooldownUntil(LocalDateTime cooldownUntil) {
+        this.cooldownUntil = cooldownUntil;
+    }
+
+    public int getConsecutiveFailures() {
+        return consecutiveFailures;
+    }
+
+    public void setConsecutiveFailures(int consecutiveFailures) {
+        this.consecutiveFailures = Math.max(0, consecutiveFailures);
+    }
+
+    public void incrementConsecutiveFailures() {
+        this.consecutiveFailures++;
+    }
+
+    public void resetConsecutiveFailures() {
+        this.consecutiveFailures = 0;
+    }
+
+    /**
+     * Indique si la configuration peut être réclamée par le scheduler.
+     *
+     * Une configuration en COOLDOWN doit avoir dépassé sa période d'attente.
+     * Les états EVALUATING / TRIGGERED / RUNNING sont exclus : une autre
+     * tentative est déjà en cours.
+     */
+    public boolean isClaimable(LocalDateTime now) {
+        if (!enabled || running) {
+            return false;
+        }
+
+        if (state == RetrainingState.EVALUATING
+                || state == RetrainingState.TRIGGERED
+                || state == RetrainingState.RUNNING) {
+            return false;
+        }
+
+        if (state == RetrainingState.COOLDOWN) {
+            return cooldownUntil == null
+                    || !cooldownUntil.isAfter(now);
+        }
+
+        return true;
+    }
+
+    /**
+     * Vrai si l'échéance planifiée est atteinte à la date fournie.
+     */
+    public boolean isScheduleDue(LocalDateTime now) {
+        return nextRetrainingAt != null
+                && !nextRetrainingAt.isAfter(now);
     }
 
     public LocalDateTime getCreatedAt() {

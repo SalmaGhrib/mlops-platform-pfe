@@ -4,6 +4,7 @@ import com.mlops.platform.dto.DeleteProjectResponse;
 import com.mlops.platform.dto.MlProjectMetricsRequest;
 import com.mlops.platform.dto.MlProjectRequest;
 import com.mlops.platform.dto.MlProjectResponse;
+import com.mlops.platform.dto.SearchPageResponse;
 import com.mlops.platform.service.MlProjectService;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import jakarta.validation.Valid;
@@ -46,6 +47,34 @@ public class MlProjectController {
             @Valid @RequestBody MlProjectRequest request
     ) {
         return mlProjectService.createProject(authHeader, request);
+    }
+
+    /**
+     * Recherche dynamique et intelligente des projets avec filtres.
+     *
+     * @param q           texte libre (nom, description, cible, métriques)
+     * @param projectType classification | regression
+     * @param dataType    TABULAR | IMAGE | TEXT
+     * @param page        page 0-based
+     * @param size        taille de page (1..50)
+     */
+    @GetMapping("/search")
+    public SearchPageResponse<MlProjectResponse> searchProjects(
+            @RequestHeader(HttpHeaders.AUTHORIZATION) String authHeader,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String projectType,
+            @RequestParam(required = false) String dataType,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "12") int size
+    ) {
+        return mlProjectService.searchProjects(
+                authHeader,
+                q,
+                projectType,
+                dataType,
+                page,
+                size
+        );
     }
 
     /**

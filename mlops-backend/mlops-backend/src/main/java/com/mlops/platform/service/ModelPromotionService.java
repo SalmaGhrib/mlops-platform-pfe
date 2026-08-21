@@ -23,13 +23,17 @@ public class ModelPromotionService {
     private final MlflowTrackingClientService mlflowTrackingClientService;
     private final RetrainingSourcePersistenceService
             retrainingSourcePersistenceService;
+    private final MetricNormalizationHelper metricNormalizationHelper;
+    private final ModelQualityService modelQualityService;
 
     public ModelPromotionService(
             MlExperimentRepository mlExperimentRepository,
             MlExperimentMetricRepository mlExperimentMetricRepository,
             MlflowTrackingClientService mlflowTrackingClientService,
             RetrainingSourcePersistenceService
-                    retrainingSourcePersistenceService
+                    retrainingSourcePersistenceService,
+            MetricNormalizationHelper metricNormalizationHelper,
+            ModelQualityService modelQualityService
     ) {
         this.mlExperimentRepository = mlExperimentRepository;
         this.mlExperimentMetricRepository =
@@ -38,6 +42,9 @@ public class ModelPromotionService {
                 mlflowTrackingClientService;
         this.retrainingSourcePersistenceService =
                 retrainingSourcePersistenceService;
+        this.metricNormalizationHelper =
+                metricNormalizationHelper;
+        this.modelQualityService = modelQualityService;
     }
 
     /**
@@ -151,6 +158,88 @@ public class ModelPromotionService {
             );
         }
 
+        String previousProductionVersion =
+                findProductionVersion(
+                        experiments
+                );
+
+        System.out.println(
+                "[PRODUCTION_REEVALUATION] projectId="
+                        + project.getId()
+                        + ", model="
+                        + cleanRegisteredModelName
+                        + ", priorities="
+                        + selectedMetrics
+                        + ", previousProductionVersion="
+                        + previousProductionVersion
+        );
+
+        /*
+         * GATE QUALITÉ :
+         * Un modèle dont la qualité est insuffisante (métrique primaire hors
+         * seuil direction-aware ou score global < seuil minimal) ne peut PAS
+         * être promu ni déployé. La Production courante est conservée telle
+         * quelle et une alerte MODEL_QUALITY_FAILED est émise.
+         */
+        ModelQualityService.QualityEvaluation quality =
+                modelQualityService.evaluate(project, bestExperiment);
+
+        if (quality != null && !quality.conforming()) {
+            System.out.println(
+                    "[QUALITY_GATE] Best candidate REJECTED. projectId="
+                            + project.getId()
+                            + ", experimentId="
+                            + bestExperiment.getId()
+                            + ", modelVersion="
+                            + bestVersion
+                            + ", globalScore="
+                            + bestExperiment.getGlobalScore()
+                            + ", threshold="
+                            + quality.threshold()
+                            + ", reason="
+                            + quality.reason()
+            );
+
+            modelQualityService.raiseQualityAlertIfNeeded(project);
+
+            MlExperiment currentProduction = experiments.stream()
+                    .filter(exp -> exp != null
+                            && Boolean.TRUE.equals(exp.getProduction()))
+                    .findFirst()
+                    .orElse(null);
+
+            if (currentProduction != null) {
+                System.out.println(
+                        "[QUALITY_GATE] Keeping current production unchanged. "
+                                + "modelVersion="
+                                + currentProduction.getModelVersion()
+                );
+                return currentProduction;
+            }
+
+            throw new IllegalStateException(
+                    "Aucun modèle éligible en production : le meilleur "
+                            + "candidat (globalScore="
+                            + bestExperiment.getGlobalScore()
+                            + ") ne respecte pas le seuil minimal de qualité ("
+                            + quality.threshold()
+                            + ")."
+            );
+        }
+
+        System.out.println(
+                "[NEW_BEST_CANDIDATE] experimentId="
+                        + bestExperiment.getId()
+                        + ", modelVersion="
+                        + bestVersion
+                        + ", globalScore="
+                        + bestExperiment.getGlobalScore()
+                        + ", primaryMetric="
+                        + bestExperiment.getPrimaryMetric()
+                        + ", primaryMetricValue="
+                        + bestExperiment.getPrimaryMetricValue()
+        );
+
         /*
          * MLflow reçoit l'alias production sur la version gagnante.
          *
@@ -198,6 +287,35 @@ public class ModelPromotionService {
                 .orElseThrow(() -> new IllegalStateException(
                         "Production experiment disappeared after promotion"
                 ));
+
+        boolean switched = previousProductionVersion == null
+                || !previousProductionVersion.equalsIgnoreCase(bestVersion);
+
+        if (switched) {
+            System.out.println(
+                    "[PRODUCTION_SWITCHED] projectId="
+                            + project.getId()
+                            + ", model="
+                            + cleanRegisteredModelName
+                            + ", from="
+                            + previousProductionVersion
+                            + ", to="
+                            + bestVersion
+                            + ", experimentId="
+                            + finalProduction.getId()
+            );
+        } else {
+            System.out.println(
+                    "[PRODUCTION_UNCHANGED] projectId="
+                            + project.getId()
+                            + ", model="
+                            + cleanRegisteredModelName
+                            + ", version="
+                            + bestVersion
+                            + ", experimentId="
+                            + finalProduction.getId()
+            );
+        }
 
         /*
          * Important :
@@ -341,6 +459,25 @@ public class ModelPromotionService {
         if (cleaned != null && !metrics.contains(cleaned)) {
             metrics.add(cleaned);
         }
+    }
+
+    private String findProductionVersion(
+            List<MlExperiment> experiments
+    ) {
+        if (experiments == null) {
+            return null;
+        }
+
+        for (MlExperiment experiment : experiments) {
+            if (experiment != null
+                    && Boolean.TRUE.equals(experiment.getProduction())
+                    && experiment.getProductionVersion() != null
+                    && !experiment.getProductionVersion().isBlank()) {
+                return experiment.getProductionVersion();
+            }
+        }
+
+        return null;
     }
 
     private void updateExperimentMainMetricAndScore(
@@ -583,75 +720,14 @@ public class ModelPromotionService {
             return null;
         }
 
-        String normalized = cleanMetric(metricName);
-
-        if (normalized == null) {
-            return null;
-        }
-
-        Double direct = metrics.get(normalized);
-
-        if (direct != null) {
-            return direct;
-        }
-
-        return switch (normalized) {
-            case "f1_score" ->
-                    firstNonNull(
-                            metrics.get("f1"),
-                            metrics.get("f1_weighted")
-                    );
-            case "precision" ->
-                    metrics.get("precision_weighted");
-            case "recall" ->
-                    metrics.get("recall_weighted");
-            case "accuracy" ->
-                    metrics.get("val_accuracy");
-            case "r2" ->
-                    metrics.get("r2_score");
-            case "loss" ->
-                    metrics.get("val_loss");
-            default -> null;
-        };
-    }
-
-    private Double firstNonNull(
-            Double first,
-            Double second
-    ) {
-        return first != null ? first : second;
+        return metricNormalizationHelper.getMetricValueCompatible(metrics, metricName);
     }
 
     private Double normalizeMetricScore(
             String metricName,
             Double value
     ) {
-        if (metricName == null || value == null) {
-            return null;
-        }
-
-        if ("min".equalsIgnoreCase(
-                inferDirection(metricName))) {
-            double safeValue = Math.max(value, 0.0);
-            return roundDouble(
-                    1.0 / (1.0 + safeValue),
-                    6
-            );
-        }
-
-        if (value >= 0.0 && value <= 1.0) {
-            return roundDouble(value, 6);
-        }
-
-        if (value > 1.0 && value <= 100.0) {
-            return roundDouble(value / 100.0, 6);
-        }
-
-        if (value < 0.0) {
-            return 0.0;
-        }
-
-        return 1.0;
+        return metricNormalizationHelper.normalizeMetricScore(metricName, value);
     }
 
     private void updateMetricsGlobalScore(
@@ -685,54 +761,19 @@ public class ModelPromotionService {
     }
 
     private String inferDirection(String metricName) {
-        if (metricName == null
-                || metricName.isBlank()) {
-            return "max";
-        }
-
-        String normalized =
-                metricName.trim().toLowerCase();
-
-        if (normalized.contains("rmse")
-                || normalized.contains("mse")
-                || normalized.contains("mae")
-                || normalized.contains("mape")
-                || normalized.contains("loss")
-                || normalized.contains("error")
-                || normalized.contains("cost")) {
-            return "min";
-        }
-
-        return "max";
+        return metricNormalizationHelper.getDirectionFromMetric(metricName);
     }
 
     private String cleanMetric(String metricName) {
-        if (metricName == null
-                || metricName.isBlank()) {
-            return null;
-        }
+        String normalized = metricNormalizationHelper.normalizeMetricKey(metricName);
 
-        String cleaned =
-                metricName.trim().toLowerCase();
-
-        return switch (cleaned) {
-            case "precision_weighted" -> "precision";
-            case "recall_weighted" -> "recall";
-            case "f1_weighted", "f1" -> "f1_score";
-            case "r2_score", "r²" -> "r2";
-            default -> cleaned;
-        };
+        return normalized.isBlank() ? null : normalized;
     }
 
     private Double roundDouble(
             Double value,
             int decimals
     ) {
-        if (value == null) {
-            return null;
-        }
-
-        double factor = Math.pow(10, decimals);
-        return Math.round(value * factor) / factor;
+        return metricNormalizationHelper.roundDouble(value, decimals);
     }
 }

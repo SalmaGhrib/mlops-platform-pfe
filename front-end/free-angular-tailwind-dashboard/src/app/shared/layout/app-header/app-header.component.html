@@ -25,6 +25,16 @@
           </svg>
         }
       </button>
+
+      <!-- Page title (desktop) -->
+      <div class="hidden items-center gap-2 xl:flex xl:pl-1">
+        <span class="text-sm text-gray-400 dark:text-gray-500">MLOps Pilot</span>
+        <svg class="h-4 w-4 text-gray-300 dark:text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
+        <span class="text-sm font-semibold text-gray-800 dark:text-white">{{ pageTitle }}</span>
+      </div>
+
       <!-- Logo (mobile) -->
       <a routerLink="/" class="flex items-center gap-2 xl:hidden">
         <span
@@ -45,12 +55,12 @@
         <!-- Dots Icon -->
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
           <path fill-rule="evenodd" clip-rule="evenodd"
-            d="M5.99902 10.4951C6.82745 10.4951 7.49902 11.1667 7.49902 11.9951V12.0051C7.49902 12.8335 6.82745 13.5051 5.99902 13.5051C5.1706 13.5051 4.49902 12.8335 4.49902 12.0051V11.9951C4.49902 11.1667 5.1706 10.4951 5.99902 10.4951ZM17.999 10.4951C18.8275 10.4951 19.499 11.1667 19.499 11.9951V12.0051C19.499 12.8335 18.8275 13.5051 17.999 13.5051C17.1706 13.5051 16.499 12.8335 16.499 12.0051V11.9951C16.499 11.1667 17.1706 10.4951 17.999 10.4951ZM13.499 11.9951C13.499 11.1667 12.8275 10.4951 11.999 10.4951C11.1706 10.4951 10.499 11.1667 10.499 11.9951V12.0051C10.499 12.8335 11.1706 13.5051 11.999 13.5051C12.8275 13.5051 13.499 12.8335 13.499 12.0051V11.9951Z"
+            d="M5.99902 10.4951C6.82745 10.4951 7.49902 11.1667 7.49902 11.9951V12.0051C7.49902 12.8335 6.82745 13.5051 5.99902 13.5051C5.1706 13.5051 4.49902 12.8335 4.49902 12.0051V11.9951C4.49902 11.1667 5.1706 10.4951 5.99902 10.4951ZM17.999 10.4951C18.8275 10.4951 19.499 11.1667 19.499 11.9951V12.0051C19.499 12.8335 18.8275 13.5051 17.999 13.5051C17.1706 13.5051 16.499 12.8335 16.499 12.0051V11.9951C16.499 11.1667 17.1706 10.4951 17.999 10.4951ZM13.499 11.9951C13.499 11.1667 12.8275 10.4951 11.999 10.4951C11.1706 10.4951 10.499 11.1667 10.499 11.9951V12.0051C10.499 12.8335 11.1706 13.5051 11.999 13.5051C12.8275 13.5051 13.499 13.5051 13.499 12.0051V11.9951Z"
             fill="currentColor" />
         </svg>
       </button>
-      <div class="hidden xl:block">
-        <form>
+      <div class="relative hidden xl:block">
+        <form (ngSubmit)="false">
           <div class="relative">
             <span class="absolute -translate-y-1/2 pointer-events-none left-4 top-1/2">
               <!-- Search Icon -->
@@ -60,20 +70,80 @@
                   fill="" />
               </svg>
             </span>
-            <input #searchInput type="text" placeholder="Rechercher un projet, un modèle..."
+            <input #searchInput type="text" placeholder="Rechercher un projet, un modèle..." aria-label="Recherche"
+              [value]="searchQuery"
+              (input)="onSearchInput(searchInput.value)"
+              (focus)="searchQuery.length >= 2 ? (searchOpen = true) : null"
+              (blur)="onSearchBlur()"
               class="h-11 w-full rounded-xl border border-gray-200 bg-transparent py-2.5 pl-12 pr-14 text-sm text-gray-800 shadow-theme-xs transition placeholder:text-gray-400 focus:border-brand-300 focus:outline-hidden focus:ring-3 focus:ring-brand-500/10 dark:border-gray-800 dark:bg-white/[0.03] dark:text-white/90 dark:placeholder:text-white/30 dark:focus:border-brand-800 xl:w-[430px]" />
-            <button
+            <button type="button"
               class="absolute right-2.5 top-1/2 inline-flex -translate-y-1/2 items-center gap-0.5 rounded-lg border border-gray-200 bg-gray-50 px-[7px] py-[4.5px] text-xs -tracking-[0.2px] text-gray-500 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-400">
               <span> ⌘ </span>
               <span> K </span>
             </button>
           </div>
         </form>
+
+        @if (searchOpen) {
+          <div
+            class="absolute left-0 right-0 top-full z-99999 mt-2 overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-theme-lg dark:border-gray-800 dark:bg-gray-900">
+            <div class="flex items-center justify-between border-b border-gray-100 px-4 py-2.5 dark:border-gray-800">
+              <span class="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                Résultats
+              </span>
+              @if (searchLoading) {
+                <span class="mlops-spinner h-3.5 w-3.5 border-2 border-brand-500 border-t-transparent"></span>
+              }
+            </div>
+            @if (!searchLoading && searchResults.length === 0) {
+              <p class="px-4 py-6 text-center text-sm text-gray-400 dark:text-gray-500">
+                Aucun résultat pour « {{ searchQuery }} »
+              </p>
+            }
+            <div class="max-h-80 overflow-y-auto py-1">
+              @for (result of searchResults; track $index) {
+                <button type="button" (click)="navigateTo(result.route)"
+                  class="flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-gray-50 dark:hover:bg-white/[0.03]">
+                  <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
+                    @if (result.type === 'project') {
+                      <svg class="h-4.5 w-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v14a2 2 0 01-2 2H9m0 0a2 2 0 01-2-2V5a2 2 0 012-2m0 0a2 2 0 012 2v14a2 2 0 01-2 2"/>
+                      </svg>
+                    } @else if (result.type === 'deployment') {
+                      <svg class="h-4.5 w-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+                      </svg>
+                    } @else {
+                      <svg class="h-4.5 w-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                      </svg>
+                    }
+                  </span>
+                  <span class="flex min-w-0 flex-col">
+                    <span class="truncate text-sm font-medium text-gray-800 dark:text-white">{{ result.label }}</span>
+                    <span class="text-xs text-gray-400 dark:text-gray-500">{{ result.subtitle }}</span>
+                  </span>
+                  <svg class="ml-auto h-4 w-4 shrink-0 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                  </svg>
+                </button>
+              }
+            </div>
+          </div>
+        }
       </div>
     </div>
     <div [ngClass]="isApplicationMenuOpen ? 'flex' : 'hidden'"
       class="items-center justify-between w-full gap-4 px-5 py-4 xl:flex shadow-theme-md xl:justify-end xl:px-0 xl:shadow-none">
       <div class="flex items-center gap-2 2xsm:gap-3">
+        <!-- Platform status pill (desktop) -->
+        <span class="hidden items-center gap-1.5 rounded-full border border-success-200 bg-success-50 px-3 py-1.5 text-xs font-semibold text-success-600 dark:border-success-500/20 dark:bg-success-500/10 dark:text-success-400 xl:inline-flex">
+          <span class="relative flex h-2 w-2">
+            <span class="absolute inline-flex h-full w-full rounded-full bg-success-500 opacity-50 mlops-pulse"></span>
+            <span class="relative inline-flex h-2 w-2 rounded-full bg-success-500"></span>
+          </span>
+          Opérationnel
+        </span>
         <!-- ThemeToggleButton placeholder -->
         <app-theme-toggle-button />
         <!-- NotificationDropdown placeholder -->

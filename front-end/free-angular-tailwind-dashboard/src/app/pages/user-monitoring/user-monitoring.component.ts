@@ -1,6 +1,7 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Subscription, interval } from 'rxjs';
 import {
   ApexChart,
   ApexDataLabels,
@@ -45,7 +46,10 @@ export type DonutChartOptions = {
   templateUrl: './user-monitoring.component.html',
   styleUrls: ['./user-monitoring.component.css']
 })
-export class UserMonitoringComponent implements OnInit {
+export class UserMonitoringComponent implements OnInit, OnDestroy {
+  private readonly pollingIntervalMs = 20000;
+  private pollingSubscription: Subscription | null = null;
+
   loading = false;
   errorMessage = '';
 
@@ -73,11 +77,24 @@ export class UserMonitoringComponent implements OnInit {
   ngOnInit(): void {
     this.initializeCharts();
     this.loadDashboard();
+
+    this.pollingSubscription = interval(this.pollingIntervalMs).subscribe(() => {
+      this.loadDashboard(true);
+    });
   }
 
-  loadDashboard(): void {
-    this.loading = true;
-    this.errorMessage = '';
+  ngOnDestroy(): void {
+    if (this.pollingSubscription) {
+      this.pollingSubscription.unsubscribe();
+      this.pollingSubscription = null;
+    }
+  }
+
+  loadDashboard(silent = false): void {
+    if (!silent) {
+      this.loading = true;
+      this.errorMessage = '';
+    }
 
     this.userMonitoringService.getDashboard(this.selectedProjectId).subscribe({
       next: (response: UserMonitoringDashboardResponse) => {
@@ -94,12 +111,18 @@ export class UserMonitoringComponent implements OnInit {
 
         this.updateCharts();
         this.loadModelDistribution();
-        this.loading = false;
+
+        if (!silent) {
+          this.loading = false;
+        }
       },
       error: (error) => {
         console.error('User monitoring loading error:', error);
-        this.errorMessage = 'Impossible de charger le monitoring utilisateur.';
-        this.loading = false;
+
+        if (!silent) {
+          this.errorMessage = 'Impossible de charger le monitoring utilisateur.';
+          this.loading = false;
+        }
       }
     });
   }
@@ -464,6 +487,50 @@ export class UserMonitoringComponent implements OnInit {
     return 'pkpi-bad';
   }
 
+  qualityStatusLabel(status: string | null | undefined): string {
+    const value = (status ?? '').toUpperCase();
+
+    if (value === 'CONFORMING') {
+      return 'Conforme';
+    }
+
+    if (value === 'INSUFFICIENT') {
+      return 'Insuffisante';
+    }
+
+    if (value === 'NO_PRODUCTION_MODEL') {
+      return 'Aucun modèle en production';
+    }
+
+    return 'Non configuré';
+  }
+
+  qualityStatusClass(status: string | null | undefined): string {
+    const value = (status ?? '').toUpperCase();
+
+    if (value === 'CONFORMING') {
+      return 'badge success';
+    }
+
+    if (value === 'INSUFFICIENT') {
+      return 'badge danger';
+    }
+
+    if (value === 'NO_PRODUCTION_MODEL') {
+      return 'badge warning';
+    }
+
+    return 'badge neutral';
+  }
+
+  formatScore(value: number | null | undefined): string {
+    if (value === null || value === undefined || Number.isNaN(value)) {
+      return '-';
+    }
+
+    return value.toFixed(2);
+  }
+
   formatShortDate(value: string | null | undefined): string {
     if (!value) {
       return '-';
@@ -497,5 +564,74 @@ export class UserMonitoringComponent implements OnInit {
     }
 
     return value;
+  }
+
+  /**
+   * Titre de la section réentraînement selon la stratégie RÉELLEMENT
+   * persistée en base (mise en cohérence avec my-projects). Ne jamais
+   * afficher 'Réentraînement intelligent' en dur pour toutes les stratégies.
+   */
+  getRetrainingSectionTitle(strategy: string | null | undefined): string {
+    if (!strategy) {
+      return 'Réentraînement non configuré';
+    }
+
+    const s = strategy.toUpperCase();
+
+    if (s === 'SCHEDULED_ONLY') {
+      return 'Réentraînement planifié';
+    }
+
+    if (s === 'SCHEDULED_WITH_MONITORING') {
+      return 'Réentraînement planifié avec monitoring';
+    }
+
+    if (s === 'SMART_MONITORING_ONLY') {
+      return 'Réentraînement intelligent';
+    }
+
+    if (s === 'FULL_SMART') {
+      return 'Réentraînement intelligent complet';
+    }
+
+    return 'Réentraînement';
+  }
+
+  /**
+   * Libellé français lisible de la stratégie (alias du titre court).
+   */
+  getRetrainingStrategyLabel(strategy: string | null | undefined): string {
+    const title = this.getRetrainingSectionTitle(strategy);
+
+    if (title === 'Réentraînement non configuré') {
+      return '-';
+    }
+
+    return title;
+  }
+
+  /**
+   * Date à afficher pour "Prochain réentraînement" : pour une stratégie
+   * pilotée par monitoring (SMART_MONITORING_ONLY), l'échéance planifiée
+   * n'existe pas : on affiche la prochaine échéance de contrôle.
+   */
+  getRetrainingNextDate(project: UserMonitoringProjectDashboard): string {
+    if (!project.retrainingEnabled) {
+      return 'Non planifié';
+    }
+
+    const strategy = String(
+      project.retrainingStrategy || 'SCHEDULED_ONLY'
+    ).toUpperCase();
+
+    if (strategy === 'SMART_MONITORING_ONLY') {
+      return project.nextMonitoringCheckAt
+        ? this.formatShortDate(project.nextMonitoringCheckAt)
+        : 'Déclenché par monitoring';
+    }
+
+    return project.nextRetrainingAt
+      ? this.formatShortDate(project.nextRetrainingAt)
+      : 'Déclenché par monitoring';
   }
 }

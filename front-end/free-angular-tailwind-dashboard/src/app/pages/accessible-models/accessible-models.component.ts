@@ -1,19 +1,28 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, ViewChild } from '@angular/core';
+import { Observable } from 'rxjs';
 import {
   AccessibleModel,
   ModelRegistryService
 } from '../../core/services/model-registry.service';
+import { SmartSearchComponent } from '../../shared/components/common/smart-search/smart-search.component';
+import {
+  SearchPageResponse,
+  SmartSearchParams
+} from '../../shared/components/common/smart-search/smart-search.types';
 
 @Component({
   selector: 'app-accessible-models',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, SmartSearchComponent],
   templateUrl: './accessible-models.component.html',
   styleUrl: './accessible-models.component.css'
 })
 export class AccessibleModelsComponent implements OnInit {
+  @ViewChild(SmartSearchComponent) smartSearch!: SmartSearchComponent<AccessibleModel>;
+
   models: AccessibleModel[] = [];
+  totalModels = 0;
 
   loading = false;
   errorMessage = '';
@@ -22,29 +31,26 @@ export class AccessibleModelsComponent implements OnInit {
   constructor(private modelRegistryService: ModelRegistryService) {}
 
   ngOnInit(): void {
-    this.loadAccessibleModels();
+    // Le composant app-smart-search charge automatiquement la première page.
   }
 
   loadAccessibleModels(): void {
-    this.loading = true;
-    this.errorMessage = '';
-    this.successMessage = '';
+    this.smartSearch?.resetAndReload();
+  }
 
-    this.modelRegistryService.getAccessibleModels().subscribe({
-      next: (models) => {
-        this.models = (models || [])
-          .filter((model) => this.isUsableModel(model))
-          .filter((model) => this.isAccessibleExternalModel(model));
+  searchAccessibleModels = (params: SmartSearchParams): Observable<SearchPageResponse<AccessibleModel>> =>
+    this.modelRegistryService.searchDeployments('accessible', params);
 
-        this.loading = false;
-      },
-      error: (error) => {
-        console.error('[AccessibleModels] Load error:', error);
-        this.errorMessage =
-          "Impossible de charger les modèles accessibles. Vérifiez que l'endpoint backend existe et que l'utilisateur est connecté.";
-        this.loading = false;
-      }
-    });
+  onSearchItems(models: AccessibleModel[]): void {
+    this.models = (models || [])
+      .filter((model) => this.isUsableModel(model))
+      .filter((model) => this.isAccessibleExternalModel(model));
+
+    this.loading = false;
+  }
+
+  onTotalChange(total: number): void {
+    this.totalModels = total;
   }
 
   /*
@@ -273,6 +279,18 @@ export class AccessibleModelsComponent implements OnInit {
 
   getProjectLabel(model: AccessibleModel): string {
     return model.projectName || `Project ${model.projectId}`;
+  }
+
+  getModelVersion(model: AccessibleModel): string {
+    const version =
+      model?.modelVersion ??
+      model?.['model_version'] ??
+      model?.productionVersion ??
+      model?.['production_version'] ??
+      model?.['mlflowProductionVersion'] ??
+      '-';
+
+    return version != null && String(version).trim() !== '' ? String(version) : '-';
   }
 
   getVisibilityLabel(model: AccessibleModel): string {

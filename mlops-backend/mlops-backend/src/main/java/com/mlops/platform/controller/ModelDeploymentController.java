@@ -3,6 +3,7 @@ package com.mlops.platform.controller;
 import com.mlops.platform.dto.DeployModelRequestDto;
 import com.mlops.platform.dto.ModelDeploymentResponse;
 import com.mlops.platform.dto.ModelDeploymentShareResponse;
+import com.mlops.platform.dto.SearchPageResponse;
 import com.mlops.platform.dto.ShareDeploymentRequest;
 import com.mlops.platform.entity.User;
 import com.mlops.platform.repository.UserRepository;
@@ -83,6 +84,30 @@ public class ModelDeploymentController {
 
         List<ModelDeploymentResponse> response =
                 modelDeploymentService.getAccessibleDeploymentsForUser(currentUser);
+
+        return ResponseEntity.ok(response);
+    }
+
+    /*
+     * Recherche dynamique des déploiements (owned ou accessible)
+     * avec filtres projectType / dataType et pagination.
+     */
+    @GetMapping("/search")
+    public ResponseEntity<SearchPageResponse<ModelDeploymentResponse>> searchDeploymentsForCurrentUser(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam(required = false) String scope,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String projectType,
+            @RequestParam(required = false) String dataType,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "12") int size
+    ) {
+        User currentUser = getUserFromAuthorizationHeader(authHeader);
+
+        SearchPageResponse<ModelDeploymentResponse> response =
+                modelDeploymentService.searchDeploymentsForUser(
+                        currentUser, scope, q, projectType, dataType, page, size
+                );
 
         return ResponseEntity.ok(response);
     }

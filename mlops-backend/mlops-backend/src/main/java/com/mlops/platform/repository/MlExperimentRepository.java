@@ -5,8 +5,10 @@ import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.entity.User;
 import jakarta.transaction.Transactional;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -17,7 +19,7 @@ import java.util.Optional;
 
 @Repository
 public interface MlExperimentRepository
-        extends JpaRepository<MlExperiment, Long> {
+        extends JpaRepository<MlExperiment, Long>, JpaSpecificationExecutor<MlExperiment> {
 
     interface FailedRunsByProjectProjection {
         Long getProjectId();

@@ -196,4 +196,22 @@
       <app-sidebar-widget />
     }
   </div>
+
+  <!-- Sidebar footer -->
+  @if ((isExpanded$ | async) || (isHovered$ | async) || (isMobileOpen$ | async)) {
+    <div class="mt-4 border-t border-gray-200 px-3 py-4 dark:border-gray-800">
+      <div class="flex items-center justify-between">
+        <span class="text-[11px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500">
+          MLOps Pilot v1.0
+        </span>
+        <span class="inline-flex items-center gap-1.5 text-[11px] font-semibold text-success-600 dark:text-success-400">
+          <span class="relative flex h-2 w-2">
+            <span class="absolute inline-flex h-full w-full rounded-full bg-success-500 opacity-50 mlops-pulse"></span>
+            <span class="relative inline-flex h-2 w-2 rounded-full bg-success-500"></span>
+          </span>
+          Opérationnel
+        </span>
+      </div>
+    </div>
+  }
 </aside>

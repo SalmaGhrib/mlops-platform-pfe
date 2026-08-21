@@ -9,6 +9,7 @@ public class RetrainingDecisionResult {
     private String reason;
     private double predictionErrorRatePercent;
     private double dataDriftScorePercent;
+    private double performanceDropPercent;
     private long recentPredictionCount;
     private long recentFailedRuns;
 
@@ -82,5 +83,13 @@ public class RetrainingDecisionResult {
 
     public void setRecentFailedRuns(long recentFailedRuns) {
         this.recentFailedRuns = recentFailedRuns;
+    }
+
+    public double getPerformanceDropPercent() {
+        return performanceDropPercent;
+    }
+
+    public void setPerformanceDropPercent(double performanceDropPercent) {
+        this.performanceDropPercent = performanceDropPercent;
     }
 }
