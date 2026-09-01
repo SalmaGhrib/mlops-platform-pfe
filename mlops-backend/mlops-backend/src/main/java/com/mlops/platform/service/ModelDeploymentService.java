@@ -561,10 +561,13 @@ if (!hasText(modelVersion)) {
 
         deployment.setApiEnabled(apiConfig.apiEnabled);
 
-        if (apiConfig.visibility != null) {
-            deployment.setVisibility(apiConfig.visibility);
-        } else if (deployment.getVisibility() == null) {
-            deployment.setVisibility(DeploymentVisibility.PRIVATE);
+        // Visibility is authoritative: never overwrite an existing value.
+        if (deployment.getVisibility() == null) {
+            if (apiConfig.visibility != null) {
+                deployment.setVisibility(apiConfig.visibility);
+            } else {
+                deployment.setVisibility(DeploymentVisibility.PRIVATE);
+            }
         }
     }
 
@@ -669,12 +672,13 @@ if (!hasText(modelVersion)) {
             return;
         }
 
-        if (Boolean.TRUE.equals(deployment.getApiEnabled())
-                && deployment.getVisibility() != null
-                && deployment.getVisibility() != DeploymentVisibility.PRIVATE) {
+        // Owner's visibility choice is authoritative.
+        // If a visibility was already set (by the owner or @PrePersist), never overwrite it.
+        if (deployment.getVisibility() != null) {
             return;
         }
 
+        // Only apply default config for brand-new deployments without any visibility.
         ApiAccessConfig apiAccessConfig = resolveApiAccessConfigForDeployment(deployment.getRegisteredModelName());
         applyApiAccessConfig(deployment, apiAccessConfig);
     }
@@ -2833,8 +2837,42 @@ private boolean isCustomDockerRuntimeMode(String runtimeMode) {
         deployment.setVisibility(newVisibility);
         deployment.setApiEnabled(newVisibility != DeploymentVisibility.PRIVATE);
 
+        if (newVisibility == DeploymentVisibility.PRIVATE) {
+            cleanupSharedResourcesForPrivate(deployment);
+        }
+
         ModelDeployment saved = modelDeploymentRepository.saveAndFlush(deployment);
         return ModelDeploymentResponse.fromEntity(saved);
+    }
+
+    private void cleanupSharedResourcesForPrivate(ModelDeployment deployment) {
+        Long deploymentId = deployment.getId();
+        if (deploymentId == null) {
+            return;
+        }
+
+        Long ownerId = resolveOwnerUserId(deployment);
+
+        if (ownerId != null) {
+            List<ModelApiKey> allKeys = modelApiKeyRepository.findByDeploymentIdOrderByCreatedAtDesc(deploymentId);
+            for (ModelApiKey key : allKeys) {
+                if (key.getOwnerId() != null && !key.getOwnerId().equals(ownerId)) {
+                    modelApiKeyRepository.deleteById(key.getId());
+                }
+            }
+        }
+
+        modelDeploymentShareRepository.deleteByDeploymentId(deploymentId);
+    }
+
+    private Long resolveOwnerUserId(ModelDeployment deployment) {
+        if (deployment.getProjectId() == null) {
+            return null;
+        }
+        return mlProjectRepository.findById(deployment.getProjectId())
+                .filter(p -> p.getOwner() != null && p.getOwner().getId() != null)
+                .map(p -> p.getOwner().getId())
+                .orElse(null);
     }
 
     @Transactional(readOnly = true)

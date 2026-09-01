@@ -415,6 +415,17 @@ public class ModelGatewayService {
             visibility = DeploymentVisibility.PRIVATE;
         }
 
+        if (DeploymentVisibility.PRIVATE.equals(visibility)) {
+            if (!isKeyOwnerDeploymentOwner(key, deployment)) {
+                System.out.println("[SMART_GATEWAY_AUTH] REJECT code=PRIVATE_NOT_OWNER keyId=" + key.getId() + " ownerId=" + key.getOwnerId() + " model=" + registeredModelName);
+                throw new GatewayException(
+                        HttpStatus.FORBIDDEN,
+                        "PRIVATE_NOT_OWNER",
+                        "Ce modele est prive. Seul le proprietaire peut generer des cles."
+                );
+            }
+        }
+
         if (DeploymentVisibility.SHARED.equals(visibility)) {
             User keyOwner = userRepository.findById(key.getOwnerId()).orElse(null);
 
@@ -454,6 +465,10 @@ public class ModelGatewayService {
         }
 
         if (DeploymentVisibility.PRIVATE.equals(visibility)) {
+            // Owner's own keys are always allowed on PRIVATE models.
+            if (isKeyOwnerDeploymentOwner(key, deployment)) {
+                return deployment;
+            }
             throw new GatewayException(
                     HttpStatus.FORBIDDEN,
                     "EXTERNAL_ACCESS_DISABLED",
@@ -462,6 +477,17 @@ public class ModelGatewayService {
         }
 
         return deployment;
+    }
+
+    private boolean isKeyOwnerDeploymentOwner(ModelApiKey key, ModelDeployment deployment) {
+        if (key == null || key.getOwnerId() == null) {
+            return false;
+        }
+        User keyOwner = userRepository.findById(key.getOwnerId()).orElse(null);
+        if (keyOwner == null) {
+            return false;
+        }
+        return modelAccessControlService.isOwner(keyOwner, deployment);
     }
 
     /*
