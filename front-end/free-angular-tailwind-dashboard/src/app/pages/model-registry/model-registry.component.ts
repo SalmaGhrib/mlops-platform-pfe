@@ -6,8 +6,7 @@ import {
   ModelApiKeyStats,
   ModelDeploymentResponse,
   ModelRegistryItem,
-  ModelRegistryService,
-  SharedUserKeyStatus
+  ModelRegistryService
 } from '../../core/services/model-registry.service';
 import { SmartSearchComponent } from '../../shared/components/common/smart-search/smart-search.component';
 import {
@@ -525,8 +524,6 @@ export class ModelRegistryComponent implements OnInit {
   gatewayNewKey: { [deploymentId: number]: string | null } = {};
   gatewayNewExpiry: { [deploymentId: number]: string } = {};
   gatewayKeyModalDeploymentId: number | null = null;
-  sharedUsersStatus: { [deploymentId: number]: SharedUserKeyStatus[] } = {};
-  sharedUsersLoading: { [deploymentId: number]: boolean } = {};
 
   isGatewayOpen(deploymentId?: number | null): boolean {
     return deploymentId != null && this.gatewayOpen[deploymentId] === true;
@@ -550,7 +547,6 @@ export class ModelRegistryComponent implements OnInit {
 
     this.gatewayOpen[deploymentId] = true;
     this.loadGateway(model);
-    this.loadSharedUsersStatus(deploymentId);
   }
 
   loadGateway(model: ModelRegistryItem): void {
@@ -622,39 +618,6 @@ export class ModelRegistryComponent implements OnInit {
     return latest ? this.formatDate(latest) : 'Aucune utilisation';
   }
 
-  loadSharedUsersStatus(deploymentId: number): void {
-    if (!deploymentId || this.sharedUsersLoading[deploymentId]) {
-      return;
-    }
-
-    this.sharedUsersLoading[deploymentId] = true;
-
-    this.modelRegistryService.getSharedUsersKeyStatus(deploymentId).subscribe({
-      next: (status) => {
-        this.sharedUsersStatus[deploymentId] = status;
-        this.sharedUsersLoading[deploymentId] = false;
-      },
-      error: () => {
-        this.sharedUsersStatus[deploymentId] = [];
-        this.sharedUsersLoading[deploymentId] = false;
-      }
-    });
-  }
-
-  getSharedUsersStatus(model: ModelRegistryItem): SharedUserKeyStatus[] {
-    const deploymentId = model?.activeDeploymentId;
-    return deploymentId != null ? (this.sharedUsersStatus[deploymentId] || []) : [];
-  }
-
-  isSharedUsersLoading(model: ModelRegistryItem): boolean {
-    const deploymentId = model?.activeDeploymentId;
-    return deploymentId != null && this.sharedUsersLoading[deploymentId] === true;
-  }
-
-  getSharedUserDisplayName(user: SharedUserKeyStatus): string {
-    return user.username || user.email || user.userId ? `Utilisateur #${user.userId}` : 'Inconnu';
-  }
-
   getProductionVersion(model: ModelRegistryItem): string {
     const version =
       model?.productionVersion ||
@@ -690,13 +653,8 @@ export class ModelRegistryComponent implements OnInit {
       return true;
     }
 
-    const visibility = model.visibility || model['visibilityValue'] || '';
-
-    if (String(visibility).toUpperCase() === 'PRIVATE') {
-      return true;
-    }
-
-    return !this.isApiEnabled(model) && !model.visibility;
+    const visibility = (model.visibility || 'PRIVATE').toUpperCase();
+    return visibility === 'PRIVATE';
   }
 
   getVisibilityLabel(model: any): string {
@@ -908,8 +866,7 @@ export class ModelRegistryComponent implements OnInit {
 
     this.modelRegistryService.deleteApiKey(key.id).subscribe({
       next: () => {
-        const keys = this.gatewayKeys[deploymentId] || [];
-        this.gatewayKeys[deploymentId] = keys.filter((item) => item.id !== key.id);
+        this.loadGateway(model);
       },
       error: (error) => {
         this.errorMessage = this.extractErrorMessage(

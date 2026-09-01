@@ -47,14 +47,10 @@ public class ModelApiKeyResponse {
     }
 
     private static String computeStatus(ModelApiKey key) {
-        if (key.getRevokedAt() != null) {
-            return "REVOKED";
-        }
         if (Boolean.FALSE.equals(key.getEnabled())) {
             return "DISABLED";
         }
-        if (key.getExpiresAt() != null && key.getExpiresAt().isAfter(LocalDateTime.now()) == false
-                && key.getExpiresAt().isBefore(LocalDateTime.now())) {
+        if (key.getExpiresAt() != null && key.getExpiresAt().isBefore(LocalDateTime.now())) {
             return "EXPIRED";
         }
         return "ACTIVE";

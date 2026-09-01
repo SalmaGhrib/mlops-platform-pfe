@@ -133,7 +133,6 @@ class ModelDeploymentCreateRecordTest {
         when(modelDeploymentRepository
                 .findTopByRegisteredModelNameAndApiEnabledTrueAndApiKeyIsNotNullOrderByUpdatedAtDesc("m"))
                 .thenReturn(Optional.empty());
-        when(modelDeploymentRepository.existsByApiKey(anyString())).thenReturn(false);
 
         // Premier insert -> violation UNIQUE (un autre scheduler a gagné la course),
         // deuxième saveAndFlush (celui de la ligne existante) -> succès.

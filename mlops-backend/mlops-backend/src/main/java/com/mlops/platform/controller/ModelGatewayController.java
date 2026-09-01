@@ -19,12 +19,17 @@ import java.util.Map;
 /*
  * SMART MODEL GATEWAY — gestion des cles API.
  *
+ * Chaque utilisateur cree et gere uniquement ses propres cles API.
+ * Meme le proprietaire du modele ne voit pas les cles des autres utilisateurs.
+ *
  * Endpoints :
- * - GET    /api/models/{modelId}/api-keys
- * - POST   /api/models/{modelId}/api-keys
- * - GET    /api/models/{modelId}/api-keys/stats
- * - GET    /api/models/{modelId}/api-keys/my
- * - DELETE /api/model-api-keys/{keyId}
+ * - GET    /api/models/{modelId}/api-keys          (mes cles pour ce modele)
+ * - POST   /api/models/{modelId}/api-keys          (creer une cle)
+ * - GET    /api/models/{modelId}/api-keys/stats    (stats de mes cles)
+ * - GET    /api/models/{modelId}/api-keys/my       (mes cles, alias)
+ * - DELETE /api/model-api-keys/{keyId}             (supprimer ma cle)
+ * - POST   /api/models/by-name/{name}/api-keys    (creer une cle par nom)
+ * - GET    /api/models/by-name/{name}/api-keys/my (mes cles par nom)
  */
 @RestController
 @CrossOrigin(origins = "*")
@@ -81,22 +86,13 @@ public class ModelGatewayController {
         return ResponseEntity.ok(modelGatewayService.getMyApiKeys(modelId, currentUser));
     }
 
-    @GetMapping("/api/models/{modelId}/api-keys/all")
-    public ResponseEntity<List<ModelApiKeyResponse>> listAllApiKeysForDeployment(
-            @PathVariable Long modelId,
-            @RequestHeader("Authorization") String authHeader
-    ) {
-        User currentUser = getUserFromAuthorizationHeader(authHeader);
-        return ResponseEntity.ok(modelGatewayService.listAllApiKeysForDeployment(modelId, currentUser));
-    }
-
-    @GetMapping("/api/models/by-name/{registeredModelName}/api-keys")
-    public ResponseEntity<List<ModelApiKeyResponse>> listAllApiKeysForModel(
+    @GetMapping("/api/models/by-name/{registeredModelName}/api-keys/my")
+    public ResponseEntity<List<ModelApiKeyResponse>> getMyApiKeysByName(
             @PathVariable String registeredModelName,
             @RequestHeader("Authorization") String authHeader
     ) {
         User currentUser = getUserFromAuthorizationHeader(authHeader);
-        return ResponseEntity.ok(modelGatewayService.listAllApiKeysForModel(registeredModelName, currentUser));
+        return ResponseEntity.ok(modelGatewayService.getMyApiKeysByName(registeredModelName, currentUser));
     }
 
     @PostMapping("/api/models/by-name/{registeredModelName}/api-keys")
@@ -107,24 +103,6 @@ public class ModelGatewayController {
     ) {
         User currentUser = getUserFromAuthorizationHeader(authHeader);
         return ResponseEntity.ok(modelGatewayService.createApiKeyByName(registeredModelName, currentUser, request));
-    }
-
-    @GetMapping("/api/models/by-name/{registeredModelName}/api-keys/my")
-    public ResponseEntity<List<ModelApiKeyResponse>> getMyApiKeysByName(
-            @PathVariable String registeredModelName,
-            @RequestHeader("Authorization") String authHeader
-    ) {
-        User currentUser = getUserFromAuthorizationHeader(authHeader);
-        return ResponseEntity.ok(modelGatewayService.getMyApiKeysByName(registeredModelName, currentUser));
-    }
-
-    @GetMapping("/api/models/{modelId}/api-keys/shared-users-status")
-    public ResponseEntity<List<Map<String, Object>>> getSharedUsersKeyStatus(
-            @PathVariable Long modelId,
-            @RequestHeader("Authorization") String authHeader
-    ) {
-        User currentUser = getUserFromAuthorizationHeader(authHeader);
-        return ResponseEntity.ok(modelGatewayService.getSharedUsersKeyStatus(modelId, currentUser));
     }
 
     @DeleteMapping("/api/model-api-keys/{keyId}")

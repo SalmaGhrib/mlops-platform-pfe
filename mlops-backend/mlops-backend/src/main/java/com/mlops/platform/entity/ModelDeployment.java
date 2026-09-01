@@ -49,12 +49,15 @@ public class ModelDeployment {
     @Column(name = "api_enabled", nullable = false)
     private Boolean apiEnabled = false;
 
+    @Deprecated
     @Column(name = "api_key", length = 255, unique = true)
     private String apiKey;
 
+    @Deprecated
     @Column(name = "api_key_created_at")
     private LocalDateTime apiKeyCreatedAt;
 
+    @Deprecated
     @Column(name = "api_key_last_used_at")
     private LocalDateTime apiKeyLastUsedAt;
 

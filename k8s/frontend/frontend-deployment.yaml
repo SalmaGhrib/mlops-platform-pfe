@@ -29,7 +29,7 @@ spec:
       containers:
         - name: mlops-frontend
 
-          image: acrmlopssalmav2.azurecr.io/mlops-frontend:mlops-pilot-api-keys-v1
+          image: acrmlopssalmav2.azurecr.io/mlops-frontend:mlops-pilot-api-keys-v2
           imagePullPolicy: Always
 
           ports:

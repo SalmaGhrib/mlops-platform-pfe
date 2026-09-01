@@ -7,13 +7,11 @@ import com.mlops.platform.entity.DeploymentVisibility;
 import com.mlops.platform.entity.ModelApiKey;
 import com.mlops.platform.entity.ModelApiUsage;
 import com.mlops.platform.entity.ModelDeployment;
-import com.mlops.platform.entity.ModelDeploymentShare;
 import com.mlops.platform.entity.User;
 import com.mlops.platform.exception.GatewayException;
 import com.mlops.platform.repository.ModelApiKeyRepository;
 import com.mlops.platform.repository.ModelApiUsageRepository;
 import com.mlops.platform.repository.ModelDeploymentRepository;
-import com.mlops.platform.repository.ModelDeploymentShareRepository;
 import com.mlops.platform.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,15 +41,15 @@ import static org.mockito.Mockito.when;
 /*
  * Tests unitaires du SMART MODEL GATEWAY (Mockito, sans contexte Spring).
  *
- * Couvre les scénarios de non-régression demandés :
+ * Couvre les scénarios de non-régulation demandés :
  *  1. création sans email → clé affichée une seule fois, hash stocké, aucun secret en clair
- *  2. modèle PRIVATE → 403 EXTERNAL_ACCESS_DISABLED
+ *  2. modèle PRIVATE → 403 NOT_AUTHORIZED (canAccessDeployment = false)
  *  3. clé valide → prédiction (validation) réussie
  *  4. clé invalide → 401
- *  5. clé désactivée → 403
- *  6. clé expirée → 410
- *  7. clé révoquée → 410
- *  8. clé du modèle A utilisée sur le modèle B → 403
+ *  5. clé désactivée → 403 KEY_DISABLED
+ *  6. clé expirée → 410 KEY_EXPIRED
+ *  7. clé révoquée → acceptée (hard delete remplace révocation)
+ *  8. clé du modèle A utilisée sur le modèle B → 403 KEY_NOT_FOR_MODEL
  *  9. deux clés du même modèle → fonctionnent indépendamment
  * 10. ancienne clé livrée par email → continue de fonctionner
  */
@@ -75,9 +73,6 @@ class ModelGatewayServiceTest {
     private ModelAccessControlService modelAccessControlService;
 
     @Mock
-    private ModelDeploymentShareRepository modelDeploymentShareRepository;
-
-    @Mock
     private UserRepository userRepository;
 
     private ModelGatewayService service;
@@ -90,7 +85,6 @@ class ModelGatewayServiceTest {
                 modelDeploymentService,
                 modelDeploymentRepository,
                 modelAccessControlService,
-                modelDeploymentShareRepository,
                 userRepository
         );
     }
@@ -138,14 +132,24 @@ class ModelGatewayServiceTest {
     }
 
     private void stubOwnerAndDeployment(Long deploymentId, ModelDeployment deployment) {
-        when(modelDeploymentService.isDeploymentOwnedByUser(anyLong(), any(User.class))).thenReturn(true);
         when(modelDeploymentService.findDeploymentOrThrowPublic(anyLong())).thenReturn(deployment);
         when(modelAccessControlService.isOwner(any(User.class), any(ModelDeployment.class))).thenReturn(true);
+        when(modelAccessControlService.canAccessDeployment(any(User.class), any(ModelDeployment.class))).thenReturn(true);
     }
 
     private void stubSaveReturnsArgument() {
         when(modelApiKeyRepository.save(any(ModelApiKey.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    private void setField(Object target, String fieldName, Object value) {
+        try {
+            java.lang.reflect.Field field = target.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(target, value);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to set field " + fieldName, e);
+        }
     }
 
     /*
@@ -184,12 +188,13 @@ class ModelGatewayServiceTest {
     }
 
     /*
-     * Test 2 : modèle PRIVATE → création bloquée en 403 EXTERNAL_ACCESS_DISABLED.
+     * Test 2 : modèle PRIVATE → création bloquée en 403 NOT_AUTHORIZED.
      */
     @Test
     void createApiKey_privateModel_forbidden() {
         ModelDeployment deployment = deployment("fraud_model", DeploymentVisibility.PRIVATE);
         when(modelDeploymentService.findDeploymentOrThrowPublic(anyLong())).thenReturn(deployment);
+        when(modelAccessControlService.canAccessDeployment(any(User.class), any(ModelDeployment.class))).thenReturn(false);
 
         GatewayException ex = assertThrows(
                 GatewayException.class,
@@ -197,7 +202,7 @@ class ModelGatewayServiceTest {
         );
 
         assertEquals(403, ex.getStatus().value());
-        assertEquals("EXTERNAL_ACCESS_DISABLED", ex.getCode());
+        assertEquals("NOT_AUTHORIZED", ex.getCode());
     }
 
     /*
@@ -209,7 +214,7 @@ class ModelGatewayServiceTest {
         when(modelDeploymentService.findDeploymentOrThrowPublic(anyLong())).thenReturn(deployment);
 
         String secret = randomSecret();
-        String prefix = "mlops_live_7a3f9c21";
+        String prefix = "mlp_live7a3f";
         ModelApiKey key = key(prefix, secret, deployment);
         when(modelApiKeyRepository.findByKeyPrefix(prefix)).thenReturn(Optional.of(key));
 
@@ -224,12 +229,12 @@ class ModelGatewayServiceTest {
      */
     @Test
     void validateApiKey_invalidKey_unauthorized() {
-        when(modelApiKeyRepository.findByKeyPrefix("mlops_live_00000000"))
+        when(modelApiKeyRepository.findByKeyPrefix("mlp_live0000"))
                 .thenReturn(Optional.empty());
 
         GatewayException ex = assertThrows(
                 GatewayException.class,
-                () -> service.validateApiKey("mlops_live_00000000_zzzz", "fraud_model")
+                () -> service.validateApiKey("mlp_live0000_zzzz", "fraud_model")
         );
 
         assertEquals(401, ex.getStatus().value());
@@ -237,22 +242,26 @@ class ModelGatewayServiceTest {
     }
 
     /*
-     * Test 5 : Ancienne clé "désactivée" (enabled=false) — on ne vérifie plus
-     * enabled au validation. La clé est acceptée.
+     * Test 5 : Clé désactivée (enabled=false) → 403 KEY_DISABLED.
      */
     @Test
-    void validateApiKey_disabledKey_accepted() {
+    void validateApiKey_disabledKey_rejected() {
         ModelDeployment deployment = deployment("fraud_model", DeploymentVisibility.PUBLIC_API);
         when(modelDeploymentService.findDeploymentOrThrowPublic(anyLong())).thenReturn(deployment);
 
         String secret = randomSecret();
-        String prefix = "mlops_live_11aabbcc";
+        String prefix = "mlp_live11aa";
         ModelApiKey key = key(prefix, secret, deployment);
         key.setEnabled(false);
         when(modelApiKeyRepository.findByKeyPrefix(prefix)).thenReturn(Optional.of(key));
 
-        ModelApiKey result = service.validateApiKey(prefix + "_" + secret, "fraud_model");
-        assertNotNull(result, "La clé doit être acceptée même si enabled=false");
+        GatewayException ex = assertThrows(
+                GatewayException.class,
+                () -> service.validateApiKey(prefix + "_" + secret, "fraud_model")
+        );
+
+        assertEquals(403, ex.getStatus().value());
+        assertEquals("KEY_DISABLED", ex.getCode());
     }
 
     /*
@@ -261,9 +270,10 @@ class ModelGatewayServiceTest {
     @Test
     void validateApiKey_expiredKey_gone() {
         ModelDeployment deployment = deployment("fraud_model", DeploymentVisibility.PUBLIC_API);
+        when(modelDeploymentService.findDeploymentOrThrowPublic(anyLong())).thenReturn(deployment);
 
         String secret = randomSecret();
-        String prefix = "mlops_live_22bbccdd";
+        String prefix = "mlp_live22bb";
         ModelApiKey key = key(prefix, secret, deployment);
         key.setExpiresAt(LocalDateTime.now().minusDays(1));
         when(modelApiKeyRepository.findByKeyPrefix(prefix)).thenReturn(Optional.of(key));
@@ -287,7 +297,7 @@ class ModelGatewayServiceTest {
         when(modelDeploymentService.findDeploymentOrThrowPublic(anyLong())).thenReturn(deployment);
 
         String secret = randomSecret();
-        String prefix = "mlops_live_33ccddee";
+        String prefix = "mlp_live33cc";
         ModelApiKey key = key(prefix, secret, deployment);
         key.setRevokedAt(LocalDateTime.now());
         when(modelApiKeyRepository.findByKeyPrefix(prefix)).thenReturn(Optional.of(key));
@@ -305,7 +315,7 @@ class ModelGatewayServiceTest {
         when(modelDeploymentService.findDeploymentOrThrowPublic(anyLong())).thenReturn(deployment);
 
         String secret = randomSecret();
-        String prefix = "mlops_live_44ddeeff";
+        String prefix = "mlp_live44dd";
         ModelApiKey key = key(prefix, secret, deployment);
         when(modelApiKeyRepository.findByKeyPrefix(prefix)).thenReturn(Optional.of(key));
 
@@ -319,7 +329,7 @@ class ModelGatewayServiceTest {
     }
 
     /*
-     * Test 10 : deux clés du même modèle fonctionnent indépendamment.
+     * Test 9 : deux clés du même modèle fonctionnent indépendamment.
      */
     @Test
     void validateApiKey_twoKeysSameModel_separateKeys() {
@@ -327,7 +337,7 @@ class ModelGatewayServiceTest {
         when(modelDeploymentService.findDeploymentOrThrowPublic(anyLong())).thenReturn(deployment);
 
         String secret1 = randomSecret();
-        String prefix1 = "mlops_live_aabbccdd";
+        String prefix1 = "mlp_liveaabb";
         ModelApiKey key1 = key(prefix1, secret1, deployment);
         when(modelApiKeyRepository.findByKeyPrefix(prefix1)).thenReturn(Optional.of(key1));
 
@@ -336,7 +346,7 @@ class ModelGatewayServiceTest {
         assertEquals(prefix1, validated1.getKeyPrefix());
 
         String secret2 = randomSecret();
-        String prefix2 = "mlops_live_11223344";
+        String prefix2 = "mlp_live1122";
         ModelApiKey key2 = key(prefix2, secret2, deployment);
         when(modelApiKeyRepository.findByKeyPrefix(prefix2)).thenReturn(Optional.of(key2));
 
@@ -346,7 +356,7 @@ class ModelGatewayServiceTest {
     }
 
     /*
-     * Test 11 : ancienne clé livrée par email → continue de fonctionner.
+     * Test 10 : ancienne clé livrée par email → continue de fonctionner.
      * Les clés historiques sont validées par key_prefix + key_hash uniquement,
      * indépendamment de toute logique de livraison.
      */
@@ -356,7 +366,7 @@ class ModelGatewayServiceTest {
         when(modelDeploymentService.findDeploymentOrThrowPublic(anyLong())).thenReturn(deployment);
 
         String secret = randomSecret();
-        String prefix = "mlops_live_55eeff00";
+        String prefix = "mlp_live55ee";
         ModelApiKey legacyKey = key(prefix, secret, deployment);
         legacyKey.setEnabled(true);
         when(modelApiKeyRepository.findByKeyPrefix(prefix)).thenReturn(Optional.of(legacyKey));
@@ -414,7 +424,6 @@ class ModelGatewayServiceTest {
         User userB = user(2L);
 
         stubSharedDeployment(deployment, owner, userB);
-        when(modelDeploymentService.isDeploymentOwnedByUser(anyLong(), any(User.class))).thenReturn(true);
         when(modelApiKeyRepository.findByDeploymentIdAndOwnerId(1L, 2L)).thenReturn(Optional.empty());
         stubSaveReturnsArgument();
 
@@ -436,7 +445,6 @@ class ModelGatewayServiceTest {
         User userB = user(2L);
 
         stubSharedDeployment(deployment, owner, userB);
-        when(modelDeploymentService.isDeploymentOwnedByUser(anyLong(), any(User.class))).thenReturn(true);
         when(modelApiKeyRepository.findByDeploymentIdAndOwnerId(1L, 2L)).thenReturn(Optional.empty());
         stubSaveReturnsArgument();
 
@@ -456,7 +464,6 @@ class ModelGatewayServiceTest {
         User userB = user(2L);
 
         stubSharedDeployment(deployment, owner, userB);
-        when(modelDeploymentService.isDeploymentOwnedByUser(anyLong(), any(User.class))).thenReturn(true);
         when(modelApiKeyRepository.findByDeploymentIdAndOwnerId(1L, 2L)).thenReturn(Optional.empty());
         stubSaveReturnsArgument();
 
@@ -560,14 +567,12 @@ class ModelGatewayServiceTest {
         User userB = user(3L);
 
         stubSharedDeployment(deployment, owner, userA);
-        when(modelDeploymentService.isDeploymentOwnedByUser(anyLong(), any(User.class))).thenReturn(true);
         when(modelApiKeyRepository.findByDeploymentIdAndOwnerId(1L, 2L)).thenReturn(Optional.empty());
         stubSaveReturnsArgument();
 
         ModelApiKeyResponse responseA = service.createApiKey(1L, userA, null);
 
         stubSharedDeployment(deployment, owner, userB);
-        when(modelDeploymentService.isDeploymentOwnedByUser(anyLong(), any(User.class))).thenReturn(true);
         when(modelApiKeyRepository.findByDeploymentIdAndOwnerId(1L, 3L)).thenReturn(Optional.empty());
 
         ModelApiKeyResponse responseB = service.createApiKey(1L, userB, null);
@@ -612,15 +617,9 @@ class ModelGatewayServiceTest {
     @Test
     void getStats_noUsage_returnsZeros() {
         ModelDeployment deployment = deployment("fraud_model", DeploymentVisibility.PUBLIC_API);
-        when(modelDeploymentService.isDeploymentOwnedByUser(anyLong(), any(User.class))).thenReturn(true);
-        when(modelApiKeyRepository.findByDeploymentIdOrderByCreatedAtDesc(anyLong())).thenReturn(List.of());
-
-        Map<String, Object> emptyAgg = new HashMap<>();
-        emptyAgg.put("total", 0L);
-        emptyAgg.put("successCount", 0L);
-        emptyAgg.put("avgLatency", 0.0);
-        emptyAgg.put("lastUsedAt", null);
-        when(modelApiUsageRepository.getAggregatedStats(anyLong(), any(LocalDateTime.class))).thenReturn(emptyAgg);
+        when(modelDeploymentService.findDeploymentOrThrowPublic(anyLong())).thenReturn(deployment);
+        when(modelAccessControlService.canAccessDeployment(any(User.class), any(ModelDeployment.class))).thenReturn(true);
+        when(modelApiKeyRepository.findByDeploymentIdAndOwnerIdOrderByCreatedAtDesc(anyLong(), anyLong())).thenReturn(List.of());
 
         ModelApiKeyStatsResponse stats = service.getStats(1L, owner());
 
@@ -640,22 +639,33 @@ class ModelGatewayServiceTest {
     @Test
     void getStats_withUsage_calculatesCorrectly() {
         ModelDeployment deployment = deployment("fraud_model", DeploymentVisibility.PUBLIC_API);
-        when(modelDeploymentService.isDeploymentOwnedByUser(anyLong(), any(User.class))).thenReturn(true);
-
-        Map<String, Object> agg = new HashMap<>();
-        agg.put("total", 10L);
-        agg.put("successCount", 8L);
-        agg.put("avgLatency", 144.8);
-        agg.put("lastUsedAt", LocalDateTime.of(2026, 8, 30, 15, 30, 0));
-        when(modelApiUsageRepository.getAggregatedStats(anyLong(), any(LocalDateTime.class))).thenReturn(agg);
+        when(modelDeploymentService.findDeploymentOrThrowPublic(anyLong())).thenReturn(deployment);
+        when(modelAccessControlService.canAccessDeployment(any(User.class), any(ModelDeployment.class))).thenReturn(true);
 
         ModelApiKey key1 = new ModelApiKey();
+        setField(key1, "id", 100L);
         key1.setKeyPrefix("mlp_aabbccdd");
         key1.setDeploymentId(1L);
         ModelApiKey key2 = new ModelApiKey();
+        setField(key2, "id", 101L);
         key2.setKeyPrefix("mlp_11223344");
         key2.setDeploymentId(1L);
-        when(modelApiKeyRepository.findByDeploymentIdOrderByCreatedAtDesc(1L)).thenReturn(List.of(key1, key2));
+        when(modelApiKeyRepository.findByDeploymentIdAndOwnerIdOrderByCreatedAtDesc(eq(1L), anyLong()))
+                .thenReturn(List.of(key1, key2));
+
+        Map<String, Object> agg1 = new HashMap<>();
+        agg1.put("total", 6L);
+        agg1.put("successCount", 5L);
+        agg1.put("avgLatency", 100.0);
+        agg1.put("lastUsedAt", LocalDateTime.of(2026, 8, 30, 15, 30, 0));
+        when(modelApiUsageRepository.getAggregatedStatsForKey(eq(100L), any(LocalDateTime.class))).thenReturn(agg1);
+
+        Map<String, Object> agg2 = new HashMap<>();
+        agg2.put("total", 4L);
+        agg2.put("successCount", 3L);
+        agg2.put("avgLatency", 200.0);
+        agg2.put("lastUsedAt", LocalDateTime.of(2026, 8, 30, 16, 0, 0));
+        when(modelApiUsageRepository.getAggregatedStatsForKey(eq(101L), any(LocalDateTime.class))).thenReturn(agg2);
 
         ModelApiKeyStatsResponse stats = service.getStats(1L, owner());
 
@@ -663,7 +673,7 @@ class ModelGatewayServiceTest {
         assertEquals(8L, stats.getSuccessToday());
         assertEquals(2L, stats.getFailedToday());
         assertEquals(80.0, stats.getSuccessRate(), 0.01);
-        assertEquals(144.8, stats.getAvgLatencyMs(), 0.01);
+        assertEquals(300.0, stats.getAvgLatencyMs(), 0.01);
         assertNotNull(stats.getLastUsedAt());
         assertEquals(2, stats.getKeys().size());
     }
@@ -723,7 +733,7 @@ class ModelGatewayServiceTest {
     }
 
     /*
-     * Test : incrementUsage_ne fait pas planter si incrementUsageAtomic retourne 0 (clé inexistante).
+     * Test : incrementUsage ne fait pas planter si incrementUsageAtomic retourne 0 (clé inexistante).
      */
     @Test
     void incrementUsage_noExceptionOnZeroRowsUpdated() {
@@ -733,11 +743,12 @@ class ModelGatewayServiceTest {
     }
 
     /*
-     * Test : getStats sans owner → 403 NOT_OWNER.
+     * Test : getStats sans accès → 403 NOT_AUTHORIZED.
      */
     @Test
     void getStats_notOwner_forbidden() {
-        when(modelDeploymentService.isDeploymentOwnedByUser(anyLong(), any(User.class))).thenReturn(false);
+        when(modelDeploymentService.findDeploymentOrThrowPublic(anyLong())).thenReturn(deployment("fraud_model", DeploymentVisibility.PUBLIC_API));
+        when(modelAccessControlService.canAccessDeployment(any(User.class), any(ModelDeployment.class))).thenReturn(false);
 
         GatewayException ex = assertThrows(
                 GatewayException.class,
@@ -745,6 +756,6 @@ class ModelGatewayServiceTest {
         );
 
         assertEquals(403, ex.getStatus().value());
-        assertEquals("NOT_OWNER", ex.getCode());
+        assertEquals("NOT_AUTHORIZED", ex.getCode());
     }
 }

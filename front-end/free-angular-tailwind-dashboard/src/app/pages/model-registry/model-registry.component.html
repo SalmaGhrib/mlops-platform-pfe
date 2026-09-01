@@ -592,51 +592,6 @@
                       </p>
                     }
 
-                    @if (model.visibility === 'SHARED') {
-                      <div class="mt-4 rounded-xl bg-white p-4 ring-1 ring-gray-200 dark:bg-gray-900/60 dark:ring-gray-800">
-                        <p class="text-sm font-bold text-gray-900 dark:text-white">
-                          Utilisateurs partagés
-                        </p>
-                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                          Statut des clés API personnelles des utilisateurs autorisés.
-                        </p>
-
-                        @if (isSharedUsersLoading(model)) {
-                          <div class="mt-3 flex items-center gap-2 text-xs text-gray-500">
-                            <span class="mlops-spinner text-indigo-600 dark:text-indigo-300"></span>
-                            Chargement...
-                          </div>
-                        }
-
-                        @if (!isSharedUsersLoading(model)) {
-                          @if (getSharedUsersStatus(model).length === 0) {
-                            <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">
-                              Aucun utilisateur n'est encore partagé sur ce modèle.
-                            </p>
-                          }
-
-                          @for (su of getSharedUsersStatus(model); track su.userId) {
-                            <div class="mt-3 flex items-center justify-between rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-800/50">
-                              <div>
-                                <span class="text-sm font-semibold text-gray-800 dark:text-gray-200">
-                                  {{ getSharedUserDisplayName(su) }}
-                                </span>
-                                @if (su.hasKey) {
-                                  <span class="ml-2 inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-bold text-green-700 dark:bg-green-900/30 dark:text-green-300">
-                                    Cle active
-                                  </span>
-                                }
-                                @if (!su.hasKey) {
-                                  <span class="ml-2 inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-bold text-gray-500 dark:bg-gray-700 dark:text-gray-400">
-                                    Pas encore de clé
-                                  </span>
-                                }
-                              </div>
-                            </div>
-                          }
-                        }
-                      </div>
-                    }
                   }
                 </div>
               }

@@ -14,10 +14,9 @@ import {
   SmartSearchParams
 } from '../../shared/components/common/smart-search/smart-search.types';
 
-interface ModelWithKey {
+interface ModelWithKeys {
   model: AccessibleModel;
-  myKey: ModelApiKeyItem | null;
-  keyGenerated: boolean;
+  myKeys: ModelApiKeyItem[];
   generatedFullKey: string | null;
   generating: boolean;
   deleting: boolean;
@@ -37,7 +36,7 @@ export class AccessibleModelsComponent implements OnInit {
   @ViewChild(SmartSearchComponent) smartSearch!: SmartSearchComponent<AccessibleModel>;
 
   models: AccessibleModel[] = [];
-  modelsWithKeys: ModelWithKey[] = [];
+  modelsWithKeys: ModelWithKeys[] = [];
   totalModels = 0;
 
   loading = false;
@@ -72,8 +71,7 @@ export class AccessibleModelsComponent implements OnInit {
   private loadKeysForModels(models: AccessibleModel[]): void {
     this.modelsWithKeys = models.map((model) => ({
       model,
-      myKey: null,
-      keyGenerated: false,
+      myKeys: [],
       generatedFullKey: null,
       generating: false,
       deleting: false,
@@ -85,9 +83,9 @@ export class AccessibleModelsComponent implements OnInit {
     const keyRequests = this.modelsWithKeys
       .filter((mwk) => mwk.model.visibility === 'SHARED' || mwk.model.visibility === 'PUBLIC_API')
       .map((mwk) =>
-        this.modelRegistryService.getMyApiKey(mwk.model.id ?? 0).pipe(
-          tap((key) => { mwk.myKey = key; }),
-          catchError(() => { mwk.myKey = null; return of(null); })
+        this.modelRegistryService.getMyApiKeys(mwk.model.id ?? 0).pipe(
+          tap((keys) => { mwk.myKeys = keys || []; }),
+          catchError(() => { mwk.myKeys = []; return of([]); })
         )
       );
 
@@ -104,11 +102,11 @@ export class AccessibleModelsComponent implements OnInit {
     return model.visibility === 'PUBLIC_API';
   }
 
-  getKeyForModel(model: AccessibleModel): ModelWithKey | undefined {
+  getKeysForModel(model: AccessibleModel): ModelWithKeys | undefined {
     return this.modelsWithKeys.find((mwk) => mwk.model === model);
   }
 
-  generateKey(mwk: ModelWithKey): void {
+  generateKey(mwk: ModelWithKeys): void {
     if (!mwk.model.id || mwk.generating) {
       return;
     }
@@ -126,8 +124,7 @@ export class AccessibleModelsComponent implements OnInit {
 
     this.modelRegistryService.createApiKey(mwk.model.id, body).pipe(
       tap((response) => {
-        mwk.myKey = response;
-        mwk.keyGenerated = true;
+        mwk.myKeys = [response, ...mwk.myKeys];
         mwk.generatedFullKey = response.apiKey || null;
         mwk.generating = false;
         mwk.keyNameInput = '';
@@ -145,27 +142,25 @@ export class AccessibleModelsComponent implements OnInit {
     ).subscribe();
   }
 
-  closeKeyModal(mwk: ModelWithKey): void {
+  closeKeyModal(mwk: ModelWithKeys): void {
     mwk.showKeyModal = false;
     mwk.generatedFullKey = null;
   }
 
-  deleteKey(mwk: ModelWithKey): void {
-    if (!mwk.myKey?.id || mwk.deleting) {
+  deleteKey(mwk: ModelWithKeys, key: ModelApiKeyItem): void {
+    if (!key?.id || mwk.deleting) {
       return;
     }
 
-    if (!confirm(`Supprimer definitivement la cle API pour ${mwk.model.registeredModelName} ? Cette action est irreversible.`)) {
+    if (!confirm(`Supprimer definitivement cette cle API ? Cette action est irreversible.`)) {
       return;
     }
 
     mwk.deleting = true;
 
-    this.modelRegistryService.deleteApiKey(mwk.myKey.id).pipe(
+    this.modelRegistryService.deleteApiKey(key.id).pipe(
       tap(() => {
-        mwk.myKey = null;
-        mwk.keyGenerated = false;
-        mwk.generatedFullKey = null;
+        mwk.myKeys = mwk.myKeys.filter((k) => k.id !== key.id);
         mwk.deleting = false;
         this.successMessage = `Cle API supprimee pour ${mwk.model.registeredModelName}.`;
         setTimeout(() => { this.successMessage = ''; }, 3000);
@@ -214,7 +209,7 @@ export class AccessibleModelsComponent implements OnInit {
     if (!model) return false;
     if (model.visibility === 'PRIVATE') return false;
     if (model.visibility !== 'PUBLIC_API' && model.visibility !== 'SHARED') return false;
-    return !this.isOwnedByCurrentUser(model);
+    return true;
   }
 
   private isOwnedByCurrentUser(model: AccessibleModel): boolean {
@@ -340,7 +335,7 @@ export class AccessibleModelsComponent implements OnInit {
   getAccessDescription(model: AccessibleModel): string {
     switch (model.visibility) {
       case 'PUBLIC_API':
-        return 'Ce modele est accessible via le SMART MODEL GATEWAY. Les cles API sont gerees par le proprietaire dans Model Registry.';
+        return 'Ce modele est accessible via le SMART MODEL GATEWAY. Generez votre propre cle API.';
       case 'SHARED':
         return 'Ce modele est partage avec vous. Generez votre propre cle API pour l\'utiliser.';
       case 'PRIVATE':

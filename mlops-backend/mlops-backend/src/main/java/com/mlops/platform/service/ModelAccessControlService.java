@@ -13,14 +13,14 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Service centralisé de contrôle d'accès aux modèles déployés.
+ * Service centralise de controle d acces aux modeles deployes.
  *
- * Règles :
- * - PRIVATE   → propriétaire uniquement
- * - SHARED    → propriétaire + utilisateurs dans la liste de partage
- * - PUBLIC_API → tous les utilisateurs authentifiés
+ * Regles :
+ * - PRIVATE   => proprietaire uniquement
+ * - SHARED    => proprietaire + utilisateurs dans la liste de partage
+ * - PUBLIC_API => tous les utilisateurs authentifies
  *
- * Toute vérification d'autorisation sur un modèle passée par ici.
+ * Toute verification d autorisation sur un modele passe par ici.
  */
 @Service
 public class ModelAccessControlService {
@@ -40,9 +40,9 @@ public class ModelAccessControlService {
     }
 
     /**
-     * Vérifie si un utilisateur peut ACCÉDER (voir / utiliser) un modèle déployé.
+     * Verifie si un utilisateur peut ACCEDER (voir / utiliser) un modele deploye.
      *
-     * @return true si l'utilisateur est autorisé
+     * @return true si l utilisateur est autorise
      */
     public boolean canAccessDeployment(User user, ModelDeployment deployment) {
         if (user == null || user.getId() == null) {
@@ -69,24 +69,16 @@ public class ModelAccessControlService {
     }
 
     /**
-     * Vérifie si un utilisateur peut GÉRER (modifier / supprimer) un modèle.
-     * Réservé au propriétaire.
+     * Verifie si un utilisateur peut GERER (modifier / supprimer) un modele.
+     * Reserve au proprietaire.
      */
     public boolean canManageDeployment(User user, ModelDeployment deployment) {
         return isOwner(user, deployment);
     }
 
     /**
-     * Vérifie si un utilisateur peut GÉRER les clés API d'un modèle.
-     * Réservé au propriétaire.
-     */
-    public boolean canManageApiKeys(User user, ModelDeployment deployment) {
-        return isOwner(user, deployment);
-    }
-
-    /**
-     * Vérifie si un utilisateur peut UTILISER une clé API pour un modèle donné.
-     * Pour SHARED : l'utilisateur doit être dans la liste de partage.
+     * Verifie si un utilisateur peut UTILISER une cle API pour un modele donne.
+     * Pour SHARED : l utilisateur doit etre dans la liste de partage.
      */
     public boolean canUseApiKey(User keyOwner, ModelDeployment deployment) {
         if (keyOwner == null || keyOwner.getId() == null) {
@@ -113,7 +105,7 @@ public class ModelAccessControlService {
     }
 
     /**
-     * Vérifie si un utilisateur est le propriétaire d'un déploiement.
+     * Verifie si un utilisateur est le proprietaire d un deploiement.
      */
     public boolean isOwner(User user, ModelDeployment deployment) {
         if (user == null || user.getId() == null) {
@@ -131,8 +123,8 @@ public class ModelAccessControlService {
     }
 
     /**
-     * Vérifie si un utilisateur est dans la liste de partage d'un modèle.
-     * Cherche dans tous les déploiements du même registeredModelName.
+     * Verifie si un utilisateur est dans la liste de partage d un modele.
+     * Cherche dans tous les deploiements du meme registeredModelName.
      */
     public boolean isSharedWithUser(User user, ModelDeployment deployment) {
         if (user == null || user.getId() == null) {
@@ -178,7 +170,7 @@ public class ModelAccessControlService {
     }
 
     /**
-     * Récupère le propriétaire d'un déploiement.
+     * Recupere le proprietaire d un deploiement.
      */
     public User getOwner(ModelDeployment deployment) {
         if (deployment == null || deployment.getProjectId() == null) {

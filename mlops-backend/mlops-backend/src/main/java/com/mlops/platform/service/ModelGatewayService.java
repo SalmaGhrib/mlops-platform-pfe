@@ -7,13 +7,11 @@ import com.mlops.platform.entity.DeploymentVisibility;
 import com.mlops.platform.entity.ModelApiKey;
 import com.mlops.platform.entity.ModelApiUsage;
 import com.mlops.platform.entity.ModelDeployment;
-import com.mlops.platform.entity.ModelDeploymentShare;
 import com.mlops.platform.entity.User;
 import com.mlops.platform.exception.GatewayException;
 import com.mlops.platform.repository.ModelApiKeyRepository;
 import com.mlops.platform.repository.ModelApiUsageRepository;
 import com.mlops.platform.repository.ModelDeploymentRepository;
-import com.mlops.platform.repository.ModelDeploymentShareRepository;
 import com.mlops.platform.repository.UserRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -30,15 +28,14 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /*
  * SMART MODEL GATEWAY — service central.
  *
  * Responsabilites :
- * 1. Gestion des cles API (creation / liste / activer / desactiver / revoquer)
- *    - proprietaire : gere toutes les cles du modele
- *    - utilisateur autorise (SHARED) : gere uniquement sa propre cle
+ * 1. Gestion des cles API (creation / liste / supprimer)
+ *    - chaque utilisateur cree et gere uniquement ses propres cles
+ *    - meme le proprietaire ne voit pas les cles des autres utilisateurs
  * 2. Validation d'une cle recue sur /api/external (prefixe + hash, jamais en clair).
  * 3. Enregistrement d'usage (REQUIRES_NEW, ne bloque jamais la prediction).
  *
@@ -46,13 +43,17 @@ import java.util.Optional;
  * - la cle complete n'est retournee qu'a la creation (affichee une seule fois)
  * - en base : keyPrefix (recherche) + keyHash (verification) uniquement
  * - jamais de log de la cle complete
- * - format cle : mlp_<8hex>_<secret> (nouveau) | mlops_live_<8hex>_<secret> (legacy)
+ * - format cle : mlp_<8hex>_<secret>
+ *
+ * Visibilite :
+ * - PRIVATE   => proprietaire uniquement
+ * - SHARED    => proprietaire + utilisateurs explicitement partages
+ * - PUBLIC_API => tous les utilisateurs authentifies
  */
 @Service
 public class ModelGatewayService {
 
-    private static final String KEY_PREFIX_LEGACY = "mlops_live_";
-    private static final String KEY_PREFIX_NEW = "mlp_";
+    private static final String KEY_PREFIX = "mlp_";
     private static final int HEX_PREFIX_BYTES = 4;
 
     private final ModelApiKeyRepository modelApiKeyRepository;
@@ -60,7 +61,6 @@ public class ModelGatewayService {
     private final ModelDeploymentService modelDeploymentService;
     private final ModelDeploymentRepository modelDeploymentRepository;
     private final ModelAccessControlService modelAccessControlService;
-    private final ModelDeploymentShareRepository modelDeploymentShareRepository;
     private final UserRepository userRepository;
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -70,7 +70,6 @@ public class ModelGatewayService {
             ModelDeploymentService modelDeploymentService,
             ModelDeploymentRepository modelDeploymentRepository,
             ModelAccessControlService modelAccessControlService,
-            ModelDeploymentShareRepository modelDeploymentShareRepository,
             UserRepository userRepository
     ) {
         this.modelApiKeyRepository = modelApiKeyRepository;
@@ -78,7 +77,6 @@ public class ModelGatewayService {
         this.modelDeploymentService = modelDeploymentService;
         this.modelDeploymentRepository = modelDeploymentRepository;
         this.modelAccessControlService = modelAccessControlService;
-        this.modelDeploymentShareRepository = modelDeploymentShareRepository;
         this.userRepository = userRepository;
     }
 
@@ -96,36 +94,12 @@ public class ModelGatewayService {
     ) {
         ModelDeployment deployment = loadAndValidateDeployment(deploymentId);
 
-        DeploymentVisibility visibility = deployment.getVisibility();
-        if (visibility == null) {
-            visibility = DeploymentVisibility.PRIVATE;
-        }
-
-        if (DeploymentVisibility.PRIVATE.equals(visibility)) {
-            throw new GatewayException(
-                    HttpStatus.FORBIDDEN,
-                    "EXTERNAL_ACCESS_DISABLED",
-                    "Ce modele est prive : la creation de cle API est desactivee. " +
-                            "Passez le modele en PUBLIC_API ou SHARED pour exposer l'API."
-            );
-        }
-
-        boolean isOwner = modelAccessControlService.isOwner(user, deployment);
-        boolean isAuthorizedShared = DeploymentVisibility.SHARED.equals(visibility)
-                && modelAccessControlService.canAccessDeployment(user, deployment);
-
-        if (!isOwner && !isAuthorizedShared) {
+        if (!modelAccessControlService.canAccessDeployment(user, deployment)) {
             throw new GatewayException(
                     HttpStatus.FORBIDDEN,
                     "NOT_AUTHORIZED",
                     "Vous n'etes pas autorise a creer une cle API pour ce modele."
             );
-        }
-
-        if (isOwner) {
-            requireOwner(deploymentId, user);
-        } else {
-            requireAuthorizedShared(user, deployment);
         }
 
         ModelApiKey key = new ModelApiKey();
@@ -162,25 +136,17 @@ public class ModelGatewayService {
     @Transactional(readOnly = true)
     public List<ModelApiKeyResponse> listApiKeys(Long deploymentId, User user) {
         ModelDeployment deployment = loadAndValidateDeployment(deploymentId);
-        boolean isOwner = modelAccessControlService.isOwner(user, deployment);
 
-        if (isOwner) {
-            List<ModelApiKey> keys = modelApiKeyRepository.findByDeploymentIdOrderByCreatedAtDesc(deploymentId);
-            return toResponseList(keys);
+        if (!modelAccessControlService.canAccessDeployment(user, deployment)) {
+            throw new GatewayException(
+                    HttpStatus.FORBIDDEN,
+                    "NOT_AUTHORIZED",
+                    "Vous n'etes pas autorise a acceder a ce modele."
+            );
         }
 
-        requireAuthorizedShared(user, deployment);
-
-        return modelApiKeyRepository.findByDeploymentIdAndOwnerId(deploymentId, user.getId())
-                .map(k -> List.of(ModelApiKeyResponse.fromEntity(k)))
-                .orElse(List.of());
-    }
-
-    @Transactional(readOnly = true)
-    public List<ModelApiKeyResponse> listAllApiKeysForDeployment(Long deploymentId, User user) {
-        requireOwner(deploymentId, user);
-
-        List<ModelApiKey> keys = modelApiKeyRepository.findByDeploymentIdOrderByCreatedAtDesc(deploymentId);
+        List<ModelApiKey> keys = modelApiKeyRepository
+                .findByDeploymentIdAndOwnerIdOrderByCreatedAtDesc(deploymentId, user.getId());
         return toResponseList(keys);
     }
 
@@ -188,9 +154,12 @@ public class ModelGatewayService {
     public List<ModelApiKeyResponse> getMyApiKeys(Long deploymentId, User user) {
         ModelDeployment deployment = loadAndValidateDeployment(deploymentId);
 
-        boolean isOwner = modelAccessControlService.isOwner(user, deployment);
-        if (!isOwner) {
-            requireAuthorizedShared(user, deployment);
+        if (!modelAccessControlService.canAccessDeployment(user, deployment)) {
+            throw new GatewayException(
+                    HttpStatus.FORBIDDEN,
+                    "NOT_AUTHORIZED",
+                    "Vous n'etes pas autorise a acceder a ce modele."
+            );
         }
 
         List<ModelApiKey> keys = modelApiKeyRepository
@@ -203,19 +172,8 @@ public class ModelGatewayService {
         ModelApiKey key = findKeyOrThrow(keyId);
 
         boolean isKeyOwner = key.getOwnerId() != null && key.getOwnerId().equals(user.getId());
-        boolean isDeploymentOwner;
 
-        try {
-            isDeploymentOwner = modelDeploymentService.isDeploymentOwnedByUser(key.getDeploymentId(), user);
-        } catch (RuntimeException e) {
-            throw new GatewayException(
-                    HttpStatus.NOT_FOUND,
-                    "MODEL_NOT_FOUND",
-                    "Modele introuvable."
-            );
-        }
-
-        if (!isKeyOwner && !isDeploymentOwner) {
+        if (!isKeyOwner) {
             throw new GatewayException(
                     HttpStatus.FORBIDDEN,
                     "NOT_OWNER",
@@ -232,23 +190,42 @@ public class ModelGatewayService {
 
     @Transactional(readOnly = true)
     public ModelApiKeyStatsResponse getStats(Long deploymentId, User user) {
-        requireOwner(deploymentId, user);
+        ModelDeployment deployment = loadAndValidateDeployment(deploymentId);
+
+        if (!modelAccessControlService.canAccessDeployment(user, deployment)) {
+            throw new GatewayException(
+                    HttpStatus.FORBIDDEN,
+                    "NOT_AUTHORIZED",
+                    "Vous n'etes pas autorise a acceder a ce modele."
+            );
+        }
 
         LocalDateTime since = LocalDate.now().atStartOfDay();
 
-        Map<String, Object> agg = modelApiUsageRepository.getAggregatedStats(deploymentId, since);
+        List<ModelApiKey> myKeys = modelApiKeyRepository
+                .findByDeploymentIdAndOwnerIdOrderByCreatedAtDesc(deploymentId, user.getId());
 
-        long totalToday = agg.get("total") != null ? ((Number) agg.get("total")).longValue() : 0L;
-        long successToday = agg.get("successCount") != null ? ((Number) agg.get("successCount")).longValue() : 0L;
+        long totalToday = 0;
+        long successToday = 0;
+        double avgLatencyMs = 0;
+        LocalDateTime lastUsedAt = null;
+
+        for (ModelApiKey k : myKeys) {
+            Map<String, Object> agg = modelApiUsageRepository.getAggregatedStatsForKey(k.getId(), since);
+            if (agg != null) {
+                totalToday += agg.get("total") != null ? ((Number) agg.get("total")).longValue() : 0;
+                successToday += agg.get("successCount") != null ? ((Number) agg.get("successCount")).longValue() : 0;
+                Object lat = agg.get("avgLatency");
+                if (lat != null) avgLatencyMs += ((Number) lat).doubleValue();
+                Object used = agg.get("lastUsedAt");
+                if (used instanceof LocalDateTime ldt) {
+                    if (lastUsedAt == null || ldt.isAfter(lastUsedAt)) lastUsedAt = ldt;
+                }
+            }
+        }
+
         long failedToday = totalToday - successToday;
-
         double successRate = totalToday == 0 ? 0.0 : (successToday * 100.0) / totalToday;
-        double avgLatencyMs = agg.get("avgLatency") != null ? ((Number) agg.get("avgLatency")).doubleValue() : 0.0;
-
-        Object lastUsedObj = agg.get("lastUsedAt");
-        LocalDateTime lastUsedAt = lastUsedObj instanceof LocalDateTime ? (LocalDateTime) lastUsedObj : null;
-
-        List<ModelApiKey> keys = modelApiKeyRepository.findByDeploymentIdOrderByCreatedAtDesc(deploymentId);
 
         ModelApiKeyStatsResponse stats = new ModelApiKeyStatsResponse();
         stats.setTotalToday(totalToday);
@@ -257,7 +234,7 @@ public class ModelGatewayService {
         stats.setSuccessRate(Math.round(successRate * 100.0) / 100.0);
         stats.setAvgLatencyMs(Math.round(avgLatencyMs * 100.0) / 100.0);
         stats.setLastUsedAt(lastUsedAt);
-        stats.setKeys(toResponseList(keys));
+        stats.setKeys(toResponseList(myKeys));
 
         return stats;
     }
@@ -278,7 +255,8 @@ public class ModelGatewayService {
                 continue;
             }
 
-            List<ModelApiKey> keys = modelApiKeyRepository.findByDeploymentIdOrderByCreatedAtDesc(d.getId());
+            List<ModelApiKey> keys = modelApiKeyRepository
+                    .findByDeploymentIdAndOwnerIdOrderByCreatedAtDesc(d.getId(), user.getId());
             if (keys != null) {
                 for (ModelApiKey k : keys) {
                     if (k != null) {
@@ -324,52 +302,6 @@ public class ModelGatewayService {
     ) {
         ModelDeployment deployment = resolveDeploymentByName(registeredModelName);
         return createApiKey(deployment.getId(), user, request);
-    }
-
-    @Transactional(readOnly = true)
-    public List<ModelApiKeyResponse> listAllApiKeysForModelOwner(String registeredModelName, User user) {
-        ModelDeployment deployment = resolveDeploymentByName(registeredModelName);
-        requireOwner(deployment.getId(), user);
-        List<ModelApiKey> keys = modelApiKeyRepository.findByDeploymentIdOrderByCreatedAtDesc(deployment.getId());
-        return toResponseList(keys);
-    }
-
-    @Transactional(readOnly = true)
-    public List<Map<String, Object>> getSharedUsersKeyStatus(Long deploymentId, User owner) {
-        requireOwner(deploymentId, owner);
-
-        List<ModelDeploymentShare> shares =
-                modelDeploymentShareRepository.findByDeploymentId(deploymentId);
-
-        List<Map<String, Object>> result = new ArrayList<>();
-
-        for (ModelDeploymentShare share : shares) {
-            Long userId = share.getSharedWithUserId();
-            User sharedUser = userRepository.findById(userId).orElse(null);
-
-            Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("userId", userId);
-            entry.put("username", sharedUser != null ? sharedUser.getEmail() : null);
-            entry.put("email", sharedUser != null ? sharedUser.getEmail() : null);
-
-            Optional<ModelApiKey> userKey =
-                    modelApiKeyRepository.findByDeploymentIdAndOwnerId(deploymentId, userId);
-
-            if (userKey.isPresent()) {
-                ModelApiKey key = userKey.get();
-                entry.put("hasKey", true);
-                entry.put("keyId", key.getId());
-                entry.put("keyPrefix", key.getKeyPrefix());
-                entry.put("totalRequests", key.getTotalRequests());
-                entry.put("lastUsedAt", key.getLastUsedAt());
-            } else {
-                entry.put("hasKey", false);
-            }
-
-            result.add(entry);
-        }
-
-        return result;
     }
 
     /*
@@ -435,6 +367,15 @@ public class ModelGatewayService {
         }
 
         LocalDateTime now = LocalDateTime.now();
+
+        if (Boolean.FALSE.equals(key.getEnabled())) {
+            System.out.println("[SMART_GATEWAY_AUTH] REJECT code=KEY_DISABLED keyId=" + key.getId() + " model=" + registeredModelName);
+            throw new GatewayException(
+                    HttpStatus.FORBIDDEN,
+                    "KEY_DISABLED",
+                    "Cette cle API a ete desactivee."
+            );
+        }
 
         if (key.getExpiresAt() != null && key.getExpiresAt().isBefore(now)) {
             System.out.println("[SMART_GATEWAY_AUTH] REJECT code=KEY_EXPIRED keyId=" + key.getId() + " model=" + registeredModelName);
@@ -598,54 +539,6 @@ public class ModelGatewayService {
         }
     }
 
-    private void requireOwner(Long deploymentId, User user) {
-        if (user == null || user.getId() == null) {
-            throw new GatewayException(
-                    HttpStatus.UNAUTHORIZED,
-                    "NOT_AUTHENTICATED",
-                    "Authentification requise."
-            );
-        }
-
-        boolean owned;
-
-        try {
-            owned = modelDeploymentService.isDeploymentOwnedByUser(deploymentId, user);
-        } catch (RuntimeException e) {
-            throw new GatewayException(
-                    HttpStatus.NOT_FOUND,
-                    "MODEL_NOT_FOUND",
-                    "Modele introuvable."
-            );
-        }
-
-        if (!owned) {
-            throw new GatewayException(
-                    HttpStatus.FORBIDDEN,
-                    "NOT_OWNER",
-                    "Vous n'etes pas le proprietaire de ce modele."
-            );
-        }
-    }
-
-    private void requireAuthorizedShared(User user, ModelDeployment deployment) {
-        if (user == null || user.getId() == null) {
-            throw new GatewayException(
-                    HttpStatus.UNAUTHORIZED,
-                    "NOT_AUTHENTICATED",
-                    "Authentification requise."
-            );
-        }
-
-        if (!modelAccessControlService.canAccessDeployment(user, deployment)) {
-            throw new GatewayException(
-                    HttpStatus.FORBIDDEN,
-                    "NOT_AUTHORIZED",
-                    "Vous n'etes pas autorise a acceder a ce modele."
-            );
-        }
-    }
-
     private ModelApiKey findKeyOrThrow(Long keyId) {
         if (keyId == null) {
             throw new GatewayException(
@@ -672,7 +565,7 @@ public class ModelGatewayService {
             hexBuilder.append(String.format("%02x", b));
         }
 
-        String prefix = KEY_PREFIX_NEW + hexBuilder;
+        String prefix = KEY_PREFIX + hexBuilder;
 
         byte[] secretBytes = new byte[32];
         secureRandom.nextBytes(secretBytes);
@@ -711,12 +604,8 @@ public class ModelGatewayService {
             return null;
         }
 
-        if (rawKey.startsWith(KEY_PREFIX_NEW)) {
-            return extractPrefixForKey(rawKey, KEY_PREFIX_NEW);
-        }
-
-        if (rawKey.startsWith(KEY_PREFIX_LEGACY)) {
-            return extractPrefixForKey(rawKey, KEY_PREFIX_LEGACY);
+        if (rawKey.startsWith(KEY_PREFIX)) {
+            return extractPrefixForKey(rawKey, KEY_PREFIX);
         }
 
         return null;
@@ -741,17 +630,11 @@ public class ModelGatewayService {
             return null;
         }
 
-        String prefixLiteral;
-
-        if (rawKey.startsWith(KEY_PREFIX_NEW)) {
-            prefixLiteral = KEY_PREFIX_NEW;
-        } else if (rawKey.startsWith(KEY_PREFIX_LEGACY)) {
-            prefixLiteral = KEY_PREFIX_LEGACY;
-        } else {
+        if (!rawKey.startsWith(KEY_PREFIX)) {
             return null;
         }
 
-        int separatorIndex = prefixLiteral.length() + 8;
+        int separatorIndex = KEY_PREFIX.length() + 8;
 
         if (rawKey.length() <= separatorIndex + 1 || rawKey.charAt(separatorIndex) != '_') {
             return null;

@@ -542,29 +542,9 @@ export class ModelRegistryService {
     );
   }
 
-  getMyApiKey(modelId: number): Observable<ModelApiKeyItem | null> {
+  getMyApiKeys(modelId: number): Observable<ModelApiKeyItem[]> {
     return this.http.get<ModelApiKeyItem[]>(
       `${this.gatewayKeysUrl}/${modelId}/api-keys/my`,
-      {
-        headers: this.getAuthHeaders()
-      }
-    ).pipe(
-      map((keys: ModelApiKeyItem[]) => keys && keys.length > 0 ? keys[0] : null)
-    );
-  }
-
-  listAllApiKeysForDeployment(modelId: number): Observable<ModelApiKeyItem[]> {
-    return this.http.get<ModelApiKeyItem[]>(
-      `${this.gatewayKeysUrl}/${modelId}/api-keys/all`,
-      {
-        headers: this.getAuthHeaders()
-      }
-    );
-  }
-
-  getSharedUsersKeyStatus(modelId: number): Observable<SharedUserKeyStatus[]> {
-    return this.http.get<SharedUserKeyStatus[]>(
-      `${this.gatewayKeysUrl}/${modelId}/api-keys/shared-users-status`,
       {
         headers: this.getAuthHeaders()
       }
@@ -583,9 +563,9 @@ export class ModelRegistryService {
     );
   }
 
-  getMyApiKeyByName(registeredModelName: string): Observable<ModelApiKeyItem | null> {
+  getMyApiKeysByName(registeredModelName: string): Observable<ModelApiKeyItem[]> {
     const cleanName = encodeURIComponent(registeredModelName || '');
-    return this.http.get<ModelApiKeyItem | null>(
+    return this.http.get<ModelApiKeyItem[]>(
       `${this.gatewayKeysUrl}/by-name/${cleanName}/api-keys/my`,
       { headers: this.getAuthHeaders() }
     );

@@ -114,18 +114,18 @@
 
         <!-- API KEY SECTION: SHARED + PUBLIC_API -->
         <div *ngIf="isShared(model) || isPublicApi(model)" class="api-key-section">
-          <ng-container *ngIf="getKeyForModel(model) as mwk">
+          <ng-container *ngIf="getKeysForModel(model) as mwk">
 
-            <!-- No key yet -->
-            <div *ngIf="!mwk.myKey && !mwk.generatedFullKey && !mwk.showKeyModal" class="key-generate-form">
-              <label *ngIf="isShared(model)">Acces API personnel</label>
+            <!-- Generate new key form -->
+            <div class="key-generate-form">
+              <label *ngIf="isShared(model)">Cle API personnelle</label>
               <label *ngIf="isPublicApi(model)">Votre cle API</label>
 
               <p class="key-form-hint" *ngIf="isShared(model)">
-                Generez votre propre cle pour appeler ce modele via le SMART GATEWAY.
+                Generez vos propres cles pour appeler ce modele via le SMART GATEWAY.
               </p>
               <p class="key-form-hint" *ngIf="isPublicApi(model)">
-                Generez une cle API pour appeler ce modele.
+                Generez une ou plusieurs cles API pour appeler ce modele.
               </p>
 
               <div class="key-form-row">
@@ -180,49 +180,47 @@
               </div>
             </div>
 
-            <!-- Existing key: show status -->
-            <div *ngIf="mwk.myKey && !mwk.generatedFullKey && !mwk.showKeyModal" class="key-existing">
-              <label>Acces API personnel</label>
+            <!-- Existing keys list -->
+            <div *ngIf="mwk.myKeys.length > 0" class="key-existing">
+              <label>Vos cles API ({{ mwk.myKeys.length }})</label>
 
-              <div class="key-status-row">
-                <div class="key-info">
-                  <span class="key-prefix">{{ mwk.myKey.keyPrefix }}_xxxx</span>
-                  <span class="key-status">
-                    Activee
-                  </span>
+              <div *ngFor="let key of mwk.myKeys" class="key-card">
+                <div class="key-status-row">
+                  <div class="key-info">
+                    <span class="key-prefix">{{ key.keyPrefix }}_xxxx</span>
+                    <span class="key-status" [class.key-disabled]="key.enabled === false">
+                      {{ key.enabled !== false ? 'Activee' : 'Desactivee' }}
+                    </span>
+                  </div>
                 </div>
-              </div>
 
-              <div class="key-details-grid">
-                <div class="key-detail">
-                  <span>Statut acces</span>
-                  <strong>Autorise</strong>
+                <div class="key-details-grid">
+                  <div class="key-detail" *ngIf="key.expiresAt">
+                    <span>Expire le</span>
+                    <strong>{{ formatDateShort(key.expiresAt) }}</strong>
+                  </div>
+                  <div class="key-detail">
+                    <span>Derniere utilisation</span>
+                    <strong>{{ formatDateTime(key.lastUsedAt) }}</strong>
+                  </div>
                 </div>
-                <div class="key-detail" *ngIf="mwk.myKey.expiresAt">
-                  <span>Expire le</span>
-                  <strong>{{ formatDateShort(mwk.myKey.expiresAt) }}</strong>
-                </div>
-                <div class="key-detail">
-                  <span>Derniere utilisation</span>
-                  <strong>{{ formatDateTime(mwk.myKey.lastUsedAt) }}</strong>
-                </div>
-              </div>
 
-              <div class="key-actions-row" *ngIf="mwk.myKey">
-                <button
-                  type="button"
-                  class="btn-delete"
-                  (click)="deleteKey(mwk)"
-                  [disabled]="mwk.deleting"
-                >
-                  <span *ngIf="!mwk.deleting">Supprimer</span>
-                  <span *ngIf="mwk.deleting">Suppression...</span>
-                </button>
+                <div class="key-actions-row">
+                  <button
+                    type="button"
+                    class="btn-delete"
+                    (click)="deleteKey(mwk, key)"
+                    [disabled]="mwk.deleting"
+                  >
+                    <span *ngIf="!mwk.deleting">Supprimer</span>
+                    <span *ngIf="mwk.deleting">Suppression...</span>
+                  </button>
+                </div>
               </div>
 
               <details class="curl-box">
                 <summary>Exemple curl</summary>
-                <pre>{{ buildCurlExample(model, mwk.myKey.keyPrefix + '_xxxx') }}</pre>
+                <pre>{{ buildCurlExample(model) }}</pre>
               </details>
             </div>
           </ng-container>

@@ -429,12 +429,6 @@ if (!hasText(modelVersion)) {
         deployment.setVisibility(DeploymentVisibility.SHARED);
         deployment.setApiEnabled(true);
 
-        if (deployment.getApiKey() == null || deployment.getApiKey().isBlank()) {
-            deployment.setApiKey(generateUniqueApiKey());
-            deployment.setApiKeyCreatedAt(LocalDateTime.now());
-            deployment.setApiKeyLastUsedAt(null);
-        }
-
         modelDeploymentRepository.saveAndFlush(deployment);
 
         List<Long> newUserIds = request == null || request.getUserIds() == null
@@ -554,8 +548,8 @@ if (!hasText(modelVersion)) {
         return new ApiAccessConfig(
                 false,
                 DeploymentVisibility.PRIVATE,
-                generateUniqueApiKey(),
-                LocalDateTime.now(),
+                null,
+                null,
                 null
         );
     }
@@ -571,28 +565,6 @@ if (!hasText(modelVersion)) {
             deployment.setVisibility(apiConfig.visibility);
         } else if (deployment.getVisibility() == null) {
             deployment.setVisibility(DeploymentVisibility.PRIVATE);
-        }
-
-        /*
-         * api_key is UNIQUE in MySQL. A blue/green candidate is initially a new
-         * database row, so copying the active row's key causes Duplicate entry.
-         * Existing rows keep their key; new candidates receive a unique key.
-         * The stable external endpoint remains the Kubernetes Service, while the
-         * active row becomes authoritative after readiness.
-         */
-        boolean isNewRow = deployment.getId() == null;
-        boolean requestedKeyAlreadyOwned = apiConfig.apiKey != null
-                && !apiConfig.apiKey.isBlank()
-                && modelDeploymentRepository.existsByApiKey(apiConfig.apiKey);
-
-        if (isNewRow && requestedKeyAlreadyOwned) {
-            deployment.setApiKey(generateUniqueApiKey());
-            deployment.setApiKeyCreatedAt(LocalDateTime.now());
-            deployment.setApiKeyLastUsedAt(null);
-        } else {
-            deployment.setApiKey(apiConfig.apiKey);
-            deployment.setApiKeyCreatedAt(apiConfig.apiKeyCreatedAt);
-            deployment.setApiKeyLastUsedAt(apiConfig.apiKeyLastUsedAt);
         }
     }
 
@@ -698,8 +670,6 @@ if (!hasText(modelVersion)) {
         }
 
         if (Boolean.TRUE.equals(deployment.getApiEnabled())
-                && deployment.getApiKey() != null
-                && !deployment.getApiKey().isBlank()
                 && deployment.getVisibility() != null
                 && deployment.getVisibility() != DeploymentVisibility.PRIVATE) {
             return;
@@ -2023,22 +1993,8 @@ public ModelDeploymentResponse markAsFailed(Long deploymentId, String errorMessa
         ModelDeployment deployment = modelDeploymentRepository.findById(deploymentId)
                 .orElseThrow(() -> new RuntimeException("Deployment introuvable avec id=" + deploymentId));
 
-        DeploymentVisibility oldVisibility = deployment.getVisibility();
-
-        if (oldVisibility == null) {
-            oldVisibility = DeploymentVisibility.PRIVATE;
-        }
-
         deployment.setVisibility(DeploymentVisibility.PUBLIC_API);
         deployment.setApiEnabled(true);
-
-        if (oldVisibility != DeploymentVisibility.PUBLIC_API
-                || deployment.getApiKey() == null
-                || deployment.getApiKey().isBlank()) {
-            deployment.setApiKey(generateUniqueApiKey());
-            deployment.setApiKeyCreatedAt(LocalDateTime.now());
-            deployment.setApiKeyLastUsedAt(null);
-        }
 
         ModelDeployment saved = modelDeploymentRepository.saveAndFlush(deployment);
         return ModelDeploymentResponse.fromEntity(saved);
@@ -2051,9 +2007,6 @@ public ModelDeploymentResponse markAsFailed(Long deploymentId, String errorMessa
 
         deployment.setVisibility(DeploymentVisibility.PRIVATE);
         deployment.setApiEnabled(false);
-        deployment.setApiKey(null);
-        deployment.setApiKeyCreatedAt(null);
-        deployment.setApiKeyLastUsedAt(null);
 
         ModelDeployment saved = modelDeploymentRepository.saveAndFlush(deployment);
         return ModelDeploymentResponse.fromEntity(saved);
@@ -2061,70 +2014,22 @@ public ModelDeploymentResponse markAsFailed(Long deploymentId, String errorMessa
 
     @Transactional
     public ModelDeploymentResponse regenerateApiKey(Long deploymentId) {
-        ModelDeployment deployment = findDeploymentOrThrow(deploymentId);
-
-        if (deployment.getRegisteredModelName() == null || deployment.getRegisteredModelName().isBlank()) {
-            throw new RuntimeException("registeredModelName manquant.");
-        }
-
-        String registeredModelName = deployment.getRegisteredModelName().trim();
-        String newApiKey = generateUniqueApiKey();
-        LocalDateTime now = LocalDateTime.now();
-
-        DeploymentVisibility currentVisibility = deployment.getVisibility();
-
-        if (currentVisibility == null) {
-            currentVisibility = DeploymentVisibility.PRIVATE;
-        }
-
-        List<ModelDeployment> deployments =
-                modelDeploymentRepository.findByRegisteredModelNameOrderByCreatedAtDesc(registeredModelName);
-
-        for (ModelDeployment item : deployments) {
-            if (item == null) {
-                continue;
-            }
-
-            item.setApiEnabled(true);
-            item.setVisibility(currentVisibility);
-            item.setApiKey(newApiKey);
-            item.setApiKeyCreatedAt(now);
-            item.setApiKeyLastUsedAt(null);
-
-            modelDeploymentRepository.save(item);
-        }
-
-        modelDeploymentRepository.flush();
-
-        ModelDeployment refreshed = findDeploymentOrThrow(deploymentId);
-        return ModelDeploymentResponse.fromEntity(refreshed);
+        throw new RuntimeException("Cette fonctionnalite a ete retiree. Utilisez le SMART MODEL GATEWAY pour gerer vos cles API.");
     }
 
     /*
-     * Ancienne signature gardée pour ne pas casser un ancien code.
-     * Attention : en mode SHARED, cette méthode échouera car X-USER-EMAIL est obligatoire.
+     * Legacy method - no longer used. ExternalPredictionController uses SMART Gateway.
      */
     @Transactional
     public ModelDeployment findDeploymentForExternalApiOrThrow(
             String registeredModelName,
             String apiKey
     ) {
-        return findDeploymentForExternalApiOrThrow(registeredModelName, apiKey, null);
+        throw new RuntimeException("Legacy external API disabled. Use SMART MODEL GATEWAY with X-API-KEY header.");
     }
 
     /*
-     * Nouvelle méthode utilisée par ExternalPredictionController.
-     *
-     * PUBLIC_API :
-     * - clé API valide suffit.
-     *
-     * SHARED :
-     * - clé API valide obligatoire.
-     * - X-USER-EMAIL obligatoire.
-     * - l'utilisateur correspondant à cet email doit être dans model_deployment_shares.
-     *
-     * PRIVATE :
-     * - accès externe refusé.
+     * Legacy method - no longer used. ExternalPredictionController uses SMART Gateway.
      */
     @Transactional
     public ModelDeployment findDeploymentForExternalApiOrThrow(
@@ -2132,95 +2037,7 @@ public ModelDeploymentResponse markAsFailed(Long deploymentId, String errorMessa
             String apiKey,
             String userEmail
     ) {
-        if (registeredModelName == null || registeredModelName.isBlank()) {
-            throw new RuntimeException("registeredModelName est obligatoire.");
-        }
-
-        if (apiKey == null || apiKey.isBlank()) {
-            throw new RuntimeException("API key manquante.");
-        }
-
-        String cleanModelName = registeredModelName.trim();
-        String cleanApiKey = apiKey.trim();
-
-        ModelDeployment apiOwner = modelDeploymentRepository
-                .findTopByRegisteredModelNameAndApiKeyAndApiEnabledTrueOrderByUpdatedAtDesc(
-                        cleanModelName,
-                        cleanApiKey
-                )
-                .orElseThrow(() -> new RuntimeException("API key invalide pour ce modèle."));
-
-        DeploymentVisibility visibility = apiOwner.getVisibility();
-
-        if (visibility == null) {
-            visibility = DeploymentVisibility.PRIVATE;
-        }
-
-        if (DeploymentVisibility.PRIVATE.equals(visibility)) {
-            throw new RuntimeException("Ce modèle est privé et ne peut pas être utilisé via l'API externe.");
-        }
-
-        if (!Boolean.TRUE.equals(apiOwner.getApiEnabled())) {
-            throw new RuntimeException("L'accès API de ce modèle est désactivé.");
-        }
-
-        if (DeploymentVisibility.SHARED.equals(visibility)) {
-            if (userEmail == null || userEmail.isBlank()) {
-                throw new RuntimeException("X-USER-EMAIL est obligatoire pour utiliser un modèle partagé.");
-            }
-
-            String cleanEmail = userEmail.trim();
-            User user = findUserByEmailIgnoreCaseOrThrow(cleanEmail);
-
-            boolean authorizedOnApiOwner =
-                    modelDeploymentShareRepository.findByDeploymentIdAndSharedWithUserId(
-                            apiOwner.getId(),
-                            user.getId()
-                    ).isPresent();
-
-            boolean authorizedOnAnySameModelDeployment = false;
-
-            if (!authorizedOnApiOwner) {
-                List<ModelDeployment> sameModelDeployments =
-                        modelDeploymentRepository.findByRegisteredModelNameOrderByCreatedAtDesc(cleanModelName);
-
-                if (sameModelDeployments != null) {
-                    for (ModelDeployment deployment : sameModelDeployments) {
-                        if (deployment == null || deployment.getId() == null) {
-                            continue;
-                        }
-
-                        boolean found =
-                                modelDeploymentShareRepository.findByDeploymentIdAndSharedWithUserId(
-                                        deployment.getId(),
-                                        user.getId()
-                                ).isPresent();
-
-                        if (found) {
-                            authorizedOnAnySameModelDeployment = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (!authorizedOnApiOwner && !authorizedOnAnySameModelDeployment) {
-                throw new RuntimeException("Cet utilisateur n'est pas autorisé à utiliser ce modèle partagé.");
-            }
-        }
-
-        ModelDeployment activeDeployment = findKubernetesReadyActiveDeployment(cleanModelName)
-                .orElseThrow(() -> new RuntimeException(
-                        "Aucun déploiement Kubernetes actif et prêt trouvé pour ce modèle."
-                ));
-
-        activeDeployment.setApiEnabled(apiOwner.getApiEnabled());
-        activeDeployment.setVisibility(visibility);
-        activeDeployment.setApiKey(apiOwner.getApiKey());
-        activeDeployment.setApiKeyCreatedAt(apiOwner.getApiKeyCreatedAt());
-        activeDeployment.setApiKeyLastUsedAt(LocalDateTime.now());
-
-        return modelDeploymentRepository.saveAndFlush(activeDeployment);
+        throw new RuntimeException("Legacy external API disabled. Use SMART MODEL GATEWAY with X-API-KEY header.");
     }
 
     private User findUserByEmailIgnoreCaseOrThrow(String email) {
@@ -2989,36 +2806,17 @@ private boolean isCustomDockerRuntimeMode(String runtimeMode) {
     }
 
     private String generateUniqueApiKey() {
-        String apiKey;
-
-        do {
-            apiKey = generateApiKey();
-        } while (modelDeploymentRepository.existsByApiKey(apiKey));
-
-        return apiKey;
+        throw new RuntimeException("Legacy API key generation disabled. Use SMART MODEL GATEWAY.");
     }
 
     private String generateApiKey() {
-        byte[] randomBytes = new byte[32];
-        secureRandom.nextBytes(randomBytes);
-
-        String token = Base64.getUrlEncoder()
-                .withoutPadding()
-                .encodeToString(randomBytes);
-
-        return "mlops_" + token;
+        throw new RuntimeException("Legacy API key generation disabled. Use SMART MODEL GATEWAY.");
     }
 
     @Transactional
     public ModelDeploymentResponse updateDeploymentVisibility(Long deploymentId, String visibilityValue) {
         ModelDeployment deployment = modelDeploymentRepository.findById(deploymentId)
                 .orElseThrow(() -> new RuntimeException("Deployment introuvable avec id=" + deploymentId));
-
-        DeploymentVisibility oldVisibility = deployment.getVisibility();
-
-        if (oldVisibility == null) {
-            oldVisibility = DeploymentVisibility.PRIVATE;
-        }
 
         String cleanVisibility = visibilityValue == null
                 ? "PRIVATE"
@@ -3032,38 +2830,8 @@ private boolean isCustomDockerRuntimeMode(String runtimeMode) {
             throw new RuntimeException("Visibility invalide : " + visibilityValue);
         }
 
-        boolean visibilityChanged = oldVisibility != newVisibility;
-
-        if (newVisibility == DeploymentVisibility.PRIVATE) {
-            deployment.setVisibility(DeploymentVisibility.PRIVATE);
-            deployment.setApiEnabled(false);
-
-            if (visibilityChanged) {
-                deployment.setApiKey(null);
-                deployment.setApiKeyCreatedAt(null);
-                deployment.setApiKeyLastUsedAt(null);
-            }
-
-        } else if (newVisibility == DeploymentVisibility.PUBLIC_API) {
-            deployment.setVisibility(DeploymentVisibility.PUBLIC_API);
-            deployment.setApiEnabled(true);
-
-            if (visibilityChanged || deployment.getApiKey() == null || deployment.getApiKey().isBlank()) {
-                deployment.setApiKey(generateUniqueApiKey());
-                deployment.setApiKeyCreatedAt(LocalDateTime.now());
-                deployment.setApiKeyLastUsedAt(null);
-            }
-
-        } else if (newVisibility == DeploymentVisibility.SHARED) {
-            deployment.setVisibility(DeploymentVisibility.SHARED);
-            deployment.setApiEnabled(true);
-
-            if (visibilityChanged || deployment.getApiKey() == null || deployment.getApiKey().isBlank()) {
-                deployment.setApiKey(generateUniqueApiKey());
-                deployment.setApiKeyCreatedAt(LocalDateTime.now());
-                deployment.setApiKeyLastUsedAt(null);
-            }
-        }
+        deployment.setVisibility(newVisibility);
+        deployment.setApiEnabled(newVisibility != DeploymentVisibility.PRIVATE);
 
         ModelDeployment saved = modelDeploymentRepository.saveAndFlush(deployment);
         return ModelDeploymentResponse.fromEntity(saved);
