@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -184,6 +185,104 @@ class MonitoringAlertServiceTest {
 
         assertEquals(key1, key2);
         assertTrue(key1.startsWith("DATA_DRIFT:7:model-a:"));
+    }
+
+    @Test
+    void buildExperimentIdKey_isStable() {
+        String key1 = MonitoringAlertService.buildExperimentIdKey(
+                AlertType.MODEL_QUALITY_FAILED, PROJECT_ID, 42L
+        );
+        String key2 = MonitoringAlertService.buildExperimentIdKey(
+                AlertType.MODEL_QUALITY_FAILED, PROJECT_ID, 42L
+        );
+
+        assertEquals(key1, key2);
+        assertEquals("MODEL_QUALITY_FAILED:7:exp:42", key1);
+    }
+
+    @Test
+    void buildExperimentIdKey_differentExperiment_differentKey() {
+        String key1 = MonitoringAlertService.buildExperimentIdKey(
+                AlertType.MODEL_QUALITY_FAILED, PROJECT_ID, 42L
+        );
+        String key2 = MonitoringAlertService.buildExperimentIdKey(
+                AlertType.MODEL_QUALITY_FAILED, PROJECT_ID, 99L
+        );
+
+        assertNotEquals(key1, key2);
+    }
+
+    @Test
+    void raiseAlert_withTitle_usesCustomTitle() {
+        when(monitoringAlertRepository.existsByIdempotencyKey(anyString())).thenReturn(false);
+        when(monitoringAlertRepository.existsByAlertTypeAndProjectIdAndModelVersion(
+                any(), anyLong(), anyString()
+        )).thenReturn(false);
+
+        MonitoringAlert saved = new MonitoringAlert();
+        saved.setId(5L);
+        when(monitoringAlertRepository.saveAndFlush(any(MonitoringAlert.class)))
+                .thenAnswer(invocation -> {
+                    MonitoringAlert alert = invocation.getArgument(0);
+                    alert.setId(5L);
+                    return alert;
+                });
+
+        MonitoringAlert result = service.raiseAlert(
+                AlertType.MODEL_QUALITY_FAILED,
+                AlertSeverity.WARNING,
+                PROJECT_ID,
+                "wind_speed_model",
+                "1",
+                0.71,
+                0.75,
+                "GLOBAL_SCORE_BELOW_THRESHOLD",
+                "Reevaluer le modele.",
+                "Le score est inferieur au seuil.",
+                "Modele non promu en Production",
+                MonitoringAlertService.buildExperimentIdKey(
+                        AlertType.MODEL_QUALITY_FAILED, PROJECT_ID, 42L
+                ),
+                owner()
+        );
+
+        assertNotNull(result);
+        verify(notificationService, times(1)).notifyUser(
+                any(User.class),
+                eq("Modele non promu en Production"),
+                anyString(),
+                any(),
+                any(),
+                anyLong()
+        );
+    }
+
+    @Test
+    void raiseAlert_modelVersionDuplicate_returnsNull() {
+        when(monitoringAlertRepository.existsByIdempotencyKey(anyString())).thenReturn(false);
+        when(monitoringAlertRepository.existsByAlertTypeAndProjectIdAndModelVersion(
+                any(), anyLong(), anyString()
+        )).thenReturn(true);
+
+        MonitoringAlert result = service.raiseAlert(
+                AlertType.MODEL_QUALITY_FAILED,
+                AlertSeverity.WARNING,
+                PROJECT_ID,
+                "wind_speed_model",
+                "1",
+                0.71,
+                0.75,
+                "GLOBAL_SCORE_BELOW_THRESHOLD",
+                "Reevaluer.",
+                "Score inferieur.",
+                MonitoringAlertService.buildExperimentIdKey(
+                        AlertType.MODEL_QUALITY_FAILED, PROJECT_ID, 42L
+                ),
+                owner()
+        );
+
+        assertNull(result);
+        verify(monitoringAlertRepository, never()).saveAndFlush(any());
     }
 
     @Test

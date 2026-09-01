@@ -68,6 +68,35 @@ public class MonitoringAlertService {
             String idempotencyKey,
             User owner
     ) {
+        return raiseAlert(
+                alertType, severity, projectId,
+                registeredModelName, modelVersion,
+                observedValue, thresholdValue,
+                cause, action, message,
+                null,
+                idempotencyKey, owner
+        );
+    }
+
+    @Transactional(
+            propagation = Propagation.REQUIRES_NEW,
+            timeout = 10
+    )
+    public MonitoringAlert raiseAlert(
+            AlertType alertType,
+            AlertSeverity severity,
+            Long projectId,
+            String registeredModelName,
+            String modelVersion,
+            Double observedValue,
+            Double thresholdValue,
+            String cause,
+            String action,
+            String message,
+            String title,
+            String idempotencyKey,
+            User owner
+    ) {
         if (alertType == null) {
             throw new IllegalArgumentException("alertType is required");
         }
@@ -95,6 +124,20 @@ public class MonitoringAlertService {
             return null;
         }
 
+        if (modelVersion != null && projectId != null
+                && monitoringAlertRepository
+                        .existsByAlertTypeAndProjectIdAndModelVersion(
+                                alertType, projectId, modelVersion
+                        )) {
+            System.out.println(
+                    "[MONITORING_ALERT] Duplicate alert ignored (model+project). "
+                            + "alertType=" + alertType
+                            + ", projectId=" + projectId
+                            + ", modelVersion=" + modelVersion
+            );
+            return null;
+        }
+
         MonitoringAlert alert = new MonitoringAlert();
         alert.setAlertType(alertType);
         alert.setSeverity(resolvedSeverity);
@@ -110,7 +153,7 @@ public class MonitoringAlertService {
 
         MonitoringAlert saved = monitoringAlertRepository.saveAndFlush(alert);
 
-        notifyAlert(saved, owner);
+        notifyAlert(saved, owner, title);
 
         return saved;
     }
@@ -119,7 +162,7 @@ public class MonitoringAlertService {
      * Génère une notification pour le propriétaire du projet, et pour les
      * administrateurs lorsque l'alerte est critique.
      */
-    private void notifyAlert(MonitoringAlert alert, User owner) {
+    private void notifyAlert(MonitoringAlert alert, User owner, String customTitle) {
         if (alert == null) {
             return;
         }
@@ -132,7 +175,9 @@ public class MonitoringAlertService {
                 ? alert.getProjectId()
                 : alert.getId();
 
-        String title = buildTitle(alert);
+        String title = (customTitle != null && !customTitle.isBlank())
+                ? customTitle.trim()
+                : buildTitle(alert);
         String message = alert.getMessage() != null
                 ? alert.getMessage()
                 : title;
@@ -267,6 +312,22 @@ public class MonitoringAlertService {
                 .withNano(0);
 
         return buildIdempotencyKey(alertType, projectId, registeredModelName, hourWindow);
+    }
+
+    public static String buildExperimentIdKey(
+            AlertType alertType,
+            Long projectId,
+            Long experimentId
+    ) {
+        String typePart = alertType != null ? alertType.name() : "ALERT";
+        String projectPart = projectId != null ? String.valueOf(projectId) : "GLOBAL";
+        String experimentPart = experimentId != null ? String.valueOf(experimentId) : "-";
+
+        return typePart
+                + ":"
+                + projectPart
+                + ":exp:"
+                + experimentPart;
     }
 
     private NotificationType toNotificationType(AlertType alertType) {

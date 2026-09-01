@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
-import { Observable, throwError } from 'rxjs';
+import { Observable, throwError, map } from 'rxjs';
 import {
   SearchPageResponse,
   SmartSearchParams
@@ -173,11 +173,10 @@ export interface ModelApiKeyItem {
   expiresAt?: string | null;
   revokedAt?: string | null;
   lastUsedAt?: string | null;
-  dailyQuota?: number | null;
-  requestsToday?: number | null;
   totalRequests?: number | null;
-  usageDate?: string | null;
-  quotaRemaining?: number | null;
+  successfulRequests?: number | null;
+  failedRequests?: number | null;
+  status?: string | null;
 
   [key: string]: any;
 }
@@ -188,9 +187,22 @@ export interface ModelApiKeyStats {
   failedToday?: number | null;
   successRate?: number | null;
   avgLatencyMs?: number | null;
-  dailyQuota?: number | null;
-  quotaRemaining?: number | null;
   keys?: ModelApiKeyItem[] | null;
+
+  [key: string]: any;
+}
+
+export interface SharedUserKeyStatus {
+  userId?: number | null;
+  username?: string | null;
+  email?: string | null;
+  hasKey?: boolean | null;
+  keyId?: number | null;
+  keyPrefix?: string | null;
+  enabled?: boolean | null;
+  revoked?: boolean | null;
+  totalRequests?: number | null;
+  lastUsedAt?: string | null;
 
   [key: string]: any;
 }
@@ -500,7 +512,6 @@ export class ModelRegistryService {
     modelId: number,
     body: {
       name?: string | null;
-      dailyQuota?: number | null;
       expiresAt?: string | null;
     }
   ): Observable<ModelApiKeyItem> {
@@ -522,32 +533,61 @@ export class ModelRegistryService {
     );
   }
 
-  enableApiKey(keyId: number): Observable<ModelApiKeyItem> {
-    return this.http.patch<ModelApiKeyItem>(
-      `/api/model-api-keys/${keyId}/enable`,
-      {},
-      {
-        headers: this.getAuthHeaders()
-      }
-    );
-  }
-
-  disableApiKey(keyId: number): Observable<ModelApiKeyItem> {
-    return this.http.patch<ModelApiKeyItem>(
-      `/api/model-api-keys/${keyId}/disable`,
-      {},
-      {
-        headers: this.getAuthHeaders()
-      }
-    );
-  }
-
-  revokeApiKey(keyId: number): Observable<any> {
+  deleteApiKey(keyId: number): Observable<any> {
     return this.http.delete<any>(
       `/api/model-api-keys/${keyId}`,
       {
         headers: this.getAuthHeaders()
       }
+    );
+  }
+
+  getMyApiKey(modelId: number): Observable<ModelApiKeyItem | null> {
+    return this.http.get<ModelApiKeyItem[]>(
+      `${this.gatewayKeysUrl}/${modelId}/api-keys/my`,
+      {
+        headers: this.getAuthHeaders()
+      }
+    ).pipe(
+      map((keys: ModelApiKeyItem[]) => keys && keys.length > 0 ? keys[0] : null)
+    );
+  }
+
+  listAllApiKeysForDeployment(modelId: number): Observable<ModelApiKeyItem[]> {
+    return this.http.get<ModelApiKeyItem[]>(
+      `${this.gatewayKeysUrl}/${modelId}/api-keys/all`,
+      {
+        headers: this.getAuthHeaders()
+      }
+    );
+  }
+
+  getSharedUsersKeyStatus(modelId: number): Observable<SharedUserKeyStatus[]> {
+    return this.http.get<SharedUserKeyStatus[]>(
+      `${this.gatewayKeysUrl}/${modelId}/api-keys/shared-users-status`,
+      {
+        headers: this.getAuthHeaders()
+      }
+    );
+  }
+
+  createApiKeyByName(
+    registeredModelName: string,
+    body: { name?: string | null; expiresAt?: string | null; }
+  ): Observable<ModelApiKeyItem> {
+    const cleanName = encodeURIComponent(registeredModelName || '');
+    return this.http.post<ModelApiKeyItem>(
+      `${this.gatewayKeysUrl}/by-name/${cleanName}/api-keys`,
+      body || {},
+      { headers: this.getAuthHeaders() }
+    );
+  }
+
+  getMyApiKeyByName(registeredModelName: string): Observable<ModelApiKeyItem | null> {
+    const cleanName = encodeURIComponent(registeredModelName || '');
+    return this.http.get<ModelApiKeyItem | null>(
+      `${this.gatewayKeysUrl}/by-name/${cleanName}/api-keys/my`,
+      { headers: this.getAuthHeaders() }
     );
   }
 
@@ -557,12 +597,11 @@ export class ModelRegistryService {
     const keyValue = apiKey || 'VOTRE_CLE_API';
 
     return [
-      'curl.exe -X POST \\',
-      `  "${baseUrl}/api/external/models/${cleanName}/predict" \\`,
-      '  -H "X-API-KEY: VOTRE_CLE_API" \\',
-      '  -H "Content-Type: application/json" \\',
-      '  -d \'{ "feature_1": 1.2, "feature_2": 0.4 }\''
-    ].join('\n');
+      `curl.exe -X POST "${baseUrl}/api/external/models/${cleanName}/predict"`,
+      '  -H "Content-Type: application/json"',
+      `  -H "X-API-KEY: ${keyValue}"`,
+      "  -d '{ \"feature_1\": 1.2, \"feature_2\": 0.4 }'"
+    ].join(' ');
   }
 
   getPublicBaseUrlForCopy(): string {

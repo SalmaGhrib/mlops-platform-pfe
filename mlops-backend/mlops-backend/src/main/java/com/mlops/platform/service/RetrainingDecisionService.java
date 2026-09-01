@@ -13,6 +13,8 @@ import com.mlops.platform.entity.RetrainingStrategy;
 import com.mlops.platform.entity.RetrainingTriggerType;
 import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.PredictionLogRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -21,6 +23,8 @@ import java.util.*;
 
 @Service
 public class RetrainingDecisionService {
+
+    private static final Logger log = LoggerFactory.getLogger(RetrainingDecisionService.class);
 
     private final PredictionLogRepository predictionLogRepository;
     private final MlExperimentRepository mlExperimentRepository;
@@ -83,15 +87,7 @@ public class RetrainingDecisionService {
             return blocked;
         }
 
-        boolean scheduleDue = config.isScheduleDue(now);
-
-        RetrainingDecision decision = switch (config.getStrategy()) {
-            case SCHEDULED_ONLY -> buildScheduledOnly(config, scheduleDue);
-            case SCHEDULED_WITH_MONITORING ->
-                    buildScheduledWithMonitoring(config, scheduleDue, now);
-            case SMART_MONITORING_ONLY -> buildSmartMonitoringOnly(config, now);
-            case FULL_SMART -> buildFullSmart(config, scheduleDue, now);
-        };
+        RetrainingDecision decision = evaluateMonitoring(config, now);
 
         return applySecurityClassification(decision);
     }
@@ -151,116 +147,10 @@ public class RetrainingDecisionService {
         return decision;
     }
 
-    private RetrainingDecision buildScheduledOnly(
-            RetrainingConfig config,
-            boolean scheduleDue
-    ) {
-        if (!scheduleDue) {
-            return RetrainingDecision.skip(
-                    RetrainingSeverity.NONE,
-                    "Échéance planifiée non atteinte."
-            );
-        }
-
-        RetrainingDecision run = RetrainingDecision.run(
-                RetrainingTriggerType.SCHEDULED,
-                RetrainingSeverity.MEDIUM,
-                "Stratégie SCHEDULED_ONLY : échéance planifiée atteinte."
-        );
-        run.addReasonCode("SCHEDULE_DUE");
-        run.addThreshold("scheduleWindow", toDouble(config.getNextRetrainingAt()));
-        return run;
-    }
-
-    private RetrainingDecision buildScheduledWithMonitoring(
-            RetrainingConfig config,
-            boolean scheduleDue,
-            LocalDateTime now
-    ) {
-        if (!scheduleDue) {
-            return RetrainingDecision.skip(
-                    RetrainingSeverity.NONE,
-                    "Échéance planifiée non atteinte."
-            );
-        }
-
-        RetrainingDecision monitoring = evaluateMonitoring(config, now);
-
-        if (monitoring.isShouldRetrain()) {
-            return monitoring;
-        }
-
-        long minPredictions = safeLong(config.getMinPredictionsForMonitoring(), 30);
-        long recentCount = safeCount(monitoring.getObservedMetrics().get("recentPredictionCount"));
-
-        if (recentCount < minPredictions) {
-            RetrainingDecision scheduled = RetrainingDecision.run(
-                    RetrainingTriggerType.SCHEDULED,
-                    RetrainingSeverity.MEDIUM,
-                    "Pas assez de prédictions pour conclure sur le drift. "
-                            + "Le réentraînement planifié est conservé. "
-                            + safeMessage(monitoring.getReason())
-            );
-            scheduled.addReasonCode("SCHEDULE_DUE");
-            scheduled.addReasonCode("INSUFFICIENT_DATA");
-            scheduled.addThreshold("scheduleWindow", toDouble(config.getNextRetrainingAt()));
-            copyObservedMetrics(monitoring, scheduled);
-            return scheduled;
-        }
-
-        RetrainingDecision skipped = RetrainingDecision.skip(
-                RetrainingSeverity.LOW,
-                "Mode SCHEDULED_WITH_MONITORING : le monitoring n'autorise pas "
-                        + "le réentraînement. " + safeMessage(monitoring.getReason())
-        );
-        skipped.addReasonCode("MONITORING_OK");
-        copyObservedMetrics(monitoring, skipped);
-        return skipped;
-    }
-
-    private RetrainingDecision buildSmartMonitoringOnly(
-            RetrainingConfig config,
-            LocalDateTime now
-    ) {
-        return evaluateMonitoring(config, now);
-    }
-
-    private RetrainingDecision buildFullSmart(
-            RetrainingConfig config,
-            boolean scheduleDue,
-            LocalDateTime now
-    ) {
-        RetrainingDecision monitoring = evaluateMonitoring(config, now);
-
-        if (monitoring.isShouldRetrain()) {
-            return monitoring;
-        }
-
-        if (scheduleDue) {
-            RetrainingDecision scheduled = RetrainingDecision.run(
-                    RetrainingTriggerType.SCHEDULED,
-                    RetrainingSeverity.MEDIUM,
-                    "Mode FULL_SMART : échéance planifiée atteinte. "
-                            + safeMessage(monitoring.getReason())
-            );
-            scheduled.addReasonCode("SCHEDULE_DUE");
-            scheduled.addThreshold("scheduleWindow", toDouble(config.getNextRetrainingAt()));
-            copyObservedMetrics(monitoring, scheduled);
-            return scheduled;
-        }
-
-        RetrainingDecision skipped = RetrainingDecision.skip(
-                RetrainingSeverity.NONE,
-                "Aucun signal de monitoring et échéance non atteinte."
-        );
-        skipped.addReasonCode("MONITORING_OK");
-        copyObservedMetrics(monitoring, skipped);
-        return skipped;
-    }
-
     /**
-     * Évalue les signaux de monitoring (runs échoués, erreurs de prédiction,
-     * data drift) et classe la sévérité + le niveau sécurité.
+     * Évalue les signaux de monitoring (performance drop, data drift)
+     * et classe la sévérité + le niveau sécurité.
+     * Seuls les signaux PERFORMANCE_DROP et DATA_DRIFT sont actifs.
      */
     private RetrainingDecision evaluateMonitoring(
             RetrainingConfig config,
@@ -276,158 +166,110 @@ public class RetrainingDecisionService {
                 "Aucun signal de monitoring ne justifie un réentraînement."
         );
 
-        boolean anySignal = false;
-
-        if (config.isFailureMonitoringEnabled()) {
-            long failedRuns = safeCount(
-                    mlExperimentRepository.countFailedRunsForProjectSince(projectId, lookbackHours)
-            );
-            anySignal = anySignal || failedRuns > 0;
-            result.addObservedMetric("recentFailedRuns", (double) failedRuns);
-            result.addThreshold("failedRunsThreshold", 1.0);
-
-            /*
-             * Les runs échoués sont un signal TECHNIQUE (entraînement,
-             * Job Docker, MLflow, déploiement). On alerte mais on ne
-             * déclenche JAMAIS de réentraînement : ré-entraîner sur des
-             * données ou un pipeline corrompus aggraverait le problème.
-             */
-            if (failedRuns > 0) {
-                result.addReasonCode("FAILED_RUNS_TECHNICAL");
-            }
-        }
-
         long recentPredictionCount = safeCount(
                 predictionLogRepository.countByProjectIdAndCreatedAtAfter(projectId, recentStart)
         );
         result.addObservedMetric("recentPredictionCount", (double) recentPredictionCount);
+        long minPredictions = safeLong(config.getMinPredictionsForMonitoring(), 20);
 
-        if (config.isPerformanceMonitoringEnabled()) {
-            long predictionErrors = safeCount(
-                    predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(projectId, recentStart)
+        if (recentPredictionCount < minPredictions) {
+            result.addReasonCode("INSUFFICIENT_DATA");
+            result.setReason("Pas assez de prédictions pour évaluer le monitoring.");
+            logMonitoringResult(projectId, recentPredictionCount, result);
+            return result;
+        }
+
+        double performanceDrop = evaluatePerformanceDrop(projectId);
+        double dropThreshold = safeDouble(config.getPerformanceDropThresholdPercent(), 10.0);
+
+        result.addObservedMetric("performanceDropPercent", roundTwo(performanceDrop));
+        result.addThreshold("performanceDropThresholdPercent", dropThreshold);
+
+        if (performanceDrop >= dropThreshold && recentPredictionCount >= minPredictions) {
+            RetrainingDecision run = RetrainingDecision.run(
+                    RetrainingTriggerType.PERFORMANCE_DROP,
+                    performanceDrop >= dropThreshold * 2
+                            ? RetrainingSeverity.CRITICAL
+                            : RetrainingSeverity.HIGH,
+                    "Monitoring : baisse de performance du modèle en production. "
+                            + "Score global=" + roundTwo(currentProductionScore(projectId))
+                            + ", baisse=" + roundTwo(performanceDrop) + "%"
+                            + ", seuil=" + dropThreshold + "%."
             );
-            double errorRate = calculatePercent(predictionErrors, recentPredictionCount);
-            double maxErrorRate = safeDouble(config.getMaxPredictionErrorRatePercent(), 20.0);
-            long minPredictions = safeLong(config.getMinPredictionsForMonitoring(), 30);
-
-            result.addObservedMetric("predictionErrorRatePercent", roundTwo(errorRate));
-            result.addThreshold("maxPredictionErrorRatePercent", maxErrorRate);
-            anySignal = anySignal || recentPredictionCount >= minPredictions;
-
-            if (recentPredictionCount >= minPredictions && errorRate >= maxErrorRate) {
-                RetrainingDecision run = RetrainingDecision.run(
-                        RetrainingTriggerType.PREDICTION_ERRORS,
-                        errorRate >= maxErrorRate * 2
-                                ? RetrainingSeverity.CRITICAL
-                                : RetrainingSeverity.HIGH,
-                        "Monitoring : taux d'erreur prédiction élevé. "
-                                + "Erreurs=" + predictionErrors
-                                + ", prédictions=" + recentPredictionCount
-                                + ", taux=" + roundTwo(errorRate) + "%"
-                                + ", seuil=" + maxErrorRate + "%."
-                );
-                run.addReasonCode("PREDICTION_ERRORS");
-                run.addObservedMetric("recentPredictionCount", (double) recentPredictionCount);
-                run.addObservedMetric("predictionErrorRatePercent", roundTwo(errorRate));
-
-                if (errorRate >= maxErrorRate * 3) {
-                    run.setSecurityLevel(RetrainingSecurityLevel.BLOCK_MODEL);
-                    run.addReasonCode("ERROR_RATE_BLOCK");
-                    run.addReasonCode("ERROR_RATE_EXTREME");
-                } else if (errorRate >= maxErrorRate * 2) {
-                    run.setSecurityLevel(RetrainingSecurityLevel.SECURITY_ALERT_ONLY);
-                    run.addReasonCode("ERROR_RATE_EXTREME");
-                }
-
-                return run;
-            }
+            run.addReasonCode("PERFORMANCE_DROP");
+            run.addObservedMetric("recentPredictionCount", (double) recentPredictionCount);
+            run.addObservedMetric("performanceDropPercent", roundTwo(performanceDrop));
+            logMonitoringResult(projectId, recentPredictionCount, run);
+            return run;
         }
 
-        if (config.isPerformanceMonitoringEnabled()) {
-            double performanceDrop = evaluatePerformanceDrop(projectId);
-            double dropThreshold = safeDouble(config.getPerformanceDropThresholdPercent(), 5.0);
-            long minPredictions = safeLong(config.getMinPredictionsForMonitoring(), 30);
+        List<PredictionLog> baseline = predictionLogRepository
+                .findByProjectIdAndCreatedAtBetweenOrderByCreatedAtAsc(projectId, baselineStart, recentStart);
+        List<PredictionLog> recent = predictionLogRepository
+                .findByProjectIdAndCreatedAtBetweenOrderByCreatedAtAsc(projectId, recentStart, now);
 
-            result.addObservedMetric("performanceDropPercent", roundTwo(performanceDrop));
-            result.addThreshold("performanceDropThresholdPercent", dropThreshold);
+        double driftScore = calculateSimpleDataDriftScore(baseline, recent);
+        double driftThreshold = safeDouble(config.getDataDriftThresholdPercent(), 5.0);
 
-            if (performanceDrop >= dropThreshold && recentPredictionCount >= minPredictions) {
-                RetrainingDecision run = RetrainingDecision.run(
-                        RetrainingTriggerType.PERFORMANCE_DROP,
-                        performanceDrop >= dropThreshold * 2
-                                ? RetrainingSeverity.CRITICAL
-                                : RetrainingSeverity.HIGH,
-                        "Monitoring : baisse de performance du modèle en production. "
-                                + "Score global=" + roundTwo(currentProductionScore(projectId))
-                                + ", baisse=" + roundTwo(performanceDrop) + "%"
-                                + ", seuil=" + dropThreshold + "%."
-                );
-                run.addReasonCode("PERFORMANCE_DROP");
-                run.addObservedMetric("recentPredictionCount", (double) recentPredictionCount);
-                run.addObservedMetric("performanceDropPercent", roundTwo(performanceDrop));
-                return run;
+        result.addObservedMetric("dataDriftScorePercent", roundTwo(driftScore));
+        result.addThreshold("dataDriftThresholdPercent", driftThreshold);
+
+        if (baseline.size() >= minPredictions && recent.size() >= minPredictions && driftScore >= driftThreshold) {
+            RetrainingDecision run = RetrainingDecision.run(
+                    RetrainingTriggerType.DATA_DRIFT,
+                    driftScore >= driftThreshold * 2
+                            ? RetrainingSeverity.CRITICAL
+                            : RetrainingSeverity.HIGH,
+                    "Data drift détecté sur les inputs de prédiction. "
+                            + "Score=" + roundTwo(driftScore) + "%"
+                            + ", seuil=" + driftThreshold + "%"
+                            + ", baseline=" + baseline.size()
+                            + ", récent=" + recent.size() + "."
+            );
+            run.addReasonCode("DATA_DRIFT");
+            run.addObservedMetric("recentPredictionCount", (double) recent.size());
+            run.addObservedMetric("dataDriftScorePercent", roundTwo(driftScore));
+
+            if (driftScore >= driftThreshold * 3) {
+                run.setSecurityLevel(RetrainingSecurityLevel.BLOCK_MODEL);
+                run.addReasonCode("DRIFT_BLOCK");
+                run.addReasonCode("DRIFT_EXTREME");
+            } else if (driftScore >= driftThreshold * 2) {
+                run.setSecurityLevel(RetrainingSecurityLevel.SECURITY_ALERT_ONLY);
+                run.addReasonCode("DRIFT_EXTREME");
             }
-        }
 
-        if (config.isDataDriftMonitoringEnabled()) {
-            List<PredictionLog> baseline = predictionLogRepository
-                    .findByProjectIdAndCreatedAtBetweenOrderByCreatedAtAsc(projectId, baselineStart, recentStart);
-            List<PredictionLog> recent = predictionLogRepository
-                    .findByProjectIdAndCreatedAtBetweenOrderByCreatedAtAsc(projectId, recentStart, now);
-
-            double driftScore = calculateSimpleDataDriftScore(baseline, recent);
-            double driftThreshold = safeDouble(config.getDataDriftThresholdPercent(), 25.0);
-            long minPredictions = safeLong(config.getMinPredictionsForMonitoring(), 30);
-
-            result.addObservedMetric("dataDriftScorePercent", roundTwo(driftScore));
-            result.addThreshold("dataDriftThresholdPercent", driftThreshold);
-
-            if (baseline.size() >= minPredictions && recent.size() >= minPredictions && driftScore >= driftThreshold) {
-                RetrainingDecision run = RetrainingDecision.run(
-                        RetrainingTriggerType.DATA_DRIFT,
-                        driftScore >= driftThreshold * 2
-                                ? RetrainingSeverity.CRITICAL
-                                : RetrainingSeverity.HIGH,
-                        "Data drift détecté sur les inputs de prédiction. "
-                                + "Score=" + roundTwo(driftScore) + "%"
-                                + ", seuil=" + driftThreshold + "%"
-                                + ", baseline=" + baseline.size()
-                                + ", récent=" + recent.size() + "."
-                );
-                run.addReasonCode("DATA_DRIFT");
-                run.addObservedMetric("recentPredictionCount", (double) recent.size());
-                run.addObservedMetric("dataDriftScorePercent", roundTwo(driftScore));
-
-                if (driftScore >= driftThreshold * 3) {
-                    run.setSecurityLevel(RetrainingSecurityLevel.BLOCK_MODEL);
-                    run.addReasonCode("DRIFT_BLOCK");
-                    run.addReasonCode("DRIFT_EXTREME");
-                } else if (driftScore >= driftThreshold * 2) {
-                    run.setSecurityLevel(RetrainingSecurityLevel.SECURITY_ALERT_ONLY);
-                    run.addReasonCode("DRIFT_EXTREME");
-                }
-
-                return run;
-            }
+            logMonitoringResult(projectId, recent.size(), run);
+            return run;
         }
 
         String reason = "Monitoring OK : "
                 + "prédictions récentes=" + recentPredictionCount
-                + ", taux erreur=" + result.getObservedMetrics()
-                        .getOrDefault("predictionErrorRatePercent", 0.0) + "%"
                 + ", drift=" + result.getObservedMetrics()
-                        .getOrDefault("dataDriftScorePercent", 0.0) + "%"
-                + ", runs échoués=" + result.getObservedMetrics()
-                        .getOrDefault("recentFailedRuns", 0.0) + ".";
+                        .getOrDefault("dataDriftScorePercent", 0.0) + "%.";
 
         result.setReason(reason);
         result.addReasonCode("MONITORING_OK");
-        if (!anySignal) {
-            result.setSeverity(RetrainingSeverity.NONE);
-        } else {
-            result.setSeverity(RetrainingSeverity.LOW);
-        }
+        result.setSeverity(RetrainingSeverity.NONE);
+        logMonitoringResult(projectId, recentPredictionCount, result);
         return result;
+    }
+
+    private void logMonitoringResult(Long projectId, long predictions, RetrainingDecision decision) {
+        double performanceDrop = decision.getObservedMetrics()
+                .getOrDefault("performanceDropPercent", 0.0);
+        double drift = decision.getObservedMetrics()
+                .getOrDefault("dataDriftScorePercent", 0.0);
+        double performanceThreshold = decision.getThresholds()
+                .getOrDefault("performanceDropThresholdPercent", 0.0);
+        double driftThreshold = decision.getThresholds()
+                .getOrDefault("dataDriftThresholdPercent", 0.0);
+
+        log.info("[MONITORING_RETRAINING] projectId={} predictions={} performanceDrop={}% drift={}% "
+                        + "performanceThreshold={}% driftThreshold={}% shouldRetrain={} reasonCodes={}",
+                projectId, predictions, performanceDrop, drift,
+                performanceThreshold, driftThreshold,
+                decision.isShouldRetrain(), decision.getReasonCodes());
     }
 
     private void copyObservedMetrics(
@@ -454,37 +296,7 @@ public class RetrainingDecisionService {
             );
         }
 
-        RetrainingStrategy strategy = config.getStrategy() != null
-                ? config.getStrategy()
-                : RetrainingStrategy.SCHEDULED_WITH_MONITORING;
-
-        if (strategy == RetrainingStrategy.SCHEDULED_ONLY) {
-            return RetrainingDecisionResult.run(
-                    RetrainingTriggerType.SCHEDULED,
-                    "Stratégie SCHEDULED_ONLY : réentraînement lancé à chaque échéance."
-            );
-        }
-
-        RetrainingDecisionResult monitoringDecision = evaluateMonitoringSignals(config);
-
-        if (monitoringDecision.isShouldRetrain()) {
-            return monitoringDecision;
-        }
-
-        if (strategy == RetrainingStrategy.SCHEDULED_WITH_MONITORING) {
-            long minPredictions = safeLong(config.getMinPredictionsForMonitoring(), 30);
-            if (monitoringDecision.getRecentPredictionCount() < minPredictions) {
-                RetrainingDecisionResult result = RetrainingDecisionResult.run(
-                        RetrainingTriggerType.SCHEDULED,
-                        "Pas assez de prédictions pour conclure sur le drift. Le réentraînement planifié est conservé. "
-                                + monitoringDecision.getReason()
-                );
-                copyScores(monitoringDecision, result);
-                return result;
-            }
-        }
-
-        return monitoringDecision;
+        return evaluateMonitoringSignals(config);
     }
 
     public RetrainingDecisionResult evaluateMonitoringSignals(RetrainingConfig config) {
@@ -500,95 +312,62 @@ public class RetrainingDecisionService {
 
         RetrainingDecisionResult result = RetrainingDecisionResult.skip("Aucun signal de monitoring ne justifie un réentraînement.");
 
-        if (config.isFailureMonitoringEnabled()) {
-            long failedRuns = safeCount(
-                    mlExperimentRepository.countFailedRunsForProjectSince(projectId, lookbackHours)
-            );
-            result.setRecentFailedRuns(failedRuns);
-        }
-
         long recentPredictionCount = safeCount(
                 predictionLogRepository.countByProjectIdAndCreatedAtAfter(projectId, recentStart)
         );
         result.setRecentPredictionCount(recentPredictionCount);
 
-        if (config.isPerformanceMonitoringEnabled()) {
-            long predictionErrors = safeCount(
-                    predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(projectId, recentStart)
+        if (recentPredictionCount < safeLong(config.getMinPredictionsForMonitoring(), 20)) {
+            result.setReason("Pas assez de prédictions pour évaluer le monitoring.");
+            return result;
+        }
+
+        double performanceDrop = evaluatePerformanceDrop(projectId);
+        double dropThreshold = safeDouble(config.getPerformanceDropThresholdPercent(), 10.0);
+        result.setPerformanceDropPercent(roundTwo(performanceDrop));
+
+        if (performanceDrop >= dropThreshold && recentPredictionCount >= safeLong(config.getMinPredictionsForMonitoring(), 20)) {
+            RetrainingDecisionResult run = RetrainingDecisionResult.run(
+                    RetrainingTriggerType.PERFORMANCE_DROP,
+                    "Monitoring : baisse de performance du modèle en production. "
+                            + "Score global=" + roundTwo(currentProductionScore(projectId))
+                            + ", baisse=" + roundTwo(performanceDrop) + "%"
+                            + ", seuil=" + dropThreshold + "%."
             );
-            double errorRate = calculatePercent(predictionErrors, recentPredictionCount);
-            result.setPredictionErrorRatePercent(roundTwo(errorRate));
-
-            double maxErrorRate = safeDouble(config.getMaxPredictionErrorRatePercent(), 20.0);
-            long minPredictions = safeLong(config.getMinPredictionsForMonitoring(), 30);
-
-            if (recentPredictionCount >= minPredictions && errorRate >= maxErrorRate) {
-                RetrainingDecisionResult run = RetrainingDecisionResult.run(
-                        RetrainingTriggerType.PREDICTION_ERRORS,
-                        "Monitoring : taux d'erreur prédiction élevé. "
-                                + "Erreurs=" + predictionErrors
-                                + ", prédictions=" + recentPredictionCount
-                                + ", taux=" + roundTwo(errorRate) + "%"
-                                + ", seuil=" + maxErrorRate + "%."
-                );
-                run.setRecentPredictionCount(recentPredictionCount);
-                run.setPredictionErrorRatePercent(roundTwo(errorRate));
-                return run;
-            }
+            run.setRecentPredictionCount(recentPredictionCount);
+            run.setPerformanceDropPercent(roundTwo(performanceDrop));
+            return run;
         }
 
-        if (config.isPerformanceMonitoringEnabled()) {
-            double performanceDrop = evaluatePerformanceDrop(projectId);
-            double dropThreshold = safeDouble(config.getPerformanceDropThresholdPercent(), 5.0);
-            long minPredictions = safeLong(config.getMinPredictionsForMonitoring(), 30);
-            result.setPerformanceDropPercent(roundTwo(performanceDrop));
+        List<PredictionLog> baseline = predictionLogRepository
+                .findByProjectIdAndCreatedAtBetweenOrderByCreatedAtAsc(projectId, baselineStart, recentStart);
+        List<PredictionLog> recent = predictionLogRepository
+                .findByProjectIdAndCreatedAtBetweenOrderByCreatedAtAsc(projectId, recentStart, now);
 
-            if (performanceDrop >= dropThreshold && recentPredictionCount >= minPredictions) {
-                RetrainingDecisionResult run = RetrainingDecisionResult.run(
-                        RetrainingTriggerType.PERFORMANCE_DROP,
-                        "Monitoring : baisse de performance du modèle en production. "
-                                + "Score global=" + roundTwo(currentProductionScore(projectId))
-                                + ", baisse=" + roundTwo(performanceDrop) + "%"
-                                + ", seuil=" + dropThreshold + "%."
-                );
-                run.setRecentPredictionCount(recentPredictionCount);
-                run.setPerformanceDropPercent(roundTwo(performanceDrop));
-                return run;
-            }
-        }
+        double driftScore = calculateSimpleDataDriftScore(baseline, recent);
+        result.setDataDriftScorePercent(roundTwo(driftScore));
 
-        if (config.isDataDriftMonitoringEnabled()) {
-            List<PredictionLog> baseline = predictionLogRepository
-                    .findByProjectIdAndCreatedAtBetweenOrderByCreatedAtAsc(projectId, baselineStart, recentStart);
-            List<PredictionLog> recent = predictionLogRepository
-                    .findByProjectIdAndCreatedAtBetweenOrderByCreatedAtAsc(projectId, recentStart, now);
+        double driftThreshold = safeDouble(config.getDataDriftThresholdPercent(), 5.0);
 
-            double driftScore = calculateSimpleDataDriftScore(baseline, recent);
-            result.setDataDriftScorePercent(roundTwo(driftScore));
-
-            double driftThreshold = safeDouble(config.getDataDriftThresholdPercent(), 25.0);
-            long minPredictions = safeLong(config.getMinPredictionsForMonitoring(), 30);
-
-            if (baseline.size() >= minPredictions && recent.size() >= minPredictions && driftScore >= driftThreshold) {
-                RetrainingDecisionResult run = RetrainingDecisionResult.run(
-                        RetrainingTriggerType.DATA_DRIFT,
-                        "Data drift détecté sur les inputs de prédiction. "
-                                + "Score=" + roundTwo(driftScore) + "%"
-                                + ", seuil=" + driftThreshold + "%"
-                                + ", baseline=" + baseline.size()
-                                + ", récent=" + recent.size() + "."
-                );
-                run.setRecentPredictionCount(recent.size());
-                run.setDataDriftScorePercent(roundTwo(driftScore));
-                return run;
-            }
+        if (baseline.size() >= safeLong(config.getMinPredictionsForMonitoring(), 20)
+                && recent.size() >= safeLong(config.getMinPredictionsForMonitoring(), 20)
+                && driftScore >= driftThreshold) {
+            RetrainingDecisionResult run = RetrainingDecisionResult.run(
+                    RetrainingTriggerType.DATA_DRIFT,
+                    "Data drift détecté sur les inputs de prédiction. "
+                            + "Score=" + roundTwo(driftScore) + "%"
+                            + ", seuil=" + driftThreshold + "%"
+                            + ", baseline=" + baseline.size()
+                            + ", récent=" + recent.size() + "."
+            );
+            run.setRecentPredictionCount(recent.size());
+            run.setDataDriftScorePercent(roundTwo(driftScore));
+            return run;
         }
 
         String reason = "Monitoring OK : "
                 + "prédictions récentes=" + recentPredictionCount
-                + ", taux erreur=" + result.getPredictionErrorRatePercent() + "%"
-                + ", drift=" + result.getDataDriftScorePercent() + "%"
-                + ", runs échoués=" + result.getRecentFailedRuns() + ".";
+                + ", drift=" + result.getDataDriftScorePercent() + "%.";
 
         result.setReason(reason);
         return result;

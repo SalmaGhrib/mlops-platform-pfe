@@ -6,8 +6,11 @@ import com.mlops.platform.dto.ModelDeploymentResponse;
 import com.mlops.platform.entity.DeploymentStatus;
 import com.mlops.platform.entity.ExperimentStatus;
 import com.mlops.platform.entity.MlExperiment;
+import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.entity.ModelDeployment;
+import com.mlops.platform.entity.User;
 import com.mlops.platform.repository.MlExperimentRepository;
+import com.mlops.platform.repository.MlProjectRepository;
 import com.mlops.platform.repository.ModelDeploymentRepository;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,6 +50,9 @@ public class AutoProductionDeploymentReconcilerService {
     private final PlatformTransactionManager transactionManager;
     private final RunPipelineStepService runPipelineStepService;
     private final ModelDeploymentRepository modelDeploymentRepository;
+    private final ModelQualityService modelQualityService;
+    private final NotificationService notificationService;
+    private final MlProjectRepository mlProjectRepository;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -68,7 +74,10 @@ public class AutoProductionDeploymentReconcilerService {
             MlflowTrackingClientService mlflowTrackingClientService,
             PlatformTransactionManager transactionManager,
             RunPipelineStepService runPipelineStepService,
-            ModelDeploymentRepository modelDeploymentRepository
+            ModelDeploymentRepository modelDeploymentRepository,
+            ModelQualityService modelQualityService,
+            NotificationService notificationService,
+            MlProjectRepository mlProjectRepository
     ) {
         this.mlExperimentRepository = mlExperimentRepository;
         this.modelDeploymentService = modelDeploymentService;
@@ -77,6 +86,9 @@ public class AutoProductionDeploymentReconcilerService {
         this.transactionManager = transactionManager;
         this.runPipelineStepService = runPipelineStepService;
         this.modelDeploymentRepository = modelDeploymentRepository;
+        this.modelQualityService = modelQualityService;
+        this.notificationService = notificationService;
+        this.mlProjectRepository = mlProjectRepository;
     }
 
     @Scheduled(
@@ -573,6 +585,26 @@ public class AutoProductionDeploymentReconcilerService {
                 return null;
             }
 
+            /*
+             * GATE QUALITÉ :
+             * Le modèle ne peut pas être promu si son score global normalisé
+             * est inférieur au seuil minimal configuré pour son type de projet.
+             */
+            ModelQualityService.QualityEvaluation quality =
+                    modelQualityService.evaluate(candidate.getProject(), candidate);
+
+            if (quality != null && !quality.conforming()) {
+                log("Quality gate REJECTED candidate. experimentId="
+                        + candidate.getId()
+                        + ", model=" + modelName
+                        + ", version=" + version
+                        + ", globalScore=" + candidate.getGlobalScore()
+                        + ", threshold=" + quality.threshold()
+                        + ", reason=" + quality.reason());
+                modelQualityService.raiseQualityAlertIfNeeded(candidate.getProject());
+                return null;
+            }
+
             String currentAliasVersion =
                     getProductionVersionFromRegistryAlias(modelName);
 
@@ -616,6 +648,8 @@ public class AutoProductionDeploymentReconcilerService {
                     + ", model=" + modelName
                     + ", version=" + version
                     + ", globalScore=" + candidate.getGlobalScore());
+
+            notifyProductionPromoted(candidate, modelName, version);
 
             return refreshed;
 
@@ -1722,5 +1756,42 @@ public class AutoProductionDeploymentReconcilerService {
         System.out.println(
                 "[PRODUCTION_RECONCILER] " + message
         );
+    }
+
+    private void notifyProductionPromoted(
+            MlExperiment candidate,
+            String modelName,
+            String version
+    ) {
+        try {
+            if (candidate.getProject() == null
+                    || candidate.getProject().getOwner() == null) {
+                return;
+            }
+
+            User owner = candidate.getProject().getOwner();
+
+            notificationService.notifyProductionPromoted(
+                    candidate.getId(),
+                    owner,
+                    modelName,
+                    version
+            );
+
+            System.out.println(
+                    "[NOTIFICATION] created type=NEW_PRODUCTION_VERSION"
+                            + " experimentId=" + candidate.getId()
+                            + " userId=" + owner.getId()
+                            + " model=" + modelName
+                            + " version=" + version
+            );
+
+        } catch (Exception e) {
+            System.out.println(
+                    "[NOTIFICATION][PRODUCTION] Could not notify NEW_PRODUCTION_VERSION. "
+                            + "experimentId=" + safeExperimentId(candidate)
+                            + ", reason=" + safeMessage(e)
+            );
+        }
     }
 }

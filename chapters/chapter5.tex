@@ -1,0 +1,1068 @@
+% =========================================================
+% CHAPITRE 5 : SPRINT 3
+% =========================================================
+
+\clearpage
+
+\refstepcounter{chapter}
+
+\setcounter{section}{0}
+\setcounter{subsection}{0}
+\setcounter{subsubsection}{0}
+
+\phantomsection
+\addcontentsline{toc}{chapter}
+{Chapitre \thechapter : Sprint 3 -- Gestion du cycle de vie des modèles}
+
+\markboth{Chapitre \thechapter}{Chapitre \thechapter}
+
+\thispagestyle{empty}
+
+
+% =========================================================
+% PAGE D'OUVERTURE + PLAN
+% =========================================================
+
+\vspace*{0.8cm}
+
+\begin{center}
+
+\rule{0.30\textwidth}{1.2pt}
+\hspace{0.5cm}
+\textit{Chapitre \thechapter}
+\hspace{0.5cm}
+\rule{0.30\textwidth}{1.2pt}
+
+\vspace{0.9cm}
+
+\rule{\textwidth}{0.8pt}
+
+\vspace{0.35cm}
+
+{\fontsize{21}{24}\selectfont
+\textsc{
+\parbox{0.95\textwidth}{
+\centering
+Chapitre \thechapter : Sprint 3 -- Gestion du cycle de vie\\
+des modèles
+}
+}
+}
+
+\vspace{0.35cm}
+
+\rule{\textwidth}{0.8pt}
+
+\end{center}
+
+
+\vspace{1.4cm}
+
+{\Large\bfseries Plan}
+
+\vspace{0.65cm}
+
+\begin{center}
+
+\renewcommand{\arraystretch}{1.35}
+
+\begin{tabular}{p{0.8cm}p{10.7cm}r}
+
+\textbf{1}
+&
+\textbf{Introduction}
+&
+\pageref{sec:ch5-introduction}
+\\[0.22cm]
+
+\textbf{2}
+&
+\textbf{Objectifs et travaux du Sprint 3}
+&
+\pageref{sec:sprint3-objectifs}
+\\[0.22cm]
+
+\textbf{3}
+&
+\textbf{Versionnement des modèles}
+&
+\pageref{sec:sprint3-versioning}
+\\[0.22cm]
+
+\textbf{4}
+&
+\textbf{Déploiement des modèles}
+&
+\pageref{sec:sprint3-deployment}
+\\[0.22cm]
+
+\textbf{5}
+&
+\textbf{Services de prédiction}
+&
+\pageref{sec:sprint3-prediction}
+\\[0.22cm]
+
+\textbf{6}
+&
+\textbf{Gestion des accès}
+&
+\pageref{sec:sprint3-access}
+\\[0.22cm]
+
+\textbf{7}
+&
+\textbf{Monitoring}
+&
+\pageref{sec:sprint3-monitoring}
+\\[0.22cm]
+
+\textbf{8}
+&
+\textbf{Stratégies de réentraînement}
+&
+\pageref{sec:sprint3-retraining}
+\\[0.22cm]
+
+\textbf{9}
+&
+\textbf{Intégration continue avec GitHub Actions}
+&
+\pageref{sec:sprint3-cicd}
+\\[0.22cm]
+
+\textbf{10}
+&
+\textbf{Bilan du Sprint 3}
+&
+\pageref{sec:sprint3-bilan}
+\\[0.22cm]
+
+\textbf{11}
+&
+\textbf{Conclusion}
+&
+\pageref{sec:ch5-conclusion}
+\\[0.22cm]
+
+\end{tabular}
+
+\renewcommand{\arraystretch}{1}
+
+\end{center}
+
+\clearpage
+
+
+% =========================================================
+% 5.1 INTRODUCTION
+% =========================================================
+
+\section{Introduction}
+\label{sec:ch5-introduction}
+
+Après avoir construit le moteur d'entraînement et le parcours
+utilisateur lors des sprints précédents, le troisième sprint s'est
+concentré sur le \textbf{cycle de vie complet des modèles}.
+
+L'objectif était de permettre à un modèle d'aller de l'entraînement
+jusqu'à la production en passant par le versionnement, le déploiement,
+la prédiction et le monitoring, tout en disposant de mécanismes
+automatisés de réentraînement.
+
+Ce sprint couvre donc l'ensemble des étapes qui transforment un run
+d'entraînement en un service de prédiction opérationnel, surveillé et
+maintenu dans le temps.
+
+
+% =========================================================
+% 5.2 OBJECTIFS ET TRAVAUX
+% =========================================================
+
+\section{Objectifs et travaux du Sprint 3}
+\label{sec:sprint3-objectifs}
+
+Le Sprint 3 s'est déroulé du \textbf{18 mai au 30 juin}. Les principaux
+travaux réalisés pendant cette période sont résumés dans le tableau
+\ref{tab:travaux-sprint3}.
+
+\begin{table}[H]
+
+\centering
+\small
+
+\renewcommand{\arraystretch}{1.16}
+\setlength{\tabcolsep}{5pt}
+
+\begin{tabular}{|p{4cm}|p{9.2cm}|}
+
+\hline
+
+\rowcolor{cyan!20}
+\textbf{Élément}
+&
+\textbf{Rôle dans le Sprint 3}
+\\
+\hline
+
+\textbf{Versionnement}
+&
+Gérer les versions des modèles via MLflow Model Registry, promouvoir
+la meilleure version en production grâce au score global.
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{Déploiement}
+&
+Déployer les modèles sur Kubernetes avec une stratégie Blue/Green
+pour un basculement sans interruption de service.
+\\
+\hline
+
+\textbf{Services de prédiction}
+&
+Exposer des endpoints de prédiction internes (JWT) et externes
+(API key) pour tabulaire, texte et images.
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{Gestion des accès}
+&
+Contrôler la visibilité des déploiements (privé, partagé, public)
+et gérer les rôles utilisateur et administrateur.
+\\
+\hline
+
+\textbf{Monitoring}
+&
+Suivre l'état des modèles déployés, détecter les dérives de données,
+les baisses de performance et les erreurs de prédiction.
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{Réentraînement}
+&
+Relancer automatiquement l'entraînement en cas de dérive ou de
+baisse de qualité, ou suite à un push GitHub.
+\\
+\hline
+
+\textbf{CI/CD}
+&
+Automatiser la construction et le push des images Docker via
+GitHub Actions.
+\\
+\hline
+
+\end{tabular}
+
+\caption{Principaux travaux réalisés lors du Sprint 3}
+\label{tab:travaux-sprint3}
+
+\end{table}
+
+
+% =========================================================
+% 5.3 VERSIONNEMENT DES MODÈLES
+% =========================================================
+
+\section{Versionnement des modèles}
+\label{sec:sprint3-versioning}
+
+Le versionnement permet de conserver une trace de chaque modèle
+entraîné et de comparer les versions entre elles. Il repose sur le
+\textbf{MLflow Model Registry} complété par une synchronisation
+vers la base de données MySQL de la plateforme.
+
+
+% =========================================================
+\subsection{MLflow Model Registry}
+\label{subsec:sprint3-mlflow-registry}
+
+Chaque run terminé enregistre automatiquement le modèle dans le
+\textit{MLflow Model Registry} sous un nom de groupe correspondant
+au projet. Chaque enregistrement reçoit un numéro de version incrémental.
+
+Deux alias sont utilisés pour identifier les versions importantes :
+\texttt{@latest} pour la version la plus récente et
+\texttt{@production} pour la version déployée en production.
+
+Le service \texttt{MlflowRegistryClientService} interroge l'API
+REST de MLflow pour résoudre la version en production. Il utilise
+d'abord l'endpoint d'alias, puis effectue une recherche de fallback
+si l'alias n'est pas trouvé.
+
+
+% =========================================================
+\subsection{Synchronisation MLflow -- MySQL}
+\label{subsec:sprint3-sync}
+
+Afin de ne pas dépendre uniquement de MLflow pour l'affichage des
+informations, le backend synchronise régulièrement les métadonnées
+du Registry vers MySQL.
+
+Cette synchronisation est déclenchée par le service
+\texttt{ModelRegistryService} et met à jour les colonnes
+\texttt{modelVersion} et \texttt{productionVersion} de la table
+\texttt{MlExperiment}.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.85\textwidth,
+        keepaspectratio
+    ]{images/sprint3_model_registry.png}
+
+    \caption{Interface de gestion des modèles enregistrés}
+    \label{fig:sprint3-model-registry}
+\end{figure}
+
+La figure \ref{fig:sprint3-model-registry} présente la liste des
+modèles enregistrés avec leur version actuelle, la version en
+production et le score global associé.
+
+
+% =========================================================
+\subsection{Promotion automatique}
+\label{subsec:sprint3-promotion}
+
+Lorsqu'un run se termine avec succès, le service
+\texttt{ModelPromotionService} évalue si la nouvelle version doit
+être promue en production.
+
+La décision repose sur le \textbf{score global} calculé à partir des
+métriques prioritaires définies par l'utilisateur. Si la nouvelle
+version obtient un score supérieur à la version actuelle, elle est
+automatiquement promue en production via l'alias \texttt{@production}
+du MLflow Model Registry.
+
+Cette promotion est également synchronisée vers MySQL pour garantir
+la cohérence entre les deux sources de données.
+
+
+% =========================================================
+% 5.4 DÉPLOIEMENT DES MODÈLES
+% =========================================================
+
+\section{Déploiement des modèles}
+\label{sec:sprint3-deployment}
+
+Le déploiement transforme un modèle enregistré en un service de
+prédiction accessible via Kubernetes. La plateforme utilise une
+stratégie \textbf{Blue/Green} pour garantir un basculement sans
+interruption de service.
+
+
+% =========================================================
+\subsection{Stratégie Blue/Green}
+\label{subsec:sprint3-blue-green}
+
+La stratégie Blue/Green est une technique de déploiement qui consiste
+à maintenir \textbf{deux environnements identiques} en permanence :
+un environnement \textbf{blue} (actif) qui reçoit tout le traffic
+et un environnement \textbf{green} (standby) qui reste prêt à
+prendre le relais.
+
+Contrairement au déploiement classique où l'ancienne version est
+arrêtée avant le démarrage de la nouvelle (causant une interruption),
+la stratégie Blue/Green permet de déployer la nouvelle version
+\textbf{sans aucune coupure de service}. Le traffic n'est basculé
+vers le nouveau track qu'après validation complète.
+
+Dans notre plateforme, chaque track correspond à un ensemble de
+ressources Kubernetes :
+
+\begin{itemize}
+    \item un \textbf{Deployment} contenant le conteneur de serving
+    du modèle ;
+    \item un \textbf{Service} ClusterIP dont le sélecteur pointe
+    vers le track actif via l'étiquette \texttt{serving-track}.
+\end{itemize}
+
+À tout moment, le Service ne route le traffic que vers un seul
+track. L'autre reste disponible mais ne reçoit aucune requête.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.85\textwidth,
+        keepaspectratio
+    ]{images/sprint3_k8s_deployments.png}
+
+    \caption{Déploiements et services des modèles dans le cluster Kubernetes}
+    \label{fig:sprint3-k8s-deployments}
+\end{figure}
+
+La figure \ref{fig:sprint3-k8s-deployments} montre les déploiements
+et services des modèles dans le cluster Kubernetes. Chaque modèle
+dispose d'un Deployment (par exemple \texttt{class-model-v3-deployment})
+et d'un Service stable (par exemple \texttt{class-model-service}) qui
+route le traffic vers le track actif.
+
+
+% =========================================================
+\subsection{Processus de déploiement}
+\label{subsec:sprint3-deploy-process}
+
+Le déploiement d'un nouveau modèle suit les étapes suivantes :
+
+\begin{enumerate}
+    \item \textbf{Résolution du modèle} : le backend identifie le
+    nom du modèle, la version à déployer et l'image Docker de
+    serving correspondante (image standard ou image personnalisée
+    construite via Kaniko).
+
+    \item \textbf{Déploiement sur le track inactif} : le service
+    \texttt{KubernetesModelServingService} crée un nouveau
+    Deployment sur le track qui n'est pas actif (par exemple
+    \texttt{green} si \texttt{blue} est en production). Le
+    Deployment reçoit la variable d'environnement
+    \texttt{MODEL\_URI=models:/nom-modele/version} qui indique
+    au conteneur de serving quel modèle charger depuis MLflow.
+
+    \item \textbf{Attente de la disponibilité} : le backend
+    attend que les pods du nouveau Deployment soient prêts
+    (\texttt{isModelServerReady()}), c'est-à-dire que les
+    conteneurs soient démarrés et passent les probes de
+    santé Kubernetes.
+
+    \item \textbf{Smoke test} : avant de basculer le traffic,
+    un test de validation est envoyé directement au endpoint
+    de prédiction du nouveau track. Ce test consiste à envoyer
+    une requête de prédiction factice et à vérifier que le
+    modèle répond correctement avec un code HTTP 200 et une
+    réponse valide.
+
+    \item \textbf{Basculement du traffic} : si le smoke test
+    est concluant, le Service Kubernetes est mis à jour pour
+    pointer vers le nouveau track (\texttt{serving-track=green}).
+    Le traffic est instantanément routé vers la nouvelle version
+    sans aucune coupure.
+
+    \item \textbf{Nettoyage} : l'ancien Deployment (track
+    précédent) est conservé temporairement en standby puis
+    supprimé après confirmation que le nouveau fonctionne
+    correctement.
+\end{enumerate}
+
+
+% =========================================================
+\subsection{Le smoke test}
+\label{subsec:sprint3-smoke-test}
+
+Le \textbf{smoke test} (littéralement « test de fumée ») est une
+vérification minimale qui consiste à s'assurer qu'un service est
+opérationnel avant de lui confier du traffic réel.
+
+Dans le contexte du déploiement de modèles, le smoke test vérifie
+que :
+
+\begin{itemize}
+    \item le conteneur de serving est démarré et répond aux requêtes ;
+    \item le modèle a été correctement chargé depuis MLflow via
+    la variable \texttt{MODEL\_URI} ;
+    \item une prédiction peut être effectuée sans erreur ;
+    \item le temps de réponse est dans des limites acceptables.
+\end{itemize}
+
+Ce test est déclenché par la méthode
+\texttt{probePredictionEndpoint()} du service
+\texttt{KubernetesModelServingService}. Si le test échoue, le
+déploiement est annulé et l'ancien track reste actif, garantissant
+ainsi la continuité de service.
+
+Le smoke test est un garde-fou essentiel : il évite de basculer
+le traffic vers un modèle défaillant ou un conteneur qui n'a pas
+réussi à se démarrer correctement.
+
+
+% =========================================================
+\subsection{Auto-déploiement}
+\label{subsec:sprint3-auto-deploy}
+
+Le service \texttt{AutoProductionDeploymentReconcilerService} surveille
+les changements d'état de production. Lorsqu'une nouvelle version est
+promue en production (via le score global), il déclenche
+automatiquement le déploiement sans intervention manuelle.
+
+Ce mécanisme assure que la plateforme reste toujours synchronisée
+avec la version recommandée du modèle. L'utilisateur peut également
+déclencher manuellement un déploiement depuis l'interface si nécessaire.
+
+
+% =========================================================
+% 5.5 SERVICES DE PRÉDICTION
+% =========================================================
+
+\section{Services de prédiction}
+\label{sec:sprint3-prediction}
+
+La plateforme expose deux voies de prédiction : une voie interne
+authentifiée par JWT et une voie externe sécurisée par une API key.
+
+
+% =========================================================
+\subsection{Prédiction interne}
+\label{subsec:sprint3-prediction-internal}
+
+La prédiction interne est accessible via les endpoints
+\texttt{/api/predictions/predict},
+\texttt{/api/predictions/predict-image} et
+\texttt{/api/predictions/predict-text}.
+
+L'utilisateur sélectionne un modèle déployé parmi ceux auxquels il a
+accès, soumet ses données et reçoit la prédiction accompagnée du
+nom du modèle, de la version et du latence.
+
+Chaque prédiction est enregistrée dans la table
+\texttt{PredictionLog} pour alimenter le monitoring.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.85\textwidth,
+        keepaspectratio
+    ]{images/sprint3_prediction_internal.png}
+
+    \caption{Interface de prédiction interne}
+    \label{fig:sprint3-prediction-internal}
+\end{figure}
+
+
+% =========================================================
+\subsection{SMART Model Gateway (prédiction externe)}
+\label{subsec:sprint3-smart-gateway}
+
+Le \textbf{SMART Model Gateway} est un endpoint externe dédié à
+l'intégration avec des applications tierces. Il est accessible via
+\texttt{/api/external/models/\{nom\}/predict} et
+\texttt{/api/external/models/\{nom\}/predict-image}.
+
+L'accès est sécurisé par une \textbf{API key} générée par le
+propriétaire du modèle. Le gateway valide la clé, résout le
+déploiement actif, appelle le modèle et retourne la réponse
+accompagnée des métadonnées (version, ID de déploiement, ID de
+requête).
+
+Un compteur atomique suit l'utilisation de chaque API key pour
+facturation ou monitoring.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.85\textwidth,
+        keepaspectratio
+    ]{images/sprint3_smart_gateway.png}
+
+    \caption{SMART Model Gateway -- endpoint externe de prédiction}
+    \label{fig:sprint3-smart-gateway}
+\end{figure}
+
+
+% =========================================================
+% 5.6 GESTION DES ACCÈS
+% =========================================================
+
+\section{Gestion des accès}
+\label{sec:sprint3-access}
+
+La gestion des accès repose sur deux niveaux : les rôles utilisateur
+et la visibilité des déploiements.
+
+
+% =========================================================
+\subsection{Rôles et permissions}
+\label{subsec:sprint3-roles}
+
+Deux rôles principaux ont été définis :
+
+\begin{itemize}
+    \item l'\textbf{utilisateur standard} peut créer des projets,
+    entraîner des modèles, les déployer et les utiliser en prédiction ;
+    \item l'\textbf{administrateur} peut en outre gérer les comptes,
+    consulter la vue globale du monitoring et recevoir les alertes
+    critiques.
+\end{itemize}
+
+Côté frontend, les guards Angular (\texttt{authGuard},
+\texttt{adminGuard}) contrôlent l'accès aux pages. Côté backend,
+les endpoints sensibles vérifient le rôle de l'utilisateur via le
+token JWT.
+
+
+% =========================================================
+\subsection{Visibilité des déploiements}
+\label{subsec:sprint3-visibility}
+
+Chaque déploiement dispose d'une visibilité qui contrôle qui peut
+l'utiliser pour des prédictions :
+
+\begin{table}[H]
+
+\centering
+\small
+
+\renewcommand{\arraystretch}{1.15}
+
+\begin{tabular}{|p{3cm}|p{10cm}|}
+
+\hline
+
+\rowcolor{cyan!20}
+\textbf{Visibilité}
+&
+\textbf{Règle d'accès}
+\\
+\hline
+
+\textbf{PRIVATE}
+&
+Seul le propriétaire du projet peut accéder au déploiement.
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{SHARED}
+&
+Le propriétaire et les utilisateurs spécifiquement partagés peuvent
+accéder.
+\\
+\hline
+
+\textbf{PUBLIC API}
+&
+Tout utilisateur authentifié peut accéder au déploiement via le
+SMART Gateway.
+\\
+\hline
+
+\end{tabular}
+
+\caption{Visibilité des déploiements et règles d'accès}
+\label{tab:sprint3-visibility}
+
+\end{table}
+
+Le service \texttt{ModelAccessControlService} centralise la logique
+de vérification des accès pour les opérations de prédiction, de
+gestion des clés API et de partage.
+
+
+% =========================================================
+% 5.7 MONITORING
+% =========================================================
+
+\section{Monitoring}
+\label{sec:sprint3-monitoring}
+
+Le monitoring assure la surveillance continue de l'état des modèles
+déployés, de la qualité des prédictions et de la santé du cluster
+Kubernetes.
+
+
+% =========================================================
+\subsection{Architecture de monitoring}
+\label{subsec:sprint3-monitoring-arch}
+
+L'architecture de monitoring repose sur trois piliers :
+
+\begin{itemize}
+    \item \textbf{Prometheus} collecte les métriques exposées par le
+    backend via l'endpoint \texttt{/actuator/prometheus} et les métriques
+    Kubernetes ;
+    \item \textbf{Grafana} fournit les tableaux de bord pour la
+    visualisation ;
+    \item \textbf{Alertmanager} gère les alertes et les notifications.
+\end{itemize}
+
+Un \texttt{ServiceMonitor} Kubernetes configure la collecte automatique
+toutes les 15 secondes. Les métriques métier sont enregistrées via
+Micrometer dans le service
+\texttt{MlopsBusinessMetricsService}.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.85\textwidth,
+        keepaspectratio
+    ]{images/sprint3_monitoring_architecture.png}
+
+    \caption{Architecture du monitoring Prometheus -- Grafana}
+    \label{fig:sprint3-monitoring-architecture}
+\end{figure}
+
+
+% =========================================================
+\subsection{Métriques métier}
+\label{subsec:sprint3-business-metrics}
+
+Le backend expose plusieurs métriques via Micrometer :
+
+\begin{itemize}
+    \item \texttt{mlops\_experiments\_total} -- nombre total
+    d'expériences ;
+    \item \texttt{mlops\_experiments\_running} -- expériences en cours ;
+    \item \texttt{mlops\_deployments\_deployed} -- déploiements actifs ;
+    \item \texttt{mlops\_active\_production\_models} -- modèles en
+    production ;
+    \item \texttt{mlops\_public\_deployments} -- déploiements publics.
+\end{itemize}
+
+Ces métriques sont collectées par Prometheus et affichées dans Grafana.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.85\textwidth,
+        keepaspectratio
+    ]{images/sprint3_grafana_dashboard.png}
+
+    \caption{Tableau de bord Grafana -- métriques de la plateforme}
+    \label{fig:sprint3-grafana-dashboard}
+\end{figure}
+
+
+% =========================================================
+\subsection{Alertes et détection de dérive}
+\label{subsec:sprint3-alerts}
+
+Le service \texttt{MonitoringAlertScheduler} exécute des vérifications
+périodiques pour détecter les problèmes :
+
+\begin{itemize}
+    \item échecs d'entraînement ;
+    \item déploiements en échec ;
+    \item latence excessive du backend ;
+    \item dérive de données (\textit{data drift}) via Evidently ;
+    \item taux d'erreur de prédiction élevé ;
+    \item baisse de performance du modèle.
+\end{itemize}
+
+Lorsqu'un problème est détecté, le service
+\texttt{MonitoringAlertService} crée une alerte idempotente et
+notifie le propriétaire du projet. Les alertes critiques notifient
+également les administrateurs.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.85\textwidth,
+        keepaspectratio
+    ]{images/sprint3_monitoring_alerts.png}
+
+    \caption{Alertes de monitoring et notifications}
+    \label{fig:sprint3-monitoring-alerts}
+\end{figure}
+
+
+% =========================================================
+% 5.8 STRATÉGIES DE RÉENTRAÎNEMENT
+% =========================================================
+
+\section{Stratégies de réentraînement}
+\label{sec:sprint3-retraining}
+
+La plateforme propose deux stratégies principales de réentraînement
+automatisé : la stratégie \textbf{Monitoring Smart} et la stratégie
+\textbf{GitHub Actions}.
+
+
+% =========================================================
+\subsection{Stratégie 1 : Monitoring Smart}
+\label{subsec:sprint3-retraining-monitoring}
+
+La stratégie \textbf{Monitoring Smart} déclenche un réentraînement
+automatique lorsque le monitoring détecte un problème de qualité
+du modèle.
+
+Le processus suit les étapes suivantes :
+
+\begin{enumerate}
+    \item Le \texttt{MonitoringAlertScheduler} détecte une anomalie
+    (dérive de données, taux d'erreur élevé, baisse de performance) ;
+    \item Le \texttt{MonitoringRetrainingTriggerService} évalue si
+    le réentraînement est justifié en fonction des seuils configurés ;
+    \item Le \texttt{AutoRetrainingService} crée une nouvelle
+    expérience de réentraînement en reprenant les données et le script
+    de la version production ;
+    \item L'entraînement est lancé sur Kubeflow et le nouveau modèle
+    est évalué ;
+    \item Si le nouveau modèle est meilleur, il est automatiquement
+    promu et déployé.
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.90\textwidth,
+        keepaspectratio
+    ]{images/uml_retraining_monitoring.png}
+
+    \caption{Diagramme de séquence -- Réentraînement par monitoring}
+    \label{fig:uml-retraining-monitoring}
+\end{figure}
+
+La configuration du réentraînement est stockée dans la table
+\texttt{RetrainingConfig} et permet de paramétrer :
+
+\begin{itemize}
+    \item la fréquence de vérification (journalière, hebdomadaire,
+    mensuelle) ;
+    \item les seuils d'alerte (taux d'erreur maximal, seuil de
+    performance, seuil de dérive) ;
+    \item la politique de données (données originales, dernière
+    version, fusion) ;
+    \item le niveau de sécurité (alerter uniquement ou bloquer le
+    modèle).
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.85\textwidth,
+        keepaspectratio
+    ]{images/sprint3_retraining_config.png}
+
+    \caption{Configuration de la stratégie de réentraînement Monitoring Smart}
+    \label{fig:sprint3-retraining-config}
+\end{figure}
+
+
+% =========================================================
+\subsection{Stratégie 2 : GitHub Actions}
+\label{subsec:sprint3-retraining-github}
+
+La stratégie \textbf{GitHub Actions} déclenche un réentraînement
+lorsqu'un push est effectué sur le dépôt GitHub associé au projet.
+
+Le processus suit les étapes suivantes :
+
+\begin{enumerate}
+    \item L'utilisateur configure le webhook GitHub dans la plateforme,
+    en spécifiant le dépôt, la branche et en générant un secret HMAC ;
+    \item Lors d'un push sur la branche configurée, GitHub envoie
+    un webhook vers le backend ;
+    \item Le \texttt{GitHubRetrainingService} valide la signature
+    HMAC et extrait le commit SHA ;
+    \item Le \texttt{AutoRetrainingService} lance un réentraînement
+    avec les données à jour du dépôt ;
+    \item Le modèle résultant est évalué et promu si nécessaire.
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.90\textwidth,
+        keepaspectratio
+    ]{images/uml_retraining_github.png}
+
+    \caption{Diagramme de séquence -- Réentraînement via GitHub Actions}
+    \label{fig:uml-retraining-github}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.85\textwidth,
+        keepaspectratio
+    ]{images/sprint3_github_retraining_config.png}
+
+    \caption{Configuration du réentraînement GitHub}
+    \label{fig:sprint3-github-retraining-config}
+\end{figure}
+
+
+% =========================================================
+\subsection{Comparaison des deux stratégies}
+\label{subsec:sprint3-retraining-comparison}
+
+\begin{table}[H]
+
+\centering
+\small
+
+\renewcommand{\arraystretch}{1.15}
+\setlength{\tabcolsep}{4pt}
+
+\begin{tabular}{|p{3.5cm}|p{4.8cm}|p{4.8cm}|}
+
+\hline
+
+\rowcolor{cyan!20}
+\textbf{Critère}
+&
+\textbf{Monitoring Smart}
+&
+\textbf{GitHub Actions}
+\\
+\hline
+
+\textbf{Déclencheur}
+&
+Dérive de données ou baisse de performance
+&
+Push sur le dépôt GitHub
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{Automatique}
+&
+Oui, basé sur les seuils
+&
+Oui, basé sur les commits
+\\
+\hline
+
+\textbf{Données utilisées}
+&
+Données de production récentes
+&
+Dernière version du dépôt
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{Cas d'usage}
+&
+Maintenance continue du modèle
+&
+Évolution du code ou des données
+\\
+\hline
+
+\textbf{Configuration}
+&
+Seuils et fréquence dans la plateforme
+&
+Dépôt, branche et webhook GitHub
+\\
+\hline
+
+\end{tabular}
+
+\caption{Comparaison des stratégies de réentraînement}
+\label{tab:sprint3-retraining-comparison}
+
+\end{table}
+
+
+% =========================================================
+% 5.9 INTÉGRATION CONTINUE AVEC GITHUB ACTIONS
+% =========================================================
+
+\section{Intégration continue avec GitHub Actions}
+\label{sec:sprint3-cicd}
+
+L'intégration continue automatisé la construction et le déploiement
+des images Docker via un workflow GitHub Actions.
+
+
+% =========================================================
+\subsection{Workflow de build}
+\label{subsec:sprint3-workflow}
+
+Le workflow \texttt{docker-build.yml} se déclenche à chaque push sur
+la branche \texttt{main}. Il construit deux images Docker :
+
+\begin{itemize}
+    \item \textbf{Backend Spring Boot} : compilation avec Java 17,
+    build de l'image Docker, push vers Docker Hub ;
+    \item \textbf{Frontend Angular} : build avec Node.js 20,
+    construction de l'image Nginx, push vers Docker Hub.
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.90\textwidth,
+        keepaspectratio
+    ]{images/sprint3_github_actions_workflow.png}
+
+    \caption{Workflow GitHub Actions -- build et push des images Docker}
+    \label{fig:sprint3-github-actions-workflow}
+\end{figure}
+
+
+% =========================================================
+\subsection{Intégration avec le réentraînement}
+\label{subsec:sprint3-cicd-retraining}
+
+Le workflow GitHub Actions est complété par le mécanisme de
+réentraînement via webhook. Lorsqu'un push modifie le code
+d'entraînement ou les données, la plateforme détecte le changement
+et relance automatiquement l'entraînement avec les nouvelles
+versions.
+
+Cette boucle ferme le cycle de vie : modification du code,
+construction automatique, réentraînement, évaluation et déploiement
+si le nouveau modèle est meilleur.
+
+
+% =========================================================
+% 5.10 BILAN DU SPRINT 3
+% =========================================================
+
+\section{Bilan du Sprint 3}
+\label{sec:sprint3-bilan}
+
+À la fin du Sprint 3, la plateforme disposait d'un cycle de vie
+complet pour les modèles Machine Learning.
+
+Le versionnement assurait la traçabilité de chaque modèle via le
+MLflow Model Registry, avec une promotion automatique guidée par le
+score global.
+
+Le déploiement Blue/Green sur Kubernetes garantissait un service
+continu sans interruption lors des mises à jour.
+
+Les services de prédiction internes et externes permettaient
+d'utiliser les modèles déployés depuis n'importe quelle application.
+
+La gestion des accès contrôlait la visibilité des déploiements selon
+le rôle et le partage.
+
+Le monitoring surveillait en continu la santé des modèles et du
+cluster, avec des alertes automatisées.
+
+Enfin, les deux stratégies de réentraînement assuraient la
+maintenance continue des modèles, que ce soit par réaction à une
+dérive détectée ou par evolution du code source.
+
+
+% =========================================================
+% 5.11 CONCLUSION
+% =========================================================
+
+\section{Conclusion}
+\label{sec:ch5-conclusion}
+
+Ce troisième sprint a permis de boucler le cycle de vie complet des
+modèles, depuis l'entraînement jusqu'au déploiement en production,
+en passant par le versionnement, la prédiction et le monitoring.
+
+La plateforme est désormais capable de gérer automatiquement
+l'évolution des modèles dans le temps, grâce aux mécanismes de
+réentraînement et d'alertes.
+
+Le chapitre suivant sera consacré au déploiement sur Azure (AKS,
+ACR, Key Vault) et à la mise en production finale de la plateforme.
+
+% =========================================================
+% FIN DU CHAPITRE 5
+% =========================================================

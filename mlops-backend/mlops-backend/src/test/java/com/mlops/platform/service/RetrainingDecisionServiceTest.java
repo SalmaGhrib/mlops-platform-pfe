@@ -34,8 +34,7 @@ import static org.mockito.Mockito.when;
  * (Mockito pur, sans Spring, sans base de données).
  *
  * Vérifie :
- *  1. les 4 stratégies (SCHEDULED_ONLY, SCHEDULED_WITH_MONITORING,
- *     SMART_MONITORING_ONLY, FULL_SMART) ;
+ *  1. la stratégie MONITORING_SMART ;
  *  2. la sécurité : jamais de réentraînement sur des données suspectes
  *     (SECURITY_ALERT_ONLY / BLOCK_MODEL) ;
  *  3. la demande manuelle et l'absence de source Production.
@@ -79,7 +78,6 @@ class RetrainingDecisionServiceTest {
 
     private RetrainingConfig dueConfig(RetrainingStrategy strategy) {
         RetrainingConfig config = config(strategy);
-        config.setNextRetrainingAt(now().minusMinutes(5));
         return config;
     }
 
@@ -98,20 +96,20 @@ class RetrainingDecisionServiceTest {
 
     @Test
     void scheduledOnly_due_returnsRunWithScheduledTrigger() {
-        RetrainingConfig config = dueConfig(RetrainingStrategy.SCHEDULED_ONLY);
+        noMonitoringSignals();
+        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
-        assertTrue(decision.isShouldRetrain());
-        assertEquals(RetrainingTriggerType.SCHEDULED, decision.getTriggerType());
-        assertTrue(decision.getReasonCodes().contains("SCHEDULE_DUE"));
-        assertEquals(RetrainingSecurityLevel.RETRAIN_RECOMMENDED, decision.getSecurityLevel());
+        assertFalse(decision.isShouldRetrain());
+        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
+        assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
+        assertEquals(RetrainingSecurityLevel.NONE, decision.getSecurityLevel());
     }
 
     @Test
     void scheduledOnly_notDue_returnsSkip() {
-        RetrainingConfig config = config(RetrainingStrategy.SCHEDULED_ONLY);
-        config.setNextRetrainingAt(now().plusDays(7));
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
@@ -126,7 +124,7 @@ class RetrainingDecisionServiceTest {
     @Test
     void scheduledWithMonitoring_due_noSignal_enoughPredictions_skips() {
         noMonitoringSignals();
-        RetrainingConfig config = dueConfig(RetrainingStrategy.SCHEDULED_WITH_MONITORING);
+        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
         config.setMinPredictionsForMonitoring(30);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
@@ -144,18 +142,18 @@ class RetrainingDecisionServiceTest {
         when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
                 .thenReturn(0L);
 
-        RetrainingConfig config = dueConfig(RetrainingStrategy.SCHEDULED_WITH_MONITORING);
+        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
         config.setMinPredictionsForMonitoring(30);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
-        assertTrue(decision.isShouldRetrain());
-        assertEquals(RetrainingTriggerType.SCHEDULED, decision.getTriggerType());
+        assertFalse(decision.isShouldRetrain());
+        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
         assertTrue(decision.getReasonCodes().contains("INSUFFICIENT_DATA"));
     }
 
     @Test
-    void scheduledWithMonitoring_due_highErrorRate_runsPredictionErrors() {
+    void scheduledWithMonitoring_due_highErrorRate_noLongerTriggers() {
         when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
                 .thenReturn(0L);
         when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
@@ -163,16 +161,16 @@ class RetrainingDecisionServiceTest {
         when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
                 .thenReturn(10L);
 
-        RetrainingConfig config = dueConfig(RetrainingStrategy.SCHEDULED_WITH_MONITORING);
+        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
         config.setMinPredictionsForMonitoring(30);
         config.setMaxPredictionErrorRatePercent(20.0);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
-        assertTrue(decision.isShouldRetrain());
-        assertEquals(RetrainingTriggerType.PREDICTION_ERRORS, decision.getTriggerType());
-        assertTrue(decision.getReasonCodes().contains("PREDICTION_ERRORS"));
-        assertEquals(RetrainingSecurityLevel.RETRAIN_RECOMMENDED, decision.getSecurityLevel());
+        assertFalse(decision.isShouldRetrain());
+        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
+        assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
+        assertEquals(RetrainingSecurityLevel.NONE, decision.getSecurityLevel());
     }
 
     // ------------------------------------------------------------------
@@ -182,7 +180,7 @@ class RetrainingDecisionServiceTest {
     @Test
     void smartMonitoringOnly_dueButNoSignal_skips() {
         noMonitoringSignals();
-        RetrainingConfig config = dueConfig(RetrainingStrategy.SMART_MONITORING_ONLY);
+        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
@@ -191,26 +189,20 @@ class RetrainingDecisionServiceTest {
     }
 
     @Test
-    void smartMonitoringOnly_failedRuns_alertOnly_noRetrain() {
+    void smartMonitoringOnly_noSignal_returnsMonitoringOk() {
         when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
-                .thenReturn(2L);
-        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
                 .thenReturn(0L);
+        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
+                .thenReturn(40L);
         when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
                 .thenReturn(0L);
 
-        RetrainingConfig config = config(RetrainingStrategy.SMART_MONITORING_ONLY);
-        config.setNextRetrainingAt(now().plusDays(7));
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
-        /*
-         * Les runs échoués sont un signal technique : alerte uniquement.
-         * Aucun réentraînement ne doit être déclenché.
-         */
         assertFalse(decision.isShouldRetrain());
-        assertTrue(decision.getReasonCodes().contains("FAILED_RUNS_TECHNICAL"));
-        assertEquals(2.0, decision.getObservedMetrics().get("recentFailedRuns"), 0.001);
+        assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
     }
 
     // ------------------------------------------------------------------
@@ -220,20 +212,19 @@ class RetrainingDecisionServiceTest {
     @Test
     void fullSmart_noSignal_due_runsScheduled() {
         noMonitoringSignals();
-        RetrainingConfig config = dueConfig(RetrainingStrategy.FULL_SMART);
+        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
-        assertTrue(decision.isShouldRetrain());
-        assertEquals(RetrainingTriggerType.SCHEDULED, decision.getTriggerType());
-        assertTrue(decision.getReasonCodes().contains("SCHEDULE_DUE"));
+        assertFalse(decision.isShouldRetrain());
+        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
+        assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
     }
 
     @Test
     void fullSmart_noSignal_notDue_skips() {
         noMonitoringSignals();
-        RetrainingConfig config = config(RetrainingStrategy.FULL_SMART);
-        config.setNextRetrainingAt(now().plusDays(7));
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
@@ -247,7 +238,7 @@ class RetrainingDecisionServiceTest {
 
     @Test
     void dataDrift_detected_returnsRun() {
-        RetrainingConfig config = config(RetrainingStrategy.SMART_MONITORING_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setDataDriftMonitoringEnabled(true);
         config.setPerformanceMonitoringEnabled(false);
         config.setFailureMonitoringEnabled(false);
@@ -272,7 +263,7 @@ class RetrainingDecisionServiceTest {
 
     @Test
     void dataDrift_extreme_blocksRetraining() {
-        RetrainingConfig config = config(RetrainingStrategy.SMART_MONITORING_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setDataDriftMonitoringEnabled(true);
         config.setPerformanceMonitoringEnabled(false);
         config.setFailureMonitoringEnabled(false);
@@ -301,7 +292,7 @@ class RetrainingDecisionServiceTest {
     // ------------------------------------------------------------------
 
     @Test
-    void errorRate_extreme_alertsAndSkips() {
+    void errorRate_extreme_noLongerTriggers() {
         when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
                 .thenReturn(0L);
         when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
@@ -309,21 +300,20 @@ class RetrainingDecisionServiceTest {
         when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
                 .thenReturn(20L);
 
-        RetrainingConfig config = config(RetrainingStrategy.SCHEDULED_WITH_MONITORING);
-        config.setNextRetrainingAt(now().minusMinutes(5));
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setMinPredictionsForMonitoring(30);
         config.setMaxPredictionErrorRatePercent(20.0);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
         assertFalse(decision.isShouldRetrain());
-        assertEquals(RetrainingTriggerType.SKIPPED_SUSPECT_DATA, decision.getTriggerType());
-        assertEquals(RetrainingSecurityLevel.SECURITY_ALERT_ONLY, decision.getSecurityLevel());
-        assertTrue(decision.getReasonCodes().contains("SUSPECT_DATA"));
+        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
+        assertEquals(RetrainingSecurityLevel.NONE, decision.getSecurityLevel());
+        assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
     }
 
     @Test
-    void errorRate_blocked_marksBlockModel() {
+    void errorRate_blocked_noLongerBlocksModel() {
         when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
                 .thenReturn(0L);
         when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
@@ -331,15 +321,15 @@ class RetrainingDecisionServiceTest {
         when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
                 .thenReturn(30L);
 
-        RetrainingConfig config = config(RetrainingStrategy.SMART_MONITORING_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setMinPredictionsForMonitoring(30);
         config.setMaxPredictionErrorRatePercent(20.0);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
         assertFalse(decision.isShouldRetrain());
-        assertEquals(RetrainingSecurityLevel.BLOCK_MODEL, decision.getSecurityLevel());
-        assertEquals(RetrainingTriggerType.BLOCKED_BY_SECURITY, decision.getTriggerType());
+        assertEquals(RetrainingSecurityLevel.NONE, decision.getSecurityLevel());
+        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
     }
 
     // ------------------------------------------------------------------
@@ -366,7 +356,7 @@ class RetrainingDecisionServiceTest {
         when(mlExperimentRepository.findEligibleProductionCandidates("model-a"))
                 .thenReturn(List.of(bestCandidate));
 
-        RetrainingConfig config = config(RetrainingStrategy.SMART_MONITORING_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setFailureMonitoringEnabled(false);
         config.setPerformanceMonitoringEnabled(true);
         config.setDataDriftMonitoringEnabled(false);
@@ -400,7 +390,7 @@ class RetrainingDecisionServiceTest {
         when(mlExperimentRepository.findEligibleProductionCandidates("model-a"))
                 .thenReturn(List.of(bestCandidate));
 
-        RetrainingConfig config = config(RetrainingStrategy.SMART_MONITORING_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setFailureMonitoringEnabled(false);
         config.setPerformanceMonitoringEnabled(true);
         config.setDataDriftMonitoringEnabled(false);
@@ -424,7 +414,7 @@ class RetrainingDecisionServiceTest {
         when(mlExperimentRepository.findCurrentProductionExperimentForProject(eq(PROJECT_ID)))
                 .thenReturn(Optional.empty());
 
-        RetrainingConfig config = config(RetrainingStrategy.SMART_MONITORING_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setFailureMonitoringEnabled(false);
         config.setPerformanceMonitoringEnabled(true);
         config.setDataDriftMonitoringEnabled(false);
@@ -443,7 +433,7 @@ class RetrainingDecisionServiceTest {
 
     @Test
     void manualRequest_alwaysRunsEvenWithoutSource() {
-        RetrainingConfig config = config(RetrainingStrategy.SCHEDULED_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setManualTriggerRequested(true);
 
         RetrainingDecision decision = service.buildDecision(config, now(), false);
@@ -455,7 +445,7 @@ class RetrainingDecisionServiceTest {
 
     @Test
     void noValidSource_defersEvenWhenDue() {
-        RetrainingConfig config = dueConfig(RetrainingStrategy.SCHEDULED_ONLY);
+        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
 
         RetrainingDecision decision = service.buildDecision(config, now(), false);
 

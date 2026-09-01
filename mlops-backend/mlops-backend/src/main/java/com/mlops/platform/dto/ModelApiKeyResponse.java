@@ -2,15 +2,8 @@ package com.mlops.platform.dto;
 
 import com.mlops.platform.entity.ModelApiKey;
 
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 
-/*
- * Réponse d'une clé API SMART MODEL GATEWAY.
- *
- * - `apiKey` (clé complète) n'est présent QUE dans la réponse de création.
- * - `maskedKey` est toujours présent : préfixe + derniers caractères.
- */
 public class ModelApiKeyResponse {
 
     private Long id;
@@ -25,11 +18,10 @@ public class ModelApiKeyResponse {
     private LocalDateTime expiresAt;
     private LocalDateTime revokedAt;
     private LocalDateTime lastUsedAt;
-    private Long dailyQuota;
-    private Long requestsToday;
     private Long totalRequests;
-    private LocalDate usageDate;
-    private Long quotaRemaining;
+    private Long successfulRequests;
+    private Long failedRequests;
+    private String status;
 
     public ModelApiKeyResponse() {
     }
@@ -47,11 +39,25 @@ public class ModelApiKeyResponse {
         response.setExpiresAt(key.getExpiresAt());
         response.setRevokedAt(key.getRevokedAt());
         response.setLastUsedAt(key.getLastUsedAt());
-        response.setDailyQuota(key.getDailyQuota());
-        response.setRequestsToday(key.getRequestsToday());
         response.setTotalRequests(key.getTotalRequests());
-        response.setUsageDate(key.getUsageDate());
+        response.setSuccessfulRequests(key.getSuccessfulRequests());
+        response.setFailedRequests(key.getFailedRequests());
+        response.setStatus(computeStatus(key));
         return response;
+    }
+
+    private static String computeStatus(ModelApiKey key) {
+        if (key.getRevokedAt() != null) {
+            return "REVOKED";
+        }
+        if (Boolean.FALSE.equals(key.getEnabled())) {
+            return "DISABLED";
+        }
+        if (key.getExpiresAt() != null && key.getExpiresAt().isAfter(LocalDateTime.now()) == false
+                && key.getExpiresAt().isBefore(LocalDateTime.now())) {
+            return "EXPIRED";
+        }
+        return "ACTIVE";
     }
 
     public static String buildMaskedKey(ModelApiKey key) {
@@ -61,139 +67,51 @@ public class ModelApiKeyResponse {
         return key.getKeyPrefix() + "\u2022\u2022\u2022\u2022\u2022\u2022";
     }
 
-    public Long getId() {
-        return id;
-    }
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
 
-    public void setId(Long id) {
-        this.id = id;
-    }
+    public Long getDeploymentId() { return deploymentId; }
+    public void setDeploymentId(Long deploymentId) { this.deploymentId = deploymentId; }
 
-    public Long getDeploymentId() {
-        return deploymentId;
-    }
+    public Long getOwnerId() { return ownerId; }
+    public void setOwnerId(Long ownerId) { this.ownerId = ownerId; }
 
-    public void setDeploymentId(Long deploymentId) {
-        this.deploymentId = deploymentId;
-    }
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
 
-    public Long getOwnerId() {
-        return ownerId;
-    }
+    public String getKeyPrefix() { return keyPrefix; }
+    public void setKeyPrefix(String keyPrefix) { this.keyPrefix = keyPrefix; }
 
-    public void setOwnerId(Long ownerId) {
-        this.ownerId = ownerId;
-    }
+    public String getMaskedKey() { return maskedKey; }
+    public void setMaskedKey(String maskedKey) { this.maskedKey = maskedKey; }
 
-    public String getName() {
-        return name;
-    }
+    public String getApiKey() { return apiKey; }
+    public void setApiKey(String apiKey) { this.apiKey = apiKey; }
 
-    public void setName(String name) {
-        this.name = name;
-    }
+    public Boolean getEnabled() { return enabled; }
+    public void setEnabled(Boolean enabled) { this.enabled = enabled; }
 
-    public String getKeyPrefix() {
-        return keyPrefix;
-    }
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 
-    public void setKeyPrefix(String keyPrefix) {
-        this.keyPrefix = keyPrefix;
-    }
+    public LocalDateTime getExpiresAt() { return expiresAt; }
+    public void setExpiresAt(LocalDateTime expiresAt) { this.expiresAt = expiresAt; }
 
-    public String getMaskedKey() {
-        return maskedKey;
-    }
+    public LocalDateTime getRevokedAt() { return revokedAt; }
+    public void setRevokedAt(LocalDateTime revokedAt) { this.revokedAt = revokedAt; }
 
-    public void setMaskedKey(String maskedKey) {
-        this.maskedKey = maskedKey;
-    }
+    public LocalDateTime getLastUsedAt() { return lastUsedAt; }
+    public void setLastUsedAt(LocalDateTime lastUsedAt) { this.lastUsedAt = lastUsedAt; }
 
-    public String getApiKey() {
-        return apiKey;
-    }
+    public Long getTotalRequests() { return totalRequests; }
+    public void setTotalRequests(Long totalRequests) { this.totalRequests = totalRequests; }
 
-    public void setApiKey(String apiKey) {
-        this.apiKey = apiKey;
-    }
+    public Long getSuccessfulRequests() { return successfulRequests; }
+    public void setSuccessfulRequests(Long successfulRequests) { this.successfulRequests = successfulRequests; }
 
-    public Boolean getEnabled() {
-        return enabled;
-    }
+    public Long getFailedRequests() { return failedRequests; }
+    public void setFailedRequests(Long failedRequests) { this.failedRequests = failedRequests; }
 
-    public void setEnabled(Boolean enabled) {
-        this.enabled = enabled;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public LocalDateTime getExpiresAt() {
-        return expiresAt;
-    }
-
-    public void setExpiresAt(LocalDateTime expiresAt) {
-        this.expiresAt = expiresAt;
-    }
-
-    public LocalDateTime getRevokedAt() {
-        return revokedAt;
-    }
-
-    public void setRevokedAt(LocalDateTime revokedAt) {
-        this.revokedAt = revokedAt;
-    }
-
-    public LocalDateTime getLastUsedAt() {
-        return lastUsedAt;
-    }
-
-    public void setLastUsedAt(LocalDateTime lastUsedAt) {
-        this.lastUsedAt = lastUsedAt;
-    }
-
-    public Long getDailyQuota() {
-        return dailyQuota;
-    }
-
-    public void setDailyQuota(Long dailyQuota) {
-        this.dailyQuota = dailyQuota;
-    }
-
-    public Long getRequestsToday() {
-        return requestsToday;
-    }
-
-    public void setRequestsToday(Long requestsToday) {
-        this.requestsToday = requestsToday;
-    }
-
-    public Long getTotalRequests() {
-        return totalRequests;
-    }
-
-    public void setTotalRequests(Long totalRequests) {
-        this.totalRequests = totalRequests;
-    }
-
-    public LocalDate getUsageDate() {
-        return usageDate;
-    }
-
-    public void setUsageDate(LocalDate usageDate) {
-        this.usageDate = usageDate;
-    }
-
-    public Long getQuotaRemaining() {
-        return quotaRemaining;
-    }
-
-    public void setQuotaRemaining(Long quotaRemaining) {
-        this.quotaRemaining = quotaRemaining;
-    }
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
 }

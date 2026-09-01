@@ -16,6 +16,7 @@ import SockJS from 'sockjs-client';
 export type NotificationType =
   | 'RUN_COMPLETED'
   | 'RUN_FAILED'
+  | 'DEPLOYMENT_STARTED'
   | 'DEPLOYMENT_DEPLOYED'
   | 'DEPLOYMENT_FAILED'
   | 'DEPLOYMENT_OUT_OF_SYNC'

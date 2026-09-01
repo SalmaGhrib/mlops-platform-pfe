@@ -10,6 +10,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/users")
@@ -33,7 +35,8 @@ public class UserSearchController {
     @GetMapping("/search")
     public ResponseEntity<List<UserSearchResponse>> searchUsers(
             @RequestParam(name = "query", required = false) String query,
-            @RequestParam(name = "deploymentId", required = false) Long deploymentId
+            @RequestParam(name = "deploymentId", required = false) Long deploymentId,
+            @RequestParam(name = "limit", required = false, defaultValue = "10") int limit
     ) {
         String cleanQuery = query == null ? "" : query.trim().toLowerCase();
 
@@ -58,11 +61,12 @@ public class UserSearchController {
         }
 
         final Long finalOwnerId = ownerId;
+        int safeLimit = Math.max(1, Math.min(limit, 20));
 
         List<UserSearchResponse> users = userRepository.searchActiveUsers(cleanQuery)
                 .stream()
                 .filter(user -> finalOwnerId == null || !finalOwnerId.equals(user.getId()))
-                .limit(10)
+                .limit(safeLimit)
                 .map(UserSearchResponse::fromEntity)
                 .toList();
 

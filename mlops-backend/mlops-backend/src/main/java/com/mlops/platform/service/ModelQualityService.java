@@ -10,20 +10,23 @@ import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.RetrainingConfigRepository;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDateTime;
 import java.util.Locale;
 
 /**
- * Gate qualité des modèles, sensible à la direction des métriques.
+ * Gate qualité des modèles, sensible au type de projet.
  *
- * Un modèle est conforme si :
- *  - sa métrique primaire respecte la direction du projet :
- *      * direction "max" (accuracy, f1, r2...) : valeur >= seuil ;
- *      * direction "min" (mae, rmse, mse, loss...) : valeur <= seuil ;
- *  - ET son score global normalisé est >= seuil.
+ * Le quality gate compare UNIQUEMENT le score global normalisé au seuil
+ * adapté au type de projet :
+ *  - CLASSIFICATION → classificationMinimumGlobalScore
+ *  - REGRESSION     → regressionMinimumGlobalScore
+ *
+ * La règle est toujours : globalScore >= threshold.
+ *
+ * Les métriques brutes (accuracy, RMSE, MAE, etc.) ne sont PAS comparées
+ * au seuil global. Elles servent uniquement au calcul du score global.
  *
  * Si le seuil minimal de qualité n'est pas configuré (retraining_config
- * inexistant ou globalScoreThreshold null), aucun contrôle n'est appliqué et
+ * inexistant ou seuil null), aucun contrôle n'est appliqué et
  * le modèle est considéré conforme.
  *
  * Un modèle non conforme ne peut pas être promu (MODEL_QUALITY_FAILED).
@@ -92,7 +95,8 @@ public class ModelQualityService {
             return null;
         }
 
-        Double threshold = resolveThreshold(project.getId());
+        String projectType = resolveProjectType(project);
+        Double threshold = resolveThreshold(project.getId(), projectType);
 
         String primaryMetric = experiment.getPrimaryMetric();
         Double primaryMetricValue = experiment.getPrimaryMetricValue();
@@ -115,28 +119,17 @@ public class ModelQualityService {
             );
         }
 
-        boolean conforming = true;
-        String reason = "OK";
+        boolean conforming = globalScore != null && globalScore >= threshold;
+        String reason = conforming ? "OK" : "GLOBAL_SCORE_BELOW_THRESHOLD";
 
-        if (primaryMetricValue == null) {
-            conforming = false;
-            reason = "NO_PRIMARY_METRIC_VALUE";
-        } else if ("min".equalsIgnoreCase(direction)) {
-            conforming = primaryMetricValue <= threshold;
-            reason = conforming
-                    ? "OK"
-                    : "METRIC_ABOVE_THRESHOLD";
-        } else {
-            conforming = primaryMetricValue >= threshold;
-            reason = conforming
-                    ? "OK"
-                    : "METRIC_BELOW_THRESHOLD";
-        }
-
-        if (conforming && globalScore != null && globalScore < threshold) {
-            conforming = false;
-            reason = "GLOBAL_SCORE_BELOW_THRESHOLD";
-        }
+        System.out.println(
+                "[PRODUCTION_GATE] projectId=" + project.getId()
+                        + ", experimentId=" + experiment.getId()
+                        + ", projectType=" + projectType
+                        + ", globalScore=" + globalScore
+                        + ", threshold=" + threshold
+                        + ", eligible=" + conforming
+        );
 
         return new QualityEvaluation(
                 project.getId(),
@@ -154,10 +147,10 @@ public class ModelQualityService {
     }
 
     /**
-     * Seuil minimum de qualité du modèle.
+     * Seuil minimum de qualité du modèle, adapté au type de projet.
      * Null si aucun contrôle n'est configuré.
      */
-    public Double resolveThreshold(Long projectId) {
+    public Double resolveThreshold(Long projectId, String projectType) {
         if (projectId == null) {
             return null;
         }
@@ -166,11 +159,26 @@ public class ModelQualityService {
                 .findByProjectId(projectId)
                 .orElse(null);
 
-        if (config == null || config.getGlobalScoreThreshold() == null) {
+        if (config == null) {
             return null;
         }
 
+        if ("regression".equalsIgnoreCase(projectType)) {
+            return config.getRegressionMinimumGlobalScore();
+        }
+
+        if ("classification".equalsIgnoreCase(projectType)) {
+            return config.getClassificationMinimumGlobalScore();
+        }
+
         return config.getGlobalScoreThreshold();
+    }
+
+    /**
+     * Backward-compatible : résout le seuil sans connaître le type projet.
+     */
+    public Double resolveThreshold(Long projectId) {
+        return resolveThreshold(projectId, null);
     }
 
     /**
@@ -193,21 +201,29 @@ public class ModelQualityService {
                 ? evaluation.threshold()
                 : DEFAULT_GLOBAL_SCORE_THRESHOLD;
 
-        String message = "Le score global du modèle "
-                + safeValue(evaluation.modelVersion(), "inconnu")
-                + " (" + formatScore(evaluation.globalScore()) + ") est inférieur "
-                + "au seuil minimum de qualité ("
-                + formatScore(threshold) + ").";
+        String projectName = safeValue(project.getName(), "projet");
+        String modelName = safeValue(
+                evaluation.registeredModelName(), "modele"
+        );
+        String version = safeValue(evaluation.modelVersion(), "inconnu");
 
-        if ("GLOBAL_SCORE_BELOW_THRESHOLD".equals(evaluation.reason())) {
-            message += " Le modèle ne peut pas être promu en production.";
-        }
+        String title = "Modele non promu en Production — " + projectName;
 
-        String idempotencyKey = MonitoringAlertService.buildIdempotencyKey(
+        String message = "Le modele \""
+                + modelName + "\" (version " + version + ") a termine son "
+                + "entrainement, mais son score global de "
+                + formatPercent(evaluation.globalScore())
+                + " est inferieur au seuil minimum requis de "
+                + formatPercent(threshold)
+                + ". Le modele a ete enregistre dans MLflow, mais il n'a "
+                + "pas ete promu en Production ni deploye. "
+                + "Vous pouvez ameliorer les donnees ou relancer un "
+                + "entrainement.";
+
+        String idempotencyKey = MonitoringAlertService.buildExperimentIdKey(
                 AlertType.MODEL_QUALITY_FAILED,
                 project.getId(),
-                evaluation.registeredModelName(),
-                LocalDateTime.now()
+                evaluation.experimentId()
         );
 
         return monitoringAlertService.raiseAlert(
@@ -219,8 +235,9 @@ public class ModelQualityService {
                 evaluation.globalScore(),
                 threshold,
                 evaluation.reason(),
-                "Réévaluer le modèle ou abaisser le seuil de qualité.",
+                "Reevaluer le modele ou abaisser le seuil de qualite.",
                 message,
+                title,
                 idempotencyKey,
                 project.getOwner()
         );
@@ -241,11 +258,25 @@ public class ModelQualityService {
         );
     }
 
+    private String resolveProjectType(MlProject project) {
+        if (project == null || project.getProjectType() == null) {
+            return null;
+        }
+        return project.getProjectType().trim().toLowerCase(Locale.ROOT);
+    }
+
     private String formatScore(Double score) {
         if (score == null) {
             return "n/d";
         }
         return String.format(Locale.ROOT, "%.2f", score);
+    }
+
+    private String formatPercent(Double score) {
+        if (score == null) {
+            return "n/d";
+        }
+        return String.format(Locale.ROOT, "%.2f %%", score * 100);
     }
 
     private String safeValue(String value, String fallback) {

@@ -8,9 +8,13 @@ import com.mlops.platform.dto.ShareDeploymentRequest;
 import com.mlops.platform.entity.User;
 import com.mlops.platform.repository.UserRepository;
 import com.mlops.platform.security.JwtService;
+import com.mlops.platform.service.ModelAccessControlService;
 import com.mlops.platform.service.ModelDeploymentService;
+import com.mlops.platform.repository.ModelDeploymentRepository;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
@@ -21,17 +25,23 @@ import java.util.Map;
 public class ModelDeploymentController {
 
     private final ModelDeploymentService modelDeploymentService;
+    private final ModelAccessControlService modelAccessControlService;
     private final JwtService jwtService;
     private final UserRepository userRepository;
+    private final ModelDeploymentRepository modelDeploymentRepository;
 
     public ModelDeploymentController(
             ModelDeploymentService modelDeploymentService,
+            ModelAccessControlService modelAccessControlService,
             JwtService jwtService,
-            UserRepository userRepository
+            UserRepository userRepository,
+            ModelDeploymentRepository modelDeploymentRepository
     ) {
         this.modelDeploymentService = modelDeploymentService;
+        this.modelAccessControlService = modelAccessControlService;
         this.jwtService = jwtService;
         this.userRepository = userRepository;
+        this.modelDeploymentRepository = modelDeploymentRepository;
     }
 
     /*
@@ -114,9 +124,18 @@ public class ModelDeploymentController {
 
     @PutMapping("/{deploymentId}/visibility")
     public ResponseEntity<ModelDeploymentResponse> updateDeploymentVisibility(
+            @RequestHeader("Authorization") String authHeader,
             @PathVariable Long deploymentId,
             @RequestBody Map<String, String> request
     ) {
+        User currentUser = getUserFromAuthorizationHeader(authHeader);
+        var deployment = modelDeploymentRepository.findById(deploymentId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Modèle introuvable."));
+
+        if (!modelAccessControlService.canManageDeployment(currentUser, deployment)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Seul le propriétaire peut modifier le mode d'accès.");
+        }
+
         String visibility = request.get("visibility");
 
         ModelDeploymentResponse response =
@@ -127,8 +146,17 @@ public class ModelDeploymentController {
 
     @GetMapping("/{deploymentId}/shares")
     public ResponseEntity<List<ModelDeploymentShareResponse>> getDeploymentShares(
+            @RequestHeader("Authorization") String authHeader,
             @PathVariable Long deploymentId
     ) {
+        User currentUser = getUserFromAuthorizationHeader(authHeader);
+        var deployment = modelDeploymentRepository.findById(deploymentId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Modèle introuvable."));
+
+        if (!modelAccessControlService.canAccessDeployment(currentUser, deployment)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Accès non autorisé.");
+        }
+
         return ResponseEntity.ok(
                 modelDeploymentService.getDeploymentShares(deploymentId)
         );
@@ -136,9 +164,18 @@ public class ModelDeploymentController {
 
     @PostMapping("/{deploymentId}/shares")
     public ResponseEntity<List<ModelDeploymentShareResponse>> shareDeploymentWithUsers(
+            @RequestHeader("Authorization") String authHeader,
             @PathVariable Long deploymentId,
             @RequestBody ShareDeploymentRequest request
     ) {
+        User currentUser = getUserFromAuthorizationHeader(authHeader);
+        var deployment = modelDeploymentRepository.findById(deploymentId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Modèle introuvable."));
+
+        if (!modelAccessControlService.canManageDeployment(currentUser, deployment)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Seul le propriétaire peut modifier le partage.");
+        }
+
         return ResponseEntity.ok(
                 modelDeploymentService.shareDeploymentWithUsers(deploymentId, request)
         );
@@ -146,9 +183,18 @@ public class ModelDeploymentController {
 
     @DeleteMapping("/{deploymentId}/shares/{userId}")
     public ResponseEntity<Void> removeDeploymentShare(
+            @RequestHeader("Authorization") String authHeader,
             @PathVariable Long deploymentId,
             @PathVariable Long userId
     ) {
+        User currentUser = getUserFromAuthorizationHeader(authHeader);
+        var deployment = modelDeploymentRepository.findById(deploymentId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Modèle introuvable."));
+
+        if (!modelAccessControlService.canManageDeployment(currentUser, deployment)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Seul le propriétaire peut modifier le partage.");
+        }
+
         modelDeploymentService.removeDeploymentShare(deploymentId, userId);
         return ResponseEntity.noContent().build();
     }

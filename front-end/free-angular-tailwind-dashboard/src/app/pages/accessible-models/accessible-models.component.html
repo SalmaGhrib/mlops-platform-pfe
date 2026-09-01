@@ -5,8 +5,8 @@
         <span class="header-pill">Serving & API Access</span>
         <h1>Accessible Models</h1>
         <p>
-          Consultez les modèles que vous êtes autorisé à utiliser :
-          modèles publics, partagés avec vous, ou vos modèles privés.
+          Modeles que vous etes autorise a utiliser :
+          modeaux publics ou partages avec vous.
         </p>
       </div>
 
@@ -18,7 +18,7 @@
     <div class="search-bar">
       <app-smart-search
         [searchFn]="searchAccessibleModels"
-        placeholder="Rechercher un modèle accessible..."
+        placeholder="Rechercher un modele accessible..."
         [pageSize]="12"
         (itemsChange)="onSearchItems($event)"
         (loadingChange)="loading = $event"
@@ -36,7 +36,7 @@
 
     <div *ngIf="loading" class="state-box loading-state">
       <span class="mlops-spinner text-brand-600 dark:text-brand-400"></span>
-      Chargement des modèles accessibles...
+      Chargement des modeles accessibles...
     </div>
 
     <div *ngIf="!loading && models.length === 0 && !errorMessage" class="empty-box">
@@ -45,9 +45,9 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/>
         </svg>
       </div>
-      <h3>Aucun modèle accessible</h3>
+      <h3>Aucun modele accessible</h3>
       <p>
-        Aucun modèle public ou partagé avec vous n’est disponible pour le moment.
+        Aucun modele public ou partage avec vous n'est disponible pour le moment.
       </p>
     </div>
 
@@ -59,7 +59,7 @@
             <p>
               Projet :
               <strong>{{ getProjectLabel(model) }}</strong>
-              —
+              --
               Version :
               <strong>v{{ getModelVersion(model) }}</strong>
             </p>
@@ -88,13 +88,13 @@
           </div>
 
           <div class="info-box">
-            <span>Accès</span>
+            <span>Acces</span>
             <strong>{{ getVisibilityLabel(model) }}</strong>
           </div>
 
           <div class="info-box">
             <span>API</span>
-            <strong>{{ model.apiEnabled ? 'Activée' : 'Non activée' }}</strong>
+            <strong>{{ model.apiEnabled ? 'Activee' : 'Non activee' }}</strong>
           </div>
         </div>
 
@@ -104,37 +104,132 @@
 
         <div class="endpoint-section">
           <label>Endpoint externe</label>
-
           <div class="copy-row">
             <code>POST {{ getExternalEndpoint(model) }}</code>
-
-            <button
-              type="button"
-              (click)="copyToClipboard(getExternalEndpoint(model), 'Endpoint externe')"
-            >
+            <button type="button" (click)="copyToClipboard(getExternalEndpoint(model), 'Endpoint externe')">
               Copier
             </button>
           </div>
         </div>
 
-        <div class="endpoint-section">
-          <label>Clé API (SMART GATEWAY)</label>
+        <!-- API KEY SECTION: SHARED + PUBLIC_API -->
+        <div *ngIf="isShared(model) || isPublicApi(model)" class="api-key-section">
+          <ng-container *ngIf="getKeyForModel(model) as mwk">
 
-          <div class="copy-row">
-            <code>X-API-KEY: mlops_live_&lt;votre_cle_api&gt;</code>
+            <!-- No key yet -->
+            <div *ngIf="!mwk.myKey && !mwk.generatedFullKey && !mwk.showKeyModal" class="key-generate-form">
+              <label *ngIf="isShared(model)">Acces API personnel</label>
+              <label *ngIf="isPublicApi(model)">Votre cle API</label>
 
-            <button
-              type="button"
-              (click)="copyToClipboard('mlops_live_<votre_cle_api>', 'Clé API placeholder')"
-            >
-              Copier
-            </button>
-          </div>
+              <p class="key-form-hint" *ngIf="isShared(model)">
+                Generez votre propre cle pour appeler ce modele via le SMART GATEWAY.
+              </p>
+              <p class="key-form-hint" *ngIf="isPublicApi(model)">
+                Generez une cle API pour appeler ce modele.
+              </p>
+
+              <div class="key-form-row">
+                <input
+                  type="text"
+                  [(ngModel)]="mwk.keyNameInput"
+                  placeholder="Nom (ex: application mobile)"
+                  class="key-input"
+                  [disabled]="mwk.generating"
+                />
+                <input
+                  type="date"
+                  [(ngModel)]="mwk.expiryInput"
+                  class="key-input key-input-expiry"
+                  [disabled]="mwk.generating"
+                />
+                <button
+                  type="button"
+                  class="btn-generate"
+                  (click)="generateKey(mwk)"
+                  [disabled]="mwk.generating"
+                >
+                  <span *ngIf="!mwk.generating">Generer la cle</span>
+                  <span *ngIf="mwk.generating">Generation...</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Key just generated: modal overlay -->
+            <div *ngIf="mwk.showKeyModal && mwk.generatedFullKey" class="key-modal-overlay">
+              <div class="key-modal">
+                <h3>Cle API generee avec succes</h3>
+
+                <div class="key-modal-display">
+                  <code class="key-full">{{ mwk.generatedFullKey }}</code>
+                </div>
+
+                <p class="key-warning">
+                  Copiez cette cle maintenant.<br/>
+                  Pour des raisons de securite, elle ne sera plus affichee en clair.
+                </p>
+
+                <div class="key-modal-actions">
+                  <button type="button" class="btn-copy-modal"
+                    (click)="copyToClipboard(mwk.generatedFullKey, 'Cle API')">
+                    Copier
+                  </button>
+                  <button type="button" class="btn-close-modal" (click)="closeKeyModal(mwk)">
+                    Fermer
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Existing key: show status -->
+            <div *ngIf="mwk.myKey && !mwk.generatedFullKey && !mwk.showKeyModal" class="key-existing">
+              <label>Acces API personnel</label>
+
+              <div class="key-status-row">
+                <div class="key-info">
+                  <span class="key-prefix">{{ mwk.myKey.keyPrefix }}_xxxx</span>
+                  <span class="key-status">
+                    Activee
+                  </span>
+                </div>
+              </div>
+
+              <div class="key-details-grid">
+                <div class="key-detail">
+                  <span>Statut acces</span>
+                  <strong>Autorise</strong>
+                </div>
+                <div class="key-detail" *ngIf="mwk.myKey.expiresAt">
+                  <span>Expire le</span>
+                  <strong>{{ formatDateShort(mwk.myKey.expiresAt) }}</strong>
+                </div>
+                <div class="key-detail">
+                  <span>Derniere utilisation</span>
+                  <strong>{{ formatDateTime(mwk.myKey.lastUsedAt) }}</strong>
+                </div>
+              </div>
+
+              <div class="key-actions-row" *ngIf="mwk.myKey">
+                <button
+                  type="button"
+                  class="btn-delete"
+                  (click)="deleteKey(mwk)"
+                  [disabled]="mwk.deleting"
+                >
+                  <span *ngIf="!mwk.deleting">Supprimer</span>
+                  <span *ngIf="mwk.deleting">Suppression...</span>
+                </button>
+              </div>
+
+              <details class="curl-box">
+                <summary>Exemple curl</summary>
+                <pre>{{ buildCurlExample(model, mwk.myKey.keyPrefix + '_xxxx') }}</pre>
+              </details>
+            </div>
+          </ng-container>
         </div>
 
         <details class="curl-box">
-          <summary>Voir exemple curl</summary>
-
+          <summary>Exemple curl</summary>
           <pre>{{ buildCurlExample(model) }}</pre>
         </details>
       </div>

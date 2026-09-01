@@ -1,0 +1,203 @@
+% =========================================================
+% MAIN.TEX — Rapport de stage PFE
+% Plateforme MLOps — INSOMEA
+% =========================================================
+\documentclass[a4paper, 12pt, openright]{report}
+
+% ---------------------------------------------------------
+% LANGUE
+% ---------------------------------------------------------
+\usepackage[french]{babel}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+
+% ---------------------------------------------------------
+% MISE EN PAGE
+% ---------------------------------------------------------
+\usepackage[top=2.5cm, bottom=2.5cm, left=3cm, right=2.5cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\leftmark}
+\fancyhead[R]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancyfoot[C]{}
+
+% ---------------------------------------------------------
+% ENCODAGES ET POLICES
+% ---------------------------------------------------------
+\usepackage{lmodern}
+\usepackage{amsmath, amssymb, amsfonts}
+
+% ---------------------------------------------------------
+% FIGURES ET TABLEAUX
+% ---------------------------------------------------------
+\usepackage{graphicx}
+\graphicspath{{images/}}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{colortbl}
+\usepackage{xcolor}
+\definecolor{cyan}{RGB}{0,188,212}
+\definecolor{cyan!20}{RGB}{200,240,245}
+\definecolor{cyan!7}{RGB}{230,247,250}
+
+% ---------------------------------------------------------
+% LISTINGS (CODE)
+% ---------------------------------------------------------
+\usepackage{listings}
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red!70!black},
+    tabsize=4,
+    showstringspaces=false
+}
+
+% ---------------------------------------------------------
+% TIKZ (DIAGRAMMES UML)
+% ---------------------------------------------------------
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, calc, decorations.pathreplacing}
+
+% ---------------------------------------------------------
+% LIENS ET REFERENCES
+% ---------------------------------------------------------
+\usepackage[colorlinks=true, linkcolor=black, citecolor=black, urlcolor=blue]{hyperref}
+\usepackage{cleveref}
+
+% ---------------------------------------------------------
+% BIBLIOGRAPHIE
+% ---------------------------------------------------------
+\usepackage[numbers, sort&compress]{natbib}
+
+% ---------------------------------------------------------
+% AUTRES
+% ---------------------------------------------------------
+\usepackage{enumitem}
+\usepackage{caption}
+\captionsetup{font=small, labelfont=bf}
+\usepackage{tocloft}
+\renewcommand{\cftchapleader}{\cftdotfill{\cftdotsep}}
+\renewcommand{\cftsecleader}{\cftdotfill{\cftdotsep}}
+
+% =========================================================
+% DÉBUT DU DOCUMENT
+% =========================================================
+\begin{document}
+
+% ---------------------------------------------------------
+% PAGE DE GARDE (à personnaliser)
+% ---------------------------------------------------------
+\begin{titlepage}
+\centering
+\vspace*{1cm}
+
+{\Large\textsc{ESPRIT -- École Privée d'Ingénieurs}}
+
+\vspace{1cm}
+
+\rule{\textwidth}{1.5pt}
+
+\vspace{0.5cm}
+
+{\fontsize{24}{28}\selectfont
+\textsc{Plateforme MLOps Intégrée}\\[0.3cm]
+\textsc{pour le Cycle de Vie des Modèles Machine Learning}
+}
+
+\vspace{0.5cm}
+
+\rule{\textwidth}{1.5pt}
+
+\vspace{2cm}
+
+{\large\textbf{Rapport de stage de fin d'études}}
+
+\vspace{1cm}
+
+{\large Présenté par :}\\[0.3cm]
+{\Large\textbf{Salma Ghrib}}
+
+\vspace{1.5cm}
+
+{\large Encadré par :}\\[0.3cm]
+{\large Mr Amine Gongi \quad -- \quad Mr Abdelrazek Hachani}
+
+\vspace{1.5cm}
+
+{\large Promotion : 2025 -- 2026}
+
+\vfill
+
+{\normalsize\textbf{INSOMEA}\\[0.2cm]
+\textit{Intelligence Artificielle \& Solutions sur Mesure}}
+
+\end{titlepage}
+
+% ---------------------------------------------------------
+% DÉDICACE (optionnel)
+% ---------------------------------------------------------
+\pagenumbering{roman}
+
+% \input{chapters/dedication}
+
+% ---------------------------------------------------------
+% REMERCIEMENTS (optionnel)
+% ---------------------------------------------------------
+% \input{chapters/acknowledgements}
+
+% ---------------------------------------------------------
+% RÉSUMÉ / ABSTRACT (optionnel)
+% ---------------------------------------------------------
+% \input{chapters/abstract}
+
+% ---------------------------------------------------------
+% TABLE DES MATIÈRES
+% ---------------------------------------------------------
+\tableofcontents
+\clearpage
+\listoffigures
+\clearpage
+\listoftables
+\clearpage
+
+% ---------------------------------------------------------
+% CORPS DU DOCUMENT
+% ---------------------------------------------------------
+\pagenumbering{arabic}
+
+% Chapitre 1 — Introduction générale
+% \input{chapters/chapter1}
+
+% Chapitre 2 — Sprint 1 : Mise en place de l'environnement
+% \input{chapters/chapter2}
+
+% Chapitre 3 — Sprint 1 : Infrastructures
+% \input{chapters/chapter3}
+
+% Chapitre 4 — Sprint 2 : Développement applicatif et moteur MLOps
+\input{chapters/chapter4}
+
+% Chapitre 5 — Sprint 3 : Cycle de vie du modèle
+\input{chapters/chapter5}
+
+% Chapitre 6 — Conclusion générale
+% \input{chapters/chapter6}
+
+% ---------------------------------------------------------
+% BIBLIOGRAPHIE
+% ---------------------------------------------------------
+% \bibliographystyle{plain}
+% \bibliography{references}
+
+\end{document}

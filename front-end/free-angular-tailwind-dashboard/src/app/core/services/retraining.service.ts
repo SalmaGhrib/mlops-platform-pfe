@@ -5,10 +5,8 @@ import { Observable } from 'rxjs';
 export type RetrainingFrequencyType = 'DAY' | 'WEEK' | 'MONTH';
 
 export type RetrainingStrategy =
-  | 'SCHEDULED_ONLY'
-  | 'SCHEDULED_WITH_MONITORING'
-  | 'SMART_MONITORING_ONLY'
-  | 'FULL_SMART';
+  | 'MONITORING_SMART'
+  | 'GITHUB_ACTIONS';
 
 export interface RetrainingConfigRequest {
   enabled: boolean;
@@ -16,20 +14,12 @@ export interface RetrainingConfigRequest {
   frequencyValue: number;
 
   strategy?: RetrainingStrategy;
-  failureMonitoringEnabled?: boolean;
-  performanceMonitoringEnabled?: boolean;
-  dataDriftMonitoringEnabled?: boolean;
+
   monitoringLookbackHours?: number;
   minPredictionsForMonitoring?: number;
-  maxPredictionErrorRatePercent?: number;
   performanceDropThresholdPercent?: number;
   dataDriftThresholdPercent?: number;
-  globalScoreThreshold?: number;
 
-  /**
-   * Politique de source de données pour un retraining (exigence #21) :
-   * ORIGINAL_DATASET | LATEST_DATASET | MERGED_DATASET.
-   */
   dataPolicy?: string;
 }
 
@@ -47,15 +37,10 @@ export interface RetrainingConfigResponse {
   updatedAt: string;
 
   strategy?: RetrainingStrategy | null;
-  failureMonitoringEnabled?: boolean | null;
-  performanceMonitoringEnabled?: boolean | null;
-  dataDriftMonitoringEnabled?: boolean | null;
   monitoringLookbackHours?: number | null;
   minPredictionsForMonitoring?: number | null;
-  maxPredictionErrorRatePercent?: number | null;
   performanceDropThresholdPercent?: number | null;
   dataDriftThresholdPercent?: number | null;
-  globalScoreThreshold?: number | null;
   manualTriggerRequested?: boolean | null;
   lastTriggerReason?: string | null;
   lastDecisionReason?: string | null;
@@ -108,7 +93,6 @@ export interface ProjectRetrainingSummaryDTO {
   lastTriggerReason?: string | null;
   running: boolean;
   cooldownUntil?: string | null;
-  frequencyLabel?: string | null;
 }
 
 export function isRetrainingTerminalStatus(status: string | null | undefined): boolean {

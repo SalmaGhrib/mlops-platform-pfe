@@ -85,7 +85,7 @@ class RetrainingDryRunServiceTest {
 
     @Test
     void diagnose_classifiesWouldRunConfig() {
-        RetrainingConfig config = config(RetrainingStrategy.SCHEDULED_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setNextRetrainingAt(now().minusMinutes(5));
 
         when(retrainingConfigRepository.findEnabledConfigs())
@@ -111,7 +111,7 @@ class RetrainingDryRunServiceTest {
 
     @Test
     void diagnose_classifiesNoValidSource() {
-        RetrainingConfig config = config(RetrainingStrategy.SCHEDULED_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setNextRetrainingAt(now().minusMinutes(5));
 
         when(retrainingConfigRepository.findEnabledConfigs())
@@ -134,7 +134,7 @@ class RetrainingDryRunServiceTest {
 
     @Test
     void diagnose_classifiesWouldSkip() {
-        RetrainingConfig config = config(RetrainingStrategy.SMART_MONITORING_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setNextRetrainingAt(now().minusMinutes(5));
 
         when(retrainingConfigRepository.findEnabledConfigs())
@@ -155,7 +155,7 @@ class RetrainingDryRunServiceTest {
 
     @Test
     void diagnose_classifiesBlockedBySecurity() {
-        RetrainingConfig config = config(RetrainingStrategy.SCHEDULED_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setNextRetrainingAt(now().minusMinutes(5));
 
         when(retrainingConfigRepository.findEnabledConfigs())
@@ -184,7 +184,7 @@ class RetrainingDryRunServiceTest {
 
     @Test
     void diagnose_classifiesNotDue() {
-        RetrainingConfig config = config(RetrainingStrategy.SCHEDULED_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setNextRetrainingAt(now().plusDays(7));
 
         when(retrainingConfigRepository.findEnabledConfigs())
@@ -201,7 +201,7 @@ class RetrainingDryRunServiceTest {
 
     @Test
     void diagnose_classifiesRunningStateAsNotDue() {
-        RetrainingConfig config = config(RetrainingStrategy.SCHEDULED_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setNextRetrainingAt(now().minusMinutes(5));
         config.setState(RetrainingState.RUNNING);
 
@@ -219,7 +219,7 @@ class RetrainingDryRunServiceTest {
 
     @Test
     void diagnose_performsNoWrites() {
-        RetrainingConfig config = config(RetrainingStrategy.SCHEDULED_ONLY);
+        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
         config.setNextRetrainingAt(now().minusMinutes(5));
 
         when(retrainingConfigRepository.findEnabledConfigs())

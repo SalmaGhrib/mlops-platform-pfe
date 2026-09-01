@@ -7,6 +7,7 @@ import com.mlops.platform.dto.SearchPageResponse;
 import com.mlops.platform.dto.ShareDeploymentRequest;
 import com.mlops.platform.entity.DeploymentStatus;
 import com.mlops.platform.entity.DeploymentVisibility;
+import com.mlops.platform.entity.ModelApiKey;
 import com.mlops.platform.entity.ModelDeployment;
 import com.mlops.platform.entity.ModelDeploymentShare;
 import com.mlops.platform.entity.MlExperiment;
@@ -18,6 +19,7 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.MlProjectRepository;
+import com.mlops.platform.repository.ModelApiKeyRepository;
 import com.mlops.platform.repository.ModelDeploymentRepository;
 import com.mlops.platform.repository.ModelDeploymentShareRepository;
 import com.mlops.platform.repository.UserRepository;
@@ -34,10 +36,12 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
@@ -115,6 +119,7 @@ public class ModelDeploymentService {
     private final SecureRandom secureRandom = new SecureRandom();
     private final NotificationService notificationService;
     private final PlatformTransactionManager transactionManager;
+    private final ModelApiKeyRepository modelApiKeyRepository;
 
     @Value("${custom.predict.api.url:http://localhost:8000}")
     private String predictApiUrl;
@@ -148,7 +153,8 @@ public class ModelDeploymentService {
             MlProjectRepository mlProjectRepository,
             ModelArtifactStandardizerService modelArtifactStandardizerService,
             NotificationService notificationService,
-            PlatformTransactionManager transactionManager
+            PlatformTransactionManager transactionManager,
+            ModelApiKeyRepository modelApiKeyRepository
     ) {
         this.modelDeploymentRepository = modelDeploymentRepository;
         this.mlExperimentRepository = mlExperimentRepository;
@@ -159,8 +165,9 @@ public class ModelDeploymentService {
         this.mlflowTrackingClientService = mlflowTrackingClientService;
         this.mlProjectRepository = mlProjectRepository;
         this.modelArtifactStandardizerService = modelArtifactStandardizerService;
-         this.notificationService = notificationService;
+        this.notificationService = notificationService;
         this.transactionManager = transactionManager;
+        this.modelApiKeyRepository = modelApiKeyRepository;
     }
 
 @Transactional
@@ -413,7 +420,11 @@ if (!hasText(modelVersion)) {
             ShareDeploymentRequest request
     ) {
         ModelDeployment deployment = modelDeploymentRepository.findById(deploymentId)
-                .orElseThrow(() -> new RuntimeException("Deployment introuvable avec id=" + deploymentId));
+                .orElseThrow(() -> new GatewayException(
+                        HttpStatus.NOT_FOUND,
+                        "MODEL_NOT_FOUND",
+                        "Deploiement introuvable avec id=" + deploymentId
+                ));
 
         deployment.setVisibility(DeploymentVisibility.SHARED);
         deployment.setApiEnabled(true);
@@ -426,39 +437,71 @@ if (!hasText(modelVersion)) {
 
         modelDeploymentRepository.saveAndFlush(deployment);
 
-        List<Long> userIds = request == null || request.getUserIds() == null
+        List<Long> newUserIds = request == null || request.getUserIds() == null
                 ? List.of()
-                : request.getUserIds();
+                : request.getUserIds().stream()
+                    .filter(id -> id != null)
+                    .distinct()
+                    .toList();
 
-        modelDeploymentShareRepository.deleteByDeploymentId(deploymentId);
+        Set<Long> newUserSet = new HashSet<>(newUserIds);
 
-        for (Long userId : userIds) {
-            if (userId == null) {
-                continue;
+        List<ModelDeploymentShare> existingShares =
+                modelDeploymentShareRepository.findByDeploymentId(deploymentId);
+
+        Set<Long> existingUserIds = existingShares.stream()
+                .map(ModelDeploymentShare::getSharedWithUserId)
+                .collect(Collectors.toSet());
+
+        List<ModelDeploymentShare> toRemove = existingShares.stream()
+                .filter(share -> !newUserSet.contains(share.getSharedWithUserId()))
+                .toList();
+
+        for (ModelDeploymentShare share : toRemove) {
+            disableKeysForRemovedUser(deploymentId, share.getSharedWithUserId());
+            modelDeploymentShareRepository.delete(share);
+        }
+
+        for (Long userId : newUserIds) {
+            if (!existingUserIds.contains(userId)) {
+                User user = userRepository.findById(userId)
+                        .orElseThrow(() -> new GatewayException(
+                                HttpStatus.NOT_FOUND,
+                                "USER_NOT_FOUND",
+                                "Utilisateur introuvable avec id=" + userId
+                        ));
+
+                ModelDeploymentShare share = new ModelDeploymentShare();
+                share.setDeploymentId(deploymentId);
+                share.setSharedWithUserId(user.getId());
+                share.setPermission(
+                        request.getPermission() == null || request.getPermission().isBlank()
+                                ? "PREDICT_ONLY"
+                                : request.getPermission()
+                );
+                modelDeploymentShareRepository.save(share);
             }
-
-            User user = userRepository.findById(userId)
-                    .orElseThrow(() -> new RuntimeException("Utilisateur introuvable avec id=" + userId));
-
-            ModelDeploymentShare share = new ModelDeploymentShare();
-            share.setDeploymentId(deploymentId);
-            share.setSharedWithUserId(user.getId());
-            share.setPermission(
-                    request.getPermission() == null || request.getPermission().isBlank()
-                            ? "PREDICT_ONLY"
-                            : request.getPermission()
-            );
-
-            modelDeploymentShareRepository.save(share);
         }
 
         modelDeploymentShareRepository.flush();
-
         return getDeploymentShares(deploymentId);
+    }
+
+    private void disableKeysForRemovedUser(Long deploymentId, Long userId) {
+        modelApiKeyRepository.findByDeploymentIdAndOwnerId(deploymentId, userId)
+                .ifPresent(key -> {
+                    if (Boolean.TRUE.equals(key.getEnabled())) {
+                        key.setEnabled(false);
+                        modelApiKeyRepository.save(key);
+                        System.out.println("[SHARED] API key disabled: keyId=" + key.getId()
+                                + " userId=" + userId + " deploymentId=" + deploymentId);
+                    }
+                });
     }
 
     @Transactional
     public void removeDeploymentShare(Long deploymentId, Long userId) {
+        disableKeysForRemovedUser(deploymentId, userId);
         modelDeploymentShareRepository.deleteByDeploymentIdAndSharedWithUserId(deploymentId, userId);
     }
 
@@ -494,10 +537,10 @@ if (!hasText(modelVersion)) {
                         registeredModelName.trim()
                 )
                 .map(existing -> new ApiAccessConfig(
-                        true,
+                        existing.getApiEnabled() != null ? existing.getApiEnabled() : false,
                         existing.getVisibility() != null
                                 ? existing.getVisibility()
-                                : DeploymentVisibility.PUBLIC_API,
+                                : DeploymentVisibility.PRIVATE,
                         existing.getApiKey(),
                         existing.getApiKeyCreatedAt() != null
                                 ? existing.getApiKeyCreatedAt()
@@ -509,8 +552,8 @@ if (!hasText(modelVersion)) {
 
     private ApiAccessConfig newPublicApiAccessConfig() {
         return new ApiAccessConfig(
-                true,
-                DeploymentVisibility.PUBLIC_API,
+                false,
+                DeploymentVisibility.PRIVATE,
                 generateUniqueApiKey(),
                 LocalDateTime.now(),
                 null
@@ -523,11 +566,12 @@ if (!hasText(modelVersion)) {
         }
 
         deployment.setApiEnabled(apiConfig.apiEnabled);
-        deployment.setVisibility(
-                apiConfig.visibility != null
-                        ? apiConfig.visibility
-                        : DeploymentVisibility.PUBLIC_API
-        );
+
+        if (apiConfig.visibility != null) {
+            deployment.setVisibility(apiConfig.visibility);
+        } else if (deployment.getVisibility() == null) {
+            deployment.setVisibility(DeploymentVisibility.PRIVATE);
+        }
 
         /*
          * api_key is UNIQUE in MySQL. A blue/green candidate is initially a new
@@ -919,6 +963,8 @@ public ModelDeploymentResponse deployProductionModel(DeployModelRequestDto reque
     applyApiAccessConfig(deployment, apiAccessConfig);
 
     ModelDeployment saved = modelDeploymentRepository.saveAndFlush(deployment);
+
+    notifyDeploymentStartedIfNeeded(saved);
 
     try {
         String dataType = resolveDeploymentDataType(experiment);
@@ -2027,8 +2073,8 @@ public ModelDeploymentResponse markAsFailed(Long deploymentId, String errorMessa
 
         DeploymentVisibility currentVisibility = deployment.getVisibility();
 
-        if (currentVisibility == null || currentVisibility == DeploymentVisibility.PRIVATE) {
-            currentVisibility = DeploymentVisibility.PUBLIC_API;
+        if (currentVisibility == null) {
+            currentVisibility = DeploymentVisibility.PRIVATE;
         }
 
         List<ModelDeployment> deployments =
@@ -4106,6 +4152,25 @@ private void notifyDeploymentDeployedIfNeeded(ModelDeployment deployment) {
         );
     } catch (Exception e) {
         System.out.println("[NOTIFICATION][DEPLOYMENT] Could not notify DEPLOYED for deploymentId="
+                + deployment.getId()
+                + ", reason="
+                + e.getMessage());
+    }
+}
+
+private void notifyDeploymentStartedIfNeeded(ModelDeployment deployment) {
+    if (deployment == null || deployment.getId() == null) {
+        return;
+    }
+
+    try {
+        notificationService.notifyDeploymentStarted(
+                deployment.getId(),
+                resolveDeploymentOwner(deployment),
+                buildDeploymentDisplayName(deployment)
+        );
+    } catch (Exception e) {
+        System.out.println("[NOTIFICATION][DEPLOYMENT] Could not notify STARTED for deploymentId="
                 + deployment.getId()
                 + ", reason="
                 + e.getMessage());

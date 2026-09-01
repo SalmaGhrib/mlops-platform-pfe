@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -149,6 +151,8 @@ public class DatasetFileResolverService {
             return false;
         }
 
+        fixLegacyFileIfNeeded(file);
+
         return isDatasetRole(effectiveRole(file));
     }
 
@@ -184,6 +188,7 @@ public class DatasetFileResolverService {
         }
 
         if (best != null) {
+            fixLegacyFileIfNeeded(best);
             System.out.println("[DATASET_SELECTION] Dataset résolu depuis les fichiers du projet. "
                     + "file=" + displayName(best)
                     + ", role=" + safeRole(best)
@@ -323,5 +328,67 @@ public class DatasetFileResolverService {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    /**
+     * Corrige les anciens fichiers stockés sans point avant l'extension.
+     * Ex: "1e85d6ef-...fcsv" → "1e85d6ef-....csv" (rename on disk + DB update).
+     */
+    private void fixLegacyFileIfNeeded(UploadedProjectFile file) {
+        try {
+            String storedName = file.getStoredFileName();
+            if (!hasText(storedName)) {
+                return;
+            }
+
+            Path currentPath = Path.of(file.getFilePath());
+            String fileName = currentPath.getFileName().toString();
+
+            if (fileName.contains(".")) {
+                return;
+            }
+
+            String ext = normalizedExtension(file.getFileExtension(), file.getOriginalFileName());
+            if (ext == null || ext.isBlank()) {
+                return;
+            }
+
+            String uuidPart = fileName.substring(0, fileName.length() - ext.length());
+            String fixedName = uuidPart + "." + ext;
+
+            Path parentDir = currentPath.getParent();
+            if (parentDir == null) {
+                return;
+            }
+            Path newPath = parentDir.resolve(fixedName);
+
+            if (Files.exists(newPath)) {
+                file.setFilePath(newPath.toString());
+                file.setStoredFileName(fixedName);
+                uploadedProjectFileRepository.save(file);
+                System.out.println("[LEGACY_FIX] Legacy file already fixed at new path. "
+                        + "fileId=" + file.getId()
+                        + ", newPath=" + newPath);
+                return;
+            }
+
+            Files.copy(currentPath, newPath, StandardCopyOption.REPLACE_EXISTING);
+            Files.deleteIfExists(currentPath);
+
+            file.setFilePath(newPath.toString());
+            file.setStoredFileName(fixedName);
+            uploadedProjectFileRepository.save(file);
+
+            System.out.println("[LEGACY_FIX] Fixed dotless legacy file. "
+                    + "fileId=" + file.getId()
+                    + ", oldPath=" + currentPath
+                    + ", newPath=" + newPath
+                    + ", extension=" + ext);
+
+        } catch (Exception e) {
+            System.out.println("[LEGACY_FIX] Failed to fix legacy file. "
+                    + "fileId=" + file.getId()
+                    + ", reason=" + e.getMessage());
+        }
     }
 }

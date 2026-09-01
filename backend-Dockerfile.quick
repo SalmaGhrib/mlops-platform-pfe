@@ -1,0 +1,4 @@
+FROM acrmlopssalmav2.azurecr.io/mlops-backend:mlops-pilot-api-keys-v1
+
+COPY mlops-backend/mlops-backend/target/mlops-backend-0.0.1-SNAPSHOT.jar /app/app.jar
+COPY mini-mlops/src/custom_models/platform_runner.py /app/mini-mlops/src/custom_models/platform_runner.py

@@ -48,4 +48,10 @@ public interface MonitoringAlertRepository
     List<MonitoringAlert> findTop50ByCreatedAtGreaterThanEqualOrderByCreatedAtDesc(
             LocalDateTime createdAt
     );
+
+    boolean existsByAlertTypeAndProjectIdAndModelVersion(
+            AlertType alertType,
+            Long projectId,
+            String modelVersion
+    );
 }

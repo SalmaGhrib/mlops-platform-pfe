@@ -768,4 +768,23 @@ public interface MlExperimentRepository
             @Param("productionVersion")
             String productionVersion
     );
+
+    /**
+     * Trouve les expériences par statut et mode d'exécution.
+     * Utilisé par la réconciliation des jobs Kubernetes.
+     */
+    @Query(value = """
+        SELECT *
+        FROM ml_experiments
+        WHERE status = :status
+          AND runtime_mode = :runtimeMode
+        ORDER BY created_at ASC
+        """, nativeQuery = true)
+    List<MlExperiment> findByStatusAndRuntimeMode(
+            @Param("status")
+            String status,
+
+            @Param("runtimeMode")
+            String runtimeMode
+    );
 }

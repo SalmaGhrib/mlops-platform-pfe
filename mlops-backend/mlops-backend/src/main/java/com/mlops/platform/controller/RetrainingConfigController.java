@@ -7,6 +7,7 @@ import com.mlops.platform.dto.MlExperimentResponse;
 import com.mlops.platform.dto.RetrainingDryRunResponse;
 import com.mlops.platform.dto.RetrainingSummaryDTO;
 import com.mlops.platform.entity.RetrainingConfig;
+import com.mlops.platform.entity.RetrainingStrategy;
 import com.mlops.platform.exception.RetrainingConflictException;
 import com.mlops.platform.service.AutoRetrainingService;
 import com.mlops.platform.service.RetrainingConfigService;
@@ -44,6 +45,9 @@ public class RetrainingConfigController {
             @PathVariable Long projectId,
             @RequestBody RetrainingConfigRequest request
     ) {
+        request.setEnabled(true);
+        request.setStrategy(RetrainingStrategy.MONITORING_SMART);
+
         RetrainingConfig config = retrainingConfigService.saveOrUpdateProjectConfig(
                 projectId,
                 request
@@ -61,6 +65,9 @@ public class RetrainingConfigController {
             @PathVariable Long experimentId,
             @RequestBody RetrainingConfigRequest request
     ) {
+        request.setEnabled(true);
+        request.setStrategy(RetrainingStrategy.MONITORING_SMART);
+
         RetrainingConfig config = retrainingConfigService.saveOrUpdateConfig(
                 projectId,
                 experimentId,
@@ -75,9 +82,14 @@ public class RetrainingConfigController {
             @PathVariable Long projectId,
             @PathVariable Long experimentId
     ) {
-        RetrainingConfig config = retrainingConfigService.enableDefaultWeeklyRetraining(
+        RetrainingConfigRequest request = new RetrainingConfigRequest();
+        request.setEnabled(true);
+        request.setStrategy(RetrainingStrategy.MONITORING_SMART);
+
+        RetrainingConfig config = retrainingConfigService.saveOrUpdateConfig(
                 projectId,
-                experimentId
+                experimentId,
+                request
         );
 
         return ResponseEntity.ok(config);
@@ -87,8 +99,7 @@ public class RetrainingConfigController {
     public ResponseEntity<RetrainingConfig> disableRetraining(
             @PathVariable Long projectId
     ) {
-        RetrainingConfig config = retrainingConfigService.disableRetraining(projectId);
-
+        RetrainingConfig config = retrainingConfigService.getConfig(projectId);
         return ResponseEntity.ok(config);
     }
 
@@ -232,6 +243,12 @@ public class RetrainingConfigController {
 
         boolean activeExperimentExists = autoRetrainingService.hasActiveExperimentForProject(projectId);
         boolean running = config.isRunning() || activeExperimentExists;
+
+        boolean monitoringSmart = config.getStrategy() == RetrainingStrategy.MONITORING_SMART;
+        String nextRetrainingAt = monitoringSmart
+                ? null
+                : (config.getNextRetrainingAt() != null ? config.getNextRetrainingAt().toString() : null);
+
         ProjectRetrainingStatusResponse response = new ProjectRetrainingStatusResponse(
                 projectId,
                 config.isEnabled(),
@@ -240,7 +257,7 @@ public class RetrainingConfigController {
                 activeExperimentExists,
                 activeExperimentExists ? "ACTIVE" : (config.isRunning() ? "RUNNING" : (config.isEnabled() ? "IDLE" : "DISABLED")),
                 activeExperimentExists ? "Un réentraînement est en cours." : "Aucun réentraînement actif.",
-                config.getNextRetrainingAt() != null ? config.getNextRetrainingAt().toString() : null,
+                nextRetrainingAt,
                 config.getLastRetrainingAt() != null ? config.getLastRetrainingAt().toString() : null,
                 config.getLastDecisionReason(),
                 config.getLastTriggerReason()
@@ -281,7 +298,7 @@ public class RetrainingConfigController {
         summary.setProjectId(projectId);
         summary.setEnabled(config.isEnabled());
         summary.setStrategy(
-                config.getStrategy() != null ? config.getStrategy().name() : "SCHEDULED_ONLY"
+                config.getStrategy() != null ? config.getStrategy().name() : "MONITORING_SMART"
         );
         summary.setState(
                 config.getState() != null ? config.getState().name() : "IDLE"
@@ -291,10 +308,14 @@ public class RetrainingConfigController {
                         ? config.getLastRetrainingAt().toString()
                         : null
         );
+
+        boolean monitoringSmart = config.getStrategy() == RetrainingStrategy.MONITORING_SMART;
         summary.setNextRetrainingAt(
-                config.getNextRetrainingAt() != null
-                        ? config.getNextRetrainingAt().toString()
-                        : null
+                monitoringSmart
+                        ? null
+                        : (config.getNextRetrainingAt() != null
+                                ? config.getNextRetrainingAt().toString()
+                                : null)
         );
         summary.setLastMonitoringCheckAt(
                 config.getLastMonitoringCheckAt() != null

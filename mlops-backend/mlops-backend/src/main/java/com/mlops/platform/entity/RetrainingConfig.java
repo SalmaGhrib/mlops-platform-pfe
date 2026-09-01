@@ -17,7 +17,7 @@ public class RetrainingConfig {
 
     private Long sourceExperimentId;
 
-    private boolean enabled = false;
+    private boolean enabled = true;
 
     @Enumerated(EnumType.STRING)
     private RetrainingFrequencyType frequencyType = RetrainingFrequencyType.WEEK;
@@ -30,7 +30,7 @@ public class RetrainingConfig {
      */
     @Enumerated(EnumType.STRING)
     @Column(name = "strategy")
-    private RetrainingStrategy strategy = RetrainingStrategy.SCHEDULED_ONLY;
+    private RetrainingStrategy strategy = RetrainingStrategy.MONITORING_SMART;
 
     @Column(name = "failure_monitoring_enabled", nullable = false)
     private boolean failureMonitoringEnabled = true;
@@ -64,6 +64,20 @@ public class RetrainingConfig {
      */
     @Column(name = "global_score_threshold")
     private Double globalScoreThreshold = 0.75;
+
+    /**
+     * Seuil minimum de qualité pour les projets de CLASSIFICATION.
+     * Score global normalisé dans [0,1].
+     */
+    @Column(name = "classification_min_global_score")
+    private Double classificationMinimumGlobalScore = 0.75;
+
+    /**
+     * Seuil minimum de qualité pour les projets de REGRESSION.
+     * Score global normalisé dans [0,1].
+     */
+    @Column(name = "regression_min_global_score")
+    private Double regressionMinimumGlobalScore = 0.75;
 
     @Column(name = "manual_trigger_requested", nullable = false)
     private boolean manualTriggerRequested = false;
@@ -149,48 +163,33 @@ public class RetrainingConfig {
         this.createdAt = now;
         this.updatedAt = now;
 
-        normalizeFrequency();
-        normalizeMonitoringSettings();
+        this.enabled = true;
+        if (this.strategy == null) {
+            this.strategy = RetrainingStrategy.MONITORING_SMART;
+        }
+        this.strategy = RetrainingStrategy.normalize(this.strategy);
 
         if (this.state == null) {
             this.state = RetrainingState.IDLE;
         }
 
-        if (this.enabled && this.nextRetrainingAt == null) {
-            this.nextRetrainingAt = calculateNextRetrainingDate(now);
-        }
-
-        if (this.enabled && this.nextMonitoringCheckAt == null) {
-            scheduleNextMonitoringCheckFrom(now);
-        }
-
-        if (!this.enabled) {
-            this.nextRetrainingAt = null;
-            this.running = false;
-            this.manualTriggerRequested = false;
-            this.state = RetrainingState.IDLE;
-            this.cooldownUntil = null;
-            this.nextMonitoringCheckAt = null;
-        }
+        normalizeMonitoringSettings();
     }
 
     @PreUpdate
     public void onUpdate() {
         this.updatedAt = LocalDateTime.now(Clock.systemUTC());
-        normalizeFrequency();
-        normalizeMonitoringSettings();
+        this.enabled = true;
+        if (this.strategy == null) {
+            this.strategy = RetrainingStrategy.MONITORING_SMART;
+        }
+        this.strategy = RetrainingStrategy.normalize(this.strategy);
 
         if (this.state == null) {
             this.state = RetrainingState.IDLE;
         }
 
-        if (!this.enabled) {
-            this.nextRetrainingAt = null;
-            this.running = false;
-            this.manualTriggerRequested = false;
-            this.state = RetrainingState.IDLE;
-            this.cooldownUntil = null;
-        }
+        normalizeMonitoringSettings();
     }
 
     public void normalizeFrequency() {
@@ -205,7 +204,7 @@ public class RetrainingConfig {
 
     public void normalizeMonitoringSettings() {
         if (this.strategy == null) {
-            this.strategy = RetrainingStrategy.SCHEDULED_ONLY;
+            this.strategy = RetrainingStrategy.MONITORING_SMART;
         }
 
         if (this.monitoringLookbackHours == null || this.monitoringLookbackHours <= 0) {
@@ -217,28 +216,29 @@ public class RetrainingConfig {
         }
 
         if (this.minPredictionsForMonitoring == null || this.minPredictionsForMonitoring <= 0) {
-            this.minPredictionsForMonitoring = 30;
-        }
-
-        if (this.maxPredictionErrorRatePercent == null || this.maxPredictionErrorRatePercent <= 0) {
-            this.maxPredictionErrorRatePercent = 20.0;
+            this.minPredictionsForMonitoring = 20;
         }
 
         if (this.performanceDropThresholdPercent == null || this.performanceDropThresholdPercent <= 0) {
-            this.performanceDropThresholdPercent = 5.0;
+            this.performanceDropThresholdPercent = 10.0;
         }
 
         if (this.dataDriftThresholdPercent == null || this.dataDriftThresholdPercent <= 0) {
-            this.dataDriftThresholdPercent = 25.0;
+            this.dataDriftThresholdPercent = 5.0;
         }
+    }
 
-        if (this.globalScoreThreshold == null) {
-            this.globalScoreThreshold = 0.75;
-        } else if (this.globalScoreThreshold < 0) {
-            this.globalScoreThreshold = 0.0;
-        } else if (this.globalScoreThreshold > 1) {
-            this.globalScoreThreshold = 1.0;
+    private Double normalizeGlobalScoreThreshold(Double value) {
+        if (value == null) {
+            return 0.75;
         }
+        if (value < 0.0) {
+            return 0.0;
+        }
+        if (value > 1.0) {
+            return 1.0;
+        }
+        return value;
     }
 
     public LocalDateTime calculateNextRetrainingDate(LocalDateTime fromDate) {
@@ -277,15 +277,7 @@ public class RetrainingConfig {
     }
 
     public void scheduleNextMonitoringCheckFrom(LocalDateTime fromDate) {
-        if (!enabled
-                || strategy == null
-                || strategy == RetrainingStrategy.SCHEDULED_ONLY
-                || (strategy != RetrainingStrategy.SMART_MONITORING_ONLY
-                    && strategy != RetrainingStrategy.FULL_SMART
-                    && strategy != RetrainingStrategy.SCHEDULED_WITH_MONITORING)) {
-            return;
-        }
-        this.nextMonitoringCheckAt = calculateNextMonitoringCheckDate(fromDate);
+        this.nextMonitoringCheckAt = fromDate.plusHours(1);
     }
 
     public Long getId() {
@@ -344,7 +336,7 @@ public class RetrainingConfig {
     }
 
     public void setStrategy(RetrainingStrategy strategy) {
-        this.strategy = strategy != null ? strategy : RetrainingStrategy.SCHEDULED_ONLY;
+        this.strategy = strategy != null ? strategy : RetrainingStrategy.MONITORING_SMART;
     }
 
     public boolean isFailureMonitoringEnabled() {
@@ -417,6 +409,22 @@ public class RetrainingConfig {
 
     public void setGlobalScoreThreshold(Double globalScoreThreshold) {
         this.globalScoreThreshold = globalScoreThreshold;
+    }
+
+    public Double getClassificationMinimumGlobalScore() {
+        return classificationMinimumGlobalScore;
+    }
+
+    public void setClassificationMinimumGlobalScore(Double classificationMinimumGlobalScore) {
+        this.classificationMinimumGlobalScore = classificationMinimumGlobalScore;
+    }
+
+    public Double getRegressionMinimumGlobalScore() {
+        return regressionMinimumGlobalScore;
+    }
+
+    public void setRegressionMinimumGlobalScore(Double regressionMinimumGlobalScore) {
+        this.regressionMinimumGlobalScore = regressionMinimumGlobalScore;
     }
 
     public boolean isManualTriggerRequested() {
@@ -555,7 +563,7 @@ public class RetrainingConfig {
      * tentative est déjà en cours.
      */
     public boolean isClaimable(LocalDateTime now) {
-        if (!enabled || running) {
+        if (running) {
             return false;
         }
 

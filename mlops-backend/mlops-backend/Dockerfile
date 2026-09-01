@@ -44,8 +44,8 @@ COPY mlops-backend/scripts/standardize_model_artifact.py \
      /app/scripts/standardize_model_artifact.py
 
 # Fichiers utilisés par Kaniko et le platform runner
-COPY mini-mlops \
-     /app/mini-mlops
+COPY mini-mlops/src/custom_models/platform_runner.py \
+     /app/mini-mlops/src/custom_models/platform_runner.py
 
 RUN chmod +x /app/scripts/standardize_model_artifact.py \
     && test -f /app/app.jar \

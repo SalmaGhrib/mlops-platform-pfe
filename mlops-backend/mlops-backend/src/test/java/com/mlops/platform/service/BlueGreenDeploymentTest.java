@@ -4,6 +4,7 @@ import com.mlops.platform.entity.DeploymentStatus;
 import com.mlops.platform.entity.ModelDeployment;
 import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.MlProjectRepository;
+import com.mlops.platform.repository.ModelApiKeyRepository;
 import com.mlops.platform.repository.ModelDeploymentRepository;
 import com.mlops.platform.repository.ModelDeploymentShareRepository;
 import com.mlops.platform.repository.UserRepository;
@@ -70,6 +71,9 @@ class BlueGreenDeploymentTest {
     @Mock
     private PlatformTransactionManager transactionManager;
 
+    @Mock
+    private ModelApiKeyRepository modelApiKeyRepository;
+
     private ModelDeploymentService service;
 
     @BeforeEach
@@ -85,7 +89,8 @@ class BlueGreenDeploymentTest {
                 mlProjectRepository,
                 modelArtifactStandardizerService,
                 notificationService,
-                transactionManager
+                transactionManager,
+                modelApiKeyRepository
         );
         ReflectionTestUtils.setField(service, "rollbackWindowMs", 600000L);
         ReflectionTestUtils.setField(service, "predictionSmokeTestEnabled", false);

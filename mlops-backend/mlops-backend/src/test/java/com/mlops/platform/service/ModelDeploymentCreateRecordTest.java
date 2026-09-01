@@ -6,6 +6,7 @@ import com.mlops.platform.entity.DeploymentVisibility;
 import com.mlops.platform.entity.ModelDeployment;
 import com.mlops.platform.repository.MlExperimentRepository;
 import com.mlops.platform.repository.MlProjectRepository;
+import com.mlops.platform.repository.ModelApiKeyRepository;
 import com.mlops.platform.repository.ModelDeploymentRepository;
 import com.mlops.platform.repository.ModelDeploymentShareRepository;
 import com.mlops.platform.repository.UserRepository;
@@ -72,6 +73,9 @@ class ModelDeploymentCreateRecordTest {
     @Mock
     private PlatformTransactionManager transactionManager;
 
+    @Mock
+    private ModelApiKeyRepository modelApiKeyRepository;
+
     private ModelDeploymentService service;
 
     @BeforeEach
@@ -87,7 +91,8 @@ class ModelDeploymentCreateRecordTest {
                 mlProjectRepository,
                 modelArtifactStandardizerService,
                 notificationService,
-                transactionManager
+                transactionManager,
+                modelApiKeyRepository
         );
     }
 

@@ -10,6 +10,7 @@ import com.mlops.platform.entity.NotificationType;
 import com.mlops.platform.entity.RetrainingConfig;
 import com.mlops.platform.entity.RetrainingSecurityLevel;
 import com.mlops.platform.entity.RetrainingState;
+import com.mlops.platform.entity.RetrainingStrategy;
 import com.mlops.platform.entity.RetrainingTriggerType;
 import com.mlops.platform.exception.RetrainingConflictException;
 import com.mlops.platform.repository.MlExperimentRepository;
@@ -110,21 +111,6 @@ public class AutoRetrainingService {
         Long projectId =
                 config.getProjectId();
 
-        if (!config.isEnabled()) {
-            releaseAfterFailure(
-                    configId,
-                    null
-            );
-
-            System.out.println(
-                    "[AUTO_RETRAINING] Claimed config became disabled. "
-                            + "configId="
-                            + configId
-            );
-
-            return;
-        }
-
         if (!config.isRunning()) {
             System.out.println(
                     "[AUTO_RETRAINING] Claimed config is no longer "
@@ -178,6 +164,12 @@ public class AutoRetrainingService {
                             config.getSourceExperimentId()
                     ) != null;
 
+            config.setStrategy(
+                    RetrainingStrategy.normalize(
+                            config.getStrategy()
+                    )
+            );
+
             RetrainingDecision decision =
                     retrainingDecisionService.buildDecision(
                             config,
@@ -188,11 +180,6 @@ public class AutoRetrainingService {
             if (decision == null
                     || !decision.isShouldRetrain()) {
 
-                LocalDateTime next =
-                        config.calculateNextRetrainingDate(
-                                now
-                        );
-
                 String reason =
                         decision != null
                                 ? safeMessage(
@@ -202,7 +189,7 @@ public class AutoRetrainingService {
 
                 releaseAfterSkipped(
                         configId,
-                        next,
+                        null,
                         reason
                 );
 
@@ -213,9 +200,6 @@ public class AutoRetrainingService {
                         "Le monitoring ne justifie pas un nouveau "
                                 + "réentraînement. "
                                 + reason
-                                + " Prochaine vérification : "
-                                + next
-                                + "."
                 );
 
                 System.out.println(
@@ -230,8 +214,6 @@ public class AutoRetrainingService {
                                 + decision.getSecurityLevel()
                                 + ", reasonCodes="
                                 + decision.getReasonCodes()
-                                + ", nextRetrainingAt="
-                                + next
                                 + ", reason="
                                 + reason
                 );
@@ -241,11 +223,9 @@ public class AutoRetrainingService {
 
             if (decision.getSecurityLevel()
                     == RetrainingSecurityLevel.BLOCK_MODEL) {
-                LocalDateTime next =
-                        config.calculateNextRetrainingDate(now);
                 releaseAfterSkipped(
                         configId,
-                        next,
+                        null,
                         "[SECURITE] Modèle bloqué : le réentraînement est "
                                 + "refusé pour ce cycle. "
                                 + safeMessage(decision.getReason())
@@ -325,17 +305,6 @@ public class AutoRetrainingService {
                             + sourceModelVersion
             );
 
-            notifyRetrainingInfo(
-                    projectId,
-                    null,
-                    "Réentraînement lancé",
-                    "Le réentraînement automatique vient d'être lancé. "
-                            + "Déclencheur : "
-                            + trigger
-                            + ". Raison : "
-                            + decisionReason
-            );
-
             MlExperimentResponse newExperiment =
                     mlExperimentService
                             .retrainFromCurrentProductionExperiment(
@@ -352,15 +321,10 @@ public class AutoRetrainingService {
                 );
             }
 
-            LocalDateTime next =
-                    config.calculateNextRetrainingDate(
-                            now
-                    );
-
             releaseAfterSuccess(
                     configId,
                     now,
-                    next,
+                    null,
                     sourceModelVersion,
                     newExperiment.getId()
             );
@@ -371,13 +335,12 @@ public class AutoRetrainingService {
             notifyRetrainingInfo(
                     projectId,
                     newExperimentId,
-                    "Réentraînement automatique lancé",
+                    "Réentraînement démarré",
                     "Le réentraînement automatique a été lancé avec "
                             + "succès. Nouvelle expérience : "
                             + newExperimentId
-                            + ". Prochaine exécution : "
-                            + next
-                            + "."
+                            + ".",
+                    NotificationType.RETRAINING_TRIGGERED
             );
 
             System.out.println(
@@ -390,8 +353,6 @@ public class AutoRetrainingService {
                             + sourceModelVersion
                             + ", newExperimentId="
                             + newExperimentId
-                            + ", nextRetrainingAt="
-                            + next
             );
 
         } catch (Exception error) {
@@ -401,14 +362,6 @@ public class AutoRetrainingService {
                             .findById(configId)
                             .orElse(config);
 
-            LocalDateTime next =
-                    latest != null
-                            && latest.isEnabled()
-                            ? latest.calculateNextRetrainingDate(
-                                    utcNow()
-                            )
-                            : null;
-
             boolean cooldownReached =
                     latest != null
                             && latest.getConsecutiveFailures() + 1
@@ -417,12 +370,12 @@ public class AutoRetrainingService {
             if (cooldownReached) {
                 releaseAfterCooldown(
                         configId,
-                        next
+                        null
                 );
             } else {
                 releaseAfterFailure(
                         configId,
-                        next
+                        null
                 );
             }
 
@@ -434,7 +387,7 @@ public class AutoRetrainingService {
             notifyRetrainingInfo(
                     projectId,
                     null,
-                    "Réentraînement automatique échoué",
+                    "Réentraînement échoué",
                     "Le réentraînement automatique n'a pas pu être "
                             + "lancé. Erreur : "
                             + errorMessage
@@ -443,7 +396,8 @@ public class AutoRetrainingService {
                             + "temporairement après "
                             + maxConsecutiveFailures
                             + " échecs consécutifs."
-                            : "")
+                            : ""),
+                    NotificationType.RETRAINING_FAILED
             );
 
             System.err.println(
@@ -454,8 +408,6 @@ public class AutoRetrainingService {
                             + projectId
                             + ", cachedSourceExperimentId="
                             + config.getSourceExperimentId()
-                            + ", nextRetrainingAt="
-                            + next
                             + ", cooldownReached="
                             + cooldownReached
                             + ", error="
@@ -536,10 +488,7 @@ public class AutoRetrainingService {
 
                         LocalDateTime now = utcNow();
 
-                        boolean due = cfg.isManualTriggerRequested()
-                                        || (cfg.getNextRetrainingAt() != null && !cfg.getNextRetrainingAt().isAfter(now));
-
-                        if (!due) {
+                        if (!cfg.isClaimable(now)) {
                                 return 0;
                         }
 
@@ -552,20 +501,17 @@ public class AutoRetrainingService {
                                 }
 
                                 if (resolved == null) {
-                                        LocalDateTime next = cfg.calculateNextRetrainingDate(now);
                                         retrainingConfigRepository.updateStateForUnclaimedConfig(
                                                         configId,
                                                         RetrainingState.IDLE,
-                                                        next,
-                                                        "Aucune source Production valide : échéance reportée.",
+                                                        null,
+                                                        "Aucune source Production valide : reporté.",
                                                         now
                                         );
                                         System.out.println(
-                                                        "[AUTO_RETRAINING] Source invalid: schedule advanced "
+                                                        "[AUTO_RETRAINING] Source invalid: skipped "
                                                                         + "instead of blocking. configId="
                                                                         + configId
-                                                                        + ", nextRetrainingAt="
-                                                                        + next
                                         );
                                         return 0;
                                 }
@@ -625,6 +571,8 @@ public class AutoRetrainingService {
          */
         recoverStuckRetraining(projectId);
 
+        reconcileKubernetesJobStatuses(projectId);
+
         if (hasActiveExperimentForProject(projectId)) {
             System.out.println(
                     "[MANUAL_RETRAIN] Refused. projectId="
@@ -654,6 +602,20 @@ public class AutoRetrainingService {
                             + projectId
             );
         }
+
+        MlExperiment productionSource =
+                sourceResolver.resolveAndSynchronize(
+                        projectId,
+                        config.getSourceExperimentId()
+                );
+
+        String sourceModelVersion =
+                productionSource != null
+                        && productionSource.getModelVersion() != null
+                        ? String.valueOf(
+                                productionSource.getModelVersion()
+                        )
+                        : null;
 
         /*
          * Claim atomique : running=true en base.
@@ -725,6 +687,14 @@ public class AutoRetrainingService {
             }
 
             String jobName = response.getKubeflowRunName();
+
+            releaseAfterSuccess(
+                    config.getId(),
+                    utcNow(),
+                    null,
+                    sourceModelVersion,
+                    response.getId()
+            );
 
             System.out.println(
                     "[RETRAINING_JOB] Manual retraining launched. "
@@ -803,6 +773,8 @@ public class AutoRetrainingService {
 
         recoverStuckRetraining(projectId);
 
+        reconcileKubernetesJobStatuses(projectId);
+
         if (hasActiveExperimentForProject(projectId)) {
             System.out.println(
                     "[GITHUB_RETRAIN_REJECTED] projectId="
@@ -848,6 +820,20 @@ public class AutoRetrainingService {
                             + projectId
             );
         }
+
+        MlExperiment productionSource =
+                sourceResolver.resolveAndSynchronize(
+                        projectId,
+                        config.getSourceExperimentId()
+                );
+
+        String sourceModelVersion =
+                productionSource != null
+                        && productionSource.getModelVersion() != null
+                        ? String.valueOf(
+                                productionSource.getModelVersion()
+                        )
+                        : null;
 
         /*
          * Claim atomique (même verrou que le retraining manuel) : running=true
@@ -942,6 +928,14 @@ public class AutoRetrainingService {
                             + ", trigger=GITHUB_PUSH"
             );
 
+            releaseAfterSuccess(
+                    config.getId(),
+                    utcNow(),
+                    null,
+                    sourceModelVersion,
+                    response.getId()
+            );
+
             return response;
 
         } catch (Exception error) {
@@ -1025,13 +1019,16 @@ public class AutoRetrainingService {
                 }
 
                 int updated =
-                        executeInNewTransaction(() ->
-                                retrainingConfigRepository
-                                        .resetFinishedConfigToIdle(
-                                                configId,
-                                                utcNow()
-                                        )
-                        );
+                        executeInNewTransaction(() -> {
+                            LocalDateTime now = utcNow();
+                            config.scheduleNextFrom(now);
+                            return retrainingConfigRepository
+                                    .resetFinishedConfigToIdle(
+                                            configId,
+                                            config.getNextRetrainingAt(),
+                                            now
+                                    );
+                        });
 
                 if (updated > 0) {
                     resetCount++;
@@ -1121,18 +1118,22 @@ public class AutoRetrainingService {
                 }
 
                 ExperimentStatus previous = experiment.getStatus();
-                experiment.setStatus(ExperimentStatus.FAILED);
-                experiment.setFinishedAt(now);
-                experiment.setErrorMessage(
-                        "Récupération automatique : réentraînement resté "
-                                + "bloqué (aucun Job Kubernetes actif)."
-                );
-                experiment.setMessage(
-                        "Récupéré automatiquement après détection "
-                                + "d'un état bloqué."
-                );
 
-                mlExperimentRepository.saveAndFlush(experiment);
+                mlExperimentService.markExperimentFailedWithDetails(
+                        experiment,
+                        "STUCK_RECOVERY",
+                        "Réentraînement resté bloqué (aucun Job Kubernetes actif après "
+                                + RETRAINING_STUCK_TIMEOUT_MINUTES + " minutes)",
+                        "projectId=" + projectId
+                                + ", jobName=" + firstNotBlank(
+                                        experiment.getTrainingJobName(),
+                                        experiment.getKubeflowRunName()
+                                )
+                                + ", ageMinutes=" + ageMinutes,
+                        "Vérifiez l'état du cluster Kubernetes et relancez manuellement si nécessaire.",
+                        null,
+                        "AutoRetrainingService.java"
+                );
 
                 repaired = true;
 
@@ -1151,8 +1152,8 @@ public class AutoRetrainingService {
                                 + ageMinutes
                                 + ", previousStatus="
                                 + previous
-                                + ", newStatus="
-                                + experiment.getStatus()
+                                + ", newStatus=FAILED"
+                                + ", notificationSent=true"
                 );
             }
 
@@ -1179,6 +1180,105 @@ public class AutoRetrainingService {
         }
     }
 
+    /**
+     * Reconcile Kubernetes job status for CUSTOM_DOCKERFILE experiments
+     * that are still marked RUNNING in the database.
+     *
+     * This method proactively checks the actual K8s job status and
+     * marks experiments as FAILED if their jobs have completed with failure
+     * or are no longer found. This prevents stale RUNNING states from
+     * blocking new retraining attempts.
+     *
+     * @param projectId the project to reconcile (null = all projects)
+     * @return number of experiments repaired
+     */
+    public int reconcileKubernetesJobStatuses(Long projectId) {
+        int repaired = 0;
+
+        try {
+            List<MlExperiment> runningExperiments;
+
+            if (projectId != null) {
+                runningExperiments = mlExperimentRepository
+                        .findActiveRetrainingForProject(projectId);
+                if (runningExperiments != null) {
+                    runningExperiments = runningExperiments.stream()
+                            .filter(exp -> "CUSTOM_DOCKERFILE".equalsIgnoreCase(
+                                    exp.getRuntimeMode()))
+                            .toList();
+                }
+            } else {
+                runningExperiments = mlExperimentRepository
+                        .findByStatusAndRuntimeMode(
+                                "RUNNING",
+                                "CUSTOM_DOCKERFILE"
+                        );
+            }
+
+            if (runningExperiments == null || runningExperiments.isEmpty()) {
+                return 0;
+            }
+
+            for (MlExperiment experiment : runningExperiments) {
+                try {
+                    String jobName = firstNotBlank(
+                            experiment.getTrainingJobName(),
+                            experiment.getKubeflowRunName()
+                    );
+
+                    if (!hasText(jobName)) {
+                        continue;
+                    }
+
+                    String k8sStatus = kubernetesJobService
+                            .getCustomJobStatus(jobName);
+
+                    if ("FAILED".equalsIgnoreCase(k8sStatus)
+                            || "NOT_FOUND".equalsIgnoreCase(k8sStatus)) {
+                        ExperimentStatus previous = experiment.getStatus();
+
+                        mlExperimentService.markExperimentFailedWithDetails(
+                                experiment,
+                                "K8S_RECONCILIATION",
+                                "Kubernetes job " + k8sStatus,
+                                "jobName=" + jobName + ", k8sStatus=" + k8sStatus,
+                                "Vérifiez les logs du Job Kubernetes et corrigez la cause première.",
+                                null,
+                                "KubernetesJobService.java"
+                        );
+
+                        repaired++;
+
+                        System.out.println(
+                                "[RETRAINING_STATE] projectId="
+                                        + (experiment.getProject() != null
+                                        ? experiment.getProject().getId()
+                                        : "?")
+                                        + ", experimentId=" + experiment.getId()
+                                        + ", dbStatus=" + previous
+                                        + ", k8sJobStatus=" + k8sStatus
+                                        + ", jobName=" + jobName
+                                        + ", action=RECONCILE_MARK_FAILED"
+                                        + ", notificationSent=true"
+                        );
+                    }
+                } catch (Exception ex) {
+                    System.err.println(
+                            "[RETRAINING_STATE] Failed to reconcile experiment "
+                                    + experiment.getId() + ": " + ex.getMessage()
+                    );
+                }
+            }
+        } catch (Exception e) {
+            System.err.println(
+                    "[RETRAINING_STATE] Reconciliation failed. projectId="
+                            + projectId + ", reason=" + e.getMessage()
+            );
+        }
+
+        return repaired;
+    }
+
     private boolean shouldRepairStuckExperiment(
             MlExperiment experiment
     ) {
@@ -1201,7 +1301,8 @@ public class AutoRetrainingService {
         if ("CUSTOM_DOCKERFILE".equals(runtimeMode)) {
             /*
              * Mode Docker : un Job Kubernetes doit exister.
-             * S'il est introuvable, l'expérience est bloquée.
+             * S'il est introuvable OU en échec, l'expérience est bloquée
+             * et doit être réparée.
              */
             if (!hasText(jobName)) {
                 return true;
@@ -1212,7 +1313,8 @@ public class AutoRetrainingService {
                         kubernetesJobService
                                 .getCustomJobStatus(jobName);
 
-                return "NOT_FOUND".equalsIgnoreCase(jobStatus);
+                return "NOT_FOUND".equalsIgnoreCase(jobStatus)
+                        || "FAILED".equalsIgnoreCase(jobStatus);
             } catch (Exception jobCheckError) {
                 /*
                  * Si on ne peut pas interroger Kubernetes, on ne répare pas :
@@ -1337,7 +1439,7 @@ public class AutoRetrainingService {
                                 .releaseAfterSuccess(
                                         configId,
                                         lastRetrainingAt,
-                                        nextRetrainingAt,
+                                        null,
                                         sourceModelVersion,
                                         experimentId,
                                         updatedAt
@@ -1369,7 +1471,7 @@ public class AutoRetrainingService {
                         retrainingConfigRepository
                                 .releaseAfterFailure(
                                         configId,
-                                        nextRetrainingAt,
+                                        null,
                                         updatedAt
                                 )
                 );
@@ -1380,8 +1482,6 @@ public class AutoRetrainingService {
                         + configId
                         + ", updatedRows="
                         + updated
-                        + ", retryAt="
-                        + nextRetrainingAt
         );
     }
 
@@ -1432,7 +1532,7 @@ public class AutoRetrainingService {
                         retrainingConfigRepository
                                 .releaseAfterSkipped(
                                         configId,
-                                        nextRetrainingAt,
+                                        null,
                                         safeMessage(
                                                 decisionReason
                                         ),
@@ -1485,6 +1585,22 @@ public class AutoRetrainingService {
             String title,
             String message
     ) {
+        notifyRetrainingInfo(
+                projectId,
+                experimentId,
+                title,
+                message,
+                NotificationType.SYSTEM_INFO
+        );
+    }
+
+    private void notifyRetrainingInfo(
+            Long projectId,
+            Long experimentId,
+            String title,
+            String message,
+            NotificationType notificationType
+    ) {
         if (projectId == null) {
             return;
         }
@@ -1513,16 +1629,32 @@ public class AutoRetrainingService {
                     project.getOwner(),
                     title,
                     message,
-                    NotificationType.SYSTEM_INFO,
+                    notificationType,
                     targetType,
                     targetId
             );
 
-        } catch (Exception notificationError) {
             System.out.println(
-                    "[AUTO_RETRAINING][NOTIFICATION] "
-                            + "Could not send notification. "
-                            + "projectId="
+                    "[NOTIFICATION] created type="
+                            + notificationType
+                            + " title=\""
+                            + title
+                            + "\" userId="
+                            + (project.getOwner() != null
+                            ? project.getOwner().getId()
+                            : "null")
+                            + " projectId="
+                            + projectId
+                            + " experimentId="
+                            + experimentId
+            );
+
+        } catch (Exception notificationError) {
+            System.err.println(
+                    "[NOTIFICATION] FAILED to create. "
+                            + "type="
+                            + notificationType
+                            + " projectId="
                             + projectId
                             + ", reason="
                             + safeMessage(

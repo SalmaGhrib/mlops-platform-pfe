@@ -75,12 +75,20 @@ public class KubernetesBuildService {
     private String platformRuntimeRoot;
 
     private final DatasetFileResolverService datasetFileResolverService;
+    private final UploadedFileResolverService uploadedFileResolverService;
+    private final CustomDockerWorkspaceService workspaceService;
 
     @Autowired
     private UploadsStorageProperties uploadsStorageProperties;
 
-    public KubernetesBuildService(DatasetFileResolverService datasetFileResolverService) {
+    public KubernetesBuildService(
+            DatasetFileResolverService datasetFileResolverService,
+            UploadedFileResolverService uploadedFileResolverService,
+            CustomDockerWorkspaceService workspaceService
+    ) {
         this.datasetFileResolverService = datasetFileResolverService;
+        this.uploadedFileResolverService = uploadedFileResolverService;
+        this.workspaceService = workspaceService;
     }
 
     public static class BuildJobResult {
@@ -126,58 +134,90 @@ public class KubernetesBuildService {
         validateInputs(project, experiment);
 
         String buildJobName = buildBuildJobName(project.getName(), experiment.getId());
-        String configMapName = buildConfigMapName(project.getName(), experiment.getId());
         String imageUri = buildGeneratedImageUri(project.getName(), experiment.getId());
 
-        System.out.println("[KubernetesBuildService] Launching build job for project='" + project.getName() + "' expId=" + experiment.getId());
-        System.out.println("[KubernetesBuildService] buildJobName='" + buildJobName + "', configMapName='" + configMapName + "', imageUri='" + imageUri + "'");
+        System.out.println("[CUSTOM_BUILD] Launching build for project='" + project.getName()
+                + "' expId=" + experiment.getId() + ", imageUri=" + imageUri);
 
-        Map<String, String> buildContextFiles = buildContextFiles(project, experiment);
-        System.out.println("[KubernetesBuildService] Build context contains files=" + buildContextFiles.keySet());
+        CustomDockerWorkspace workspace = workspaceService.prepareWorkspace(project, experiment);
 
-        assertConfigMapKeysAreSafe(buildContextFiles);
- 
-        
-        assertConfigMapSafeSize(buildContextFiles, configMapName);
+        String dockerfileContent;
+        try {
+            dockerfileContent = Files.readString(workspace.dockerfilePath(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to read workspace Dockerfile: " + e.getMessage(), e);
+        }
 
-        System.out.println("[CUSTOM-DOCKER] ConfigMap keys are Kubernetes-safe=" + areConfigMapKeysKubernetesSafe(buildContextFiles));
-        System.out.println("[CUSTOM-DOCKER] build context contains platform_runner.py=" + buildContextFiles.containsKey(STANDARD_PLATFORM_RUNNER_FILE));
-        System.out.println("[CUSTOM-DOCKER] build context contains src__custom_models__generic_pyfunc_wrapper.py=" + buildContextFiles.containsKey("src__custom_models__generic_pyfunc_wrapper.py"));
-        System.out.println("[CUSTOM-DOCKER] build context contains src__custom_models__import_detector.py=" + buildContextFiles.containsKey("src__custom_models__import_detector.py"));
-        String dockerfileForCheck = buildContextFiles.get(STANDARD_DOCKERFILE) == null ? "" : buildContextFiles.get(STANDARD_DOCKERFILE).toLowerCase(Locale.ROOT);
-        System.out.println("[CUSTOM-DOCKER] Dockerfile contains COPY src /workspace/src=" + dockerfileForCheck.contains("copy src") );
-        System.out.println("[CUSTOM-DOCKER] Dockerfile contains ENV PYTHONPATH=/workspace=" + dockerfileForCheck.contains("pythonpath=/workspace") );
-        System.out.println("[CUSTOM-DOCKER] Reconstructed build context will contain src/custom_models/generic_pyfunc_wrapper.py=" + buildContextFiles.containsKey("src__custom_models__generic_pyfunc_wrapper.py"));
-        System.out.println("[CUSTOM-DOCKER] Reconstructed build context will contain src/custom_models/import_detector.py=" + buildContextFiles.containsKey("src__custom_models__import_detector.py"));
-        System.out.println("[CUSTOM-DOCKER] Reconstructed build context will contain src/custom_models/model_artifact_detector.py=" + buildContextFiles.containsKey("src__custom_models__model_artifact_detector.py"));
+        UploadedProjectFile modelFile = experiment.getModelFile();
+        String originalModelFileName = modelFile != null
+                ? safeFileName(
+                        UploadFileNameNormalizer.runtimeName(
+                                modelFile.getOriginalFileName(), UploadedFileType.TRAINING_SCRIPT),
+                        STANDARD_TRAIN_FILE)
+                : null;
+
+        UploadedProjectFile datasetFile = datasetFileResolverService.resolveDatasetFile(project, experiment);
+        boolean datasetProvided = datasetFile != null
+                && datasetFile.getFilePath() != null
+                && !datasetFile.getFilePath().isBlank()
+                && Files.exists(Path.of(datasetFile.getFilePath()));
+
+        String datasetRuntimePath = datasetProvided
+                ? normalizeContainerPath(datasetFile.getFilePath()) : "";
+        String originalDatasetFileName = datasetProvided
+                ? safeFileName(
+                        UploadFileNameNormalizer.runtimeName(
+                                datasetFile.getOriginalFileName(),
+                                effectiveRole(datasetFile)),
+                        STANDARD_DATASET_FILE)
+                : STANDARD_DATASET_FILE;
+
+        dockerfileContent = forcePlatformRunnerCommand(
+                dockerfileContent,
+                originalModelFileName,
+                datasetProvided,
+                datasetRuntimePath,
+                originalDatasetFileName
+        );
 
         try {
-            validateBuildContextAgainstDockerfile(buildContextFiles, buildContextFiles.get(STANDARD_DOCKERFILE));
-        } catch (RuntimeException e) {
-            System.out.println("[KubernetesBuildService] Build context validation failed: " + e.getMessage());
-            throw e;
+            Files.writeString(workspace.dockerfilePath(), dockerfileContent, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to write modified Dockerfile to workspace: " + e.getMessage(), e);
         }
+
+        if (experiment.getRequirementsPath() != null
+                && !experiment.getRequirementsPath().isBlank()
+                && Files.exists(Path.of(experiment.getRequirementsPath()))) {
+            try {
+                String reqContent = Files.readString(
+                        Path.of(experiment.getRequirementsPath()), StandardCharsets.UTF_8);
+                String enriched = enrichRequirements(reqContent);
+                Files.writeString(workspace.requirementsPath(), enriched, StandardCharsets.UTF_8);
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to enrich requirements.txt: " + e.getMessage(), e);
+            }
+        }
+
+        workspaceService.validateWorkspace(workspace);
+        workspaceService.validateDockerfileSources(workspace, dockerfileContent);
+
+        System.out.println("[CUSTOM_BUILD] Workspace validated. context=" + workspace.containerWorkspacePath()
+                + ", files=Dockerfile,train.py,requirements.txt,"
+                + (workspace.datasetPath() != null ? workspace.datasetPath().getFileName() : "none")
+                + ",platform_runner.py,src/");
 
         try (KubernetesClient client = new KubernetesClientBuilder().build()) {
 
             validateKanikoDockerConfigSecret(client);
-
             deleteExistingJobIfExists(client, buildJobName);
-            deleteExistingConfigMapIfExists(client, configMapName);
 
-            ConfigMap configMap = buildConfigMap(configMapName, buildContextFiles);
-
-            client.configMaps()
-                    .inNamespace(namespace)
-                    .resource(configMap)
-                    .createOrReplace();
-
-            System.out.println("[KubernetesBuildService] ConfigMap created: " + configMapName);
-
-            Job job = buildKanikoJob(
+            Job job = buildKanikoJobFromWorkspace(
                     buildJobName,
-                    configMapName,
                     imageUri,
+                    workspace,
                     project,
                     experiment
             );
@@ -189,9 +229,10 @@ public class KubernetesBuildService {
                     .resource(job)
                     .create();
 
-            System.out.println("[KubernetesBuildService] Kubernetes Job created: " + buildJobName);
+            System.out.println("[CUSTOM_BUILD] KANIKO_JOB_CREATED jobName=" + buildJobName
+                    + ", context=" + workspace.containerWorkspacePath());
 
-            return new BuildJobResult(buildJobName, configMapName, imageUri);
+            return new BuildJobResult(buildJobName, null, imageUri);
 
         } catch (Exception e) {
             throw new RuntimeException("Failed to launch image build job: " + e.getMessage(), e);
@@ -515,6 +556,29 @@ public class KubernetesBuildService {
                         + "path=" + datasetRuntimePath
                         + ". Training job must mount the shared uploads PVC at /app/uploads.");
             }
+        }
+
+        /*
+         * CUSTOM DOCKERFILE BUILD FIX:
+         * Resolve additional file references from the user's Dockerfile.
+         * The user's Dockerfile may reference files (e.g., COPY helper.py /app/helper.py,
+         * COPY config.json /app/config.json) that are not in the standard build context.
+         * We scan the Dockerfile for COPY/ADD instructions and resolve each referenced file
+         * from the project's uploaded files using the UploadedFileResolverService.
+         */
+        try {
+            Map<String, String> resolvedRefs = uploadedFileResolverService.resolveDockerfileReferences(
+                    project.getId(), dockerfileContent);
+            for (Map.Entry<String, String> entry : resolvedRefs.entrySet()) {
+                if (!files.containsKey(entry.getKey())) {
+                    files.put(entry.getKey(), entry.getValue());
+                    System.out.println("[CUSTOM-BUILD] Reference Dockerfile résolue et ajoutée au contexte. "
+                            + "key=" + entry.getKey() + ", sizeBytes=" + entry.getValue().length());
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("[CUSTOM-BUILD] Avertissement: erreur résolution références Dockerfile. "
+                    + "reason=" + e.getMessage());
         }
 
         System.out.println("[KubernetesBuildService] Final build context file keys=" + files.keySet());
@@ -1048,6 +1112,8 @@ CMD ["python", "platform_runner.py"]
 
         content = content.replaceAll("(?im)^\\s*CMD\\s+.*$", "");
         content = content.replaceAll("(?im)^\\s*ENTRYPOINT\\s+.*$", "");
+
+        content = content.replaceAll("(?im)^\\s*RUN\\s+.*pip\\s+install.*$", "");
 
         return content.trim() + "\n" + platformInjection;
     }
@@ -2722,24 +2788,20 @@ if __name__ == "__main__":
                              .endVolume()
 
                              .addNewInitContainer()
-                                .withName("prepare-build-context")
-                                .withImage("busybox:1.36")
-                                .withImagePullPolicy("IfNotPresent")
-                                .withCommand(
-                                        "sh",
-                                        "-c",
-                                        "mkdir -p /kaniko-context/src/custom_models && "
-                                                + "cp -L /configmap-src/Dockerfile /kaniko-context/Dockerfile && "
-                                                + "cp -L /configmap-src/requirements.txt /kaniko-context/requirements.txt && "
-                                                + "cp -L /configmap-src/platform_runner.py /kaniko-context/platform_runner.py && "
-                                                + "cp -L /configmap-src/train.py /kaniko-context/train.py && "
-                                                + "cp -L /configmap-src/src__init__.py /kaniko-context/src/__init__.py && "
-                                                + "cp -L /configmap-src/src__custom_models__init__.py /kaniko-context/src/custom_models/__init__.py && "
-                                                + "cp -L /configmap-src/src__custom_models__generic_pyfunc_wrapper.py /kaniko-context/src/custom_models/generic_pyfunc_wrapper.py && "
-                                                + "cp -L /configmap-src/src__custom_models__import_detector.py /kaniko-context/src/custom_models/import_detector.py && "
-                                                + "cp -L /configmap-src/src__custom_models__model_artifact_detector.py /kaniko-context/src/custom_models/model_artifact_detector.py && "
-                                                + "ls -laR /kaniko-context"
-                                )
+                                 .withName("prepare-build-context")
+                                 .withImage("busybox:1.36")
+                                 .withImagePullPolicy("IfNotPresent")
+                                 .withCommand(
+                                         "sh",
+                                         "-c",
+                                         "for f in $(ls /configmap-src/); do "
+                                                 + "target=$(echo \"$f\" | sed 's/__/\\//g'); "
+                                                 + "targetdir=$(dirname \"$target\"); "
+                                                 + "mkdir -p \"/kaniko-context/$targetdir\"; "
+                                                 + "cp -L \"/configmap-src/$f\" \"/kaniko-context/$target\"; "
+                                                 + "done && "
+                                                 + "ls -laR /kaniko-context"
+                                 )
                                 .addNewVolumeMount()
                                     .withName("build-context-configmap")
                                     .withMountPath("/configmap-src")
@@ -2779,6 +2841,103 @@ if __name__ == "__main__":
                                 .addNewVolumeMount()
                                     .withName("mlops-uploads")
                                     .withMountPath(uploadsStorageProperties.getMountPath())
+                                    .withReadOnly(true)
+                                .endVolumeMount()
+                            .endContainer()
+                        .endSpec()
+                    .endTemplate()
+                .endSpec()
+                .build();
+    }
+
+    private Job buildKanikoJobFromWorkspace(
+            String buildJobName,
+            String imageUri,
+            CustomDockerWorkspace workspace,
+            MlProject project,
+            MlExperiment experiment
+    ) {
+        List<String> kanikoArgs = new ArrayList<>();
+        kanikoArgs.add("--dockerfile=" + workspace.containerWorkspacePath() + "/Dockerfile");
+        kanikoArgs.add("--context=dir://" + workspace.containerWorkspacePath());
+        kanikoArgs.add("--destination=" + imageUri);
+        kanikoArgs.add("--push-retry=5");
+        kanikoArgs.add("--image-download-retry=3");
+        kanikoArgs.add("--image-fs-extract-retry=3");
+
+        if (kanikoCacheRepo != null && !kanikoCacheRepo.isBlank()) {
+            kanikoArgs.add("--cache=true");
+            kanikoArgs.add("--cache-repo=" + kanikoCacheRepo.trim());
+            kanikoArgs.add("--cache-ttl=168h");
+            kanikoArgs.add("--cache-copy-layers=true");
+        } else {
+            kanikoArgs.add("--cache=false");
+        }
+
+        if (isLocalInsecureRegistry(imageUri)) {
+            kanikoArgs.add("--insecure");
+            kanikoArgs.add("--skip-tls-verify");
+        }
+
+        return new JobBuilder()
+                .withNewMetadata()
+                    .withName(buildJobName)
+                    .withNamespace(namespace)
+                    .addToLabels("app", "mlops-custom-build")
+                    .addToLabels("mlops.project.id", String.valueOf(project.getId()))
+                    .addToLabels("mlops.experiment.id", String.valueOf(experiment.getId()))
+                    .addToLabels("mlops.runtime", "custom-dockerfile")
+                    .addToLabels("mlops.phase", "image-build")
+                    .addToLabels("mlops.build-context", "workspace")
+                .endMetadata()
+                .withNewSpec()
+                    .withBackoffLimit(backoffLimit)
+                    .withTtlSecondsAfterFinished(ttlSecondsAfterFinished)
+                    .withNewTemplate()
+                        .withNewMetadata()
+                            .addToLabels("app", "mlops-custom-build")
+                            .addToLabels("job-name", buildJobName)
+                            .addToLabels("mlops.project.id", String.valueOf(project.getId()))
+                            .addToLabels("mlops.experiment.id", String.valueOf(experiment.getId()))
+                            .addToLabels("mlops.runtime", "custom-dockerfile")
+                            .addToLabels("mlops.phase", "image-build")
+                        .endMetadata()
+                        .withNewSpec()
+                            .withRestartPolicy("Never")
+
+                            .addNewVolume()
+                                .withName("mlops-uploads")
+                                .withNewPersistentVolumeClaim()
+                                    .withClaimName(uploadsStorageProperties.getPvcName().trim())
+                                .endPersistentVolumeClaim()
+                            .endVolume()
+
+                            .addNewVolume()
+                                .withName("kaniko-docker-config")
+                                .withNewSecret()
+                                    .withSecretName(kanikoDockerConfigSecret)
+                                .endSecret()
+                            .endVolume()
+
+                            .addNewContainer()
+                                .withName("kaniko")
+                                .withImage(kanikoImage)
+                                .withImagePullPolicy("IfNotPresent")
+                                .withArgs(kanikoArgs)
+                                .withEnv(
+                                        new EnvVarBuilder()
+                                                .withName("MLOPS_UPLOADS_PVC_NAME")
+                                                .withValue(uploadsStorageProperties.getPvcName())
+                                                .build()
+                                )
+                                .addNewVolumeMount()
+                                    .withName("mlops-uploads")
+                                    .withMountPath(uploadsStorageProperties.getMountPath())
+                                    .withReadOnly(true)
+                                .endVolumeMount()
+                                .addNewVolumeMount()
+                                    .withName("kaniko-docker-config")
+                                    .withMountPath("/kaniko/.docker")
                                     .withReadOnly(true)
                                 .endVolumeMount()
                             .endContainer()
@@ -2879,7 +3038,7 @@ if __name__ == "__main__":
         }
     }
 
-    private void validateBuildContextAgainstDockerfile(Map<String, String> buildContextFiles, String dockerfileContent) {
+    static void validateBuildContextAgainstDockerfile(Map<String, String> buildContextFiles, String dockerfileContent) {
         if (dockerfileContent == null || dockerfileContent.isBlank()) {
             throw new RuntimeException("Dockerfile content is empty after injection");
         }
@@ -2939,16 +3098,36 @@ if __name__ == "__main__":
                     continue;
                 }
 
-                if (base.toLowerCase(Locale.ROOT).endsWith(".py")
-                        || base.equalsIgnoreCase("requirements.txt")
-                        || base.equalsIgnoreCase("dataset.csv")) {
+                String lowerBase = base.toLowerCase(Locale.ROOT);
 
+                if (lowerBase.endsWith(".py") || lowerBase.endsWith(".py3")) {
                     if (!buildContextFiles.containsKey(base) && !buildContextFiles.containsKey(t)) {
+                        System.out.println("[CUSTOM-BUILD] Script Python référencé dans le Dockerfile introuvable. "
+                                + "reference=" + t + ", base=" + base);
                         throw new RuntimeException(
-                                "Dockerfile references '" + base + "' but it is not present in the build context. "
-                                        + "The platform standardizes the uploaded script as train.py."
+                                "Script Python référencé dans le Dockerfile introuvable : '" + base + "'. "
+                                        + "La plateforme standardise le script en train.py. Vérifiez votre Dockerfile."
                         );
                     }
+                } else if (lowerBase.equals("requirements.txt")) {
+                    if (!buildContextFiles.containsKey(base) && !buildContextFiles.containsKey(t)) {
+                        System.out.println("[CUSTOM-BUILD] requirements.txt référencé dans le Dockerfile introuvable. "
+                                + "reference=" + t);
+                        throw new RuntimeException(
+                                "requirements.txt référencé dans le Dockerfile introuvable dans le contexte de build."
+                        );
+                    }
+                } else if (lowerBase.equals("dataset.csv")) {
+                    if (!buildContextFiles.containsKey(base) && !buildContextFiles.containsKey(t)) {
+                        System.out.println("[CUSTOM-BUILD] dataset.csv référencé dans le Dockerfile introuvable. "
+                                + "reference=" + t);
+                        throw new RuntimeException(
+                                "dataset.csv référencé dans le Dockerfile introuvable dans le contexte de build."
+                        );
+                    }
+                } else {
+                    System.out.println("[CUSTOM-BUILD] Référence Dockerfile non validée (fichier ou répertoire utilisateur). "
+                            + "reference=" + t + ", base=" + base);
                 }
             }
         }

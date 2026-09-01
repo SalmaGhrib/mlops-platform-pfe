@@ -8,8 +8,6 @@ public class ModelApiKeyCreateRequest {
 
     private String name;
 
-    private Long dailyQuota;
-
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss[.SSS]['Z']")
     private LocalDateTime expiresAt;
 
@@ -19,14 +17,6 @@ public class ModelApiKeyCreateRequest {
 
     public void setName(String name) {
         this.name = name;
-    }
-
-    public Long getDailyQuota() {
-        return dailyQuota;
-    }
-
-    public void setDailyQuota(Long dailyQuota) {
-        this.dailyQuota = dailyQuota;
     }
 
     public LocalDateTime getExpiresAt() {

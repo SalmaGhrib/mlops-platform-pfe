@@ -400,6 +400,16 @@ experiment.setMessage(
 
             MlExperiment savedExperiment = mlExperimentRepository.saveAndFlush(experiment);
 
+            System.out.println("[CUSTOM_PIPELINE] STEP=UPLOAD_SUCCESS experimentId=" + savedExperiment.getId()
+                    + ", projectId=" + projectId
+                    + ", runtime=CUSTOM_DOCKERFILE"
+                    + ", dockerfilePath=" + savedExperiment.getDockerfilePath()
+                    + ", requirementsPath=" + savedExperiment.getRequirementsPath()
+                    + ", modelFile=" + (savedExperiment.getModelFile() != null ? savedExperiment.getModelFile().getOriginalFileName() : "null")
+                    + ", datasetFile=" + (savedExperiment.getDatasetFile() != null ? savedExperiment.getDatasetFile().getOriginalFileName() : "null")
+                    + ", status=CREATED"
+                    + ", buildStatus=WAITING_FOR_IMAGE_BUILD");
+
             runPipelineStepService.initializeForExperiment(savedExperiment);
             runPipelineStepService.markSucceeded(
                     savedExperiment,
@@ -4008,7 +4018,9 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
         try {
             String originalFileName = cleanFileName(file.getOriginalFilename());
             String extension = getExtension(originalFileName);
-            String storedFileName = UUID.randomUUID() + extension;
+            String storedFileName = extension != null && !extension.isBlank()
+                    ? UUID.randomUUID() + "." + extension
+                    : UUID.randomUUID().toString();
 
             Path projectUploadPath = Paths.get(uploadDir, "projects", String.valueOf(project.getId()))
                     .toAbsolutePath()
@@ -4030,6 +4042,16 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
             uploadedFile.setContentType(file.getContentType());
             uploadedFile.setSizeBytes(file.getSize());
             uploadedFile.setProject(project);
+
+            System.out.println(
+                    "[UPLOAD-FILE] projectId=" + project.getId()
+                            + ", originalFileName=" + originalFileName
+                            + ", fileExtension=" + extension
+                            + ", contentType=" + file.getContentType()
+                            + ", fileType=" + fileType
+                            + ", fileRole=" + fileType
+                            + ", filePath=" + targetPath
+            );
 
             return uploadedProjectFileRepository.save(uploadedFile);
 
@@ -4274,11 +4296,35 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
                             .findByIdWithFiles(experiment.getId())
                             .orElse(experiment);
 
+            boolean isRetraining = isRetrainingExperiment(loaded);
+
             if (currentStatus == ExperimentStatus.COMPLETED) {
-                notificationService.notifyRunCompleted(loaded);
+                if (isRetraining) {
+                    notificationService.notifyRetrainingCompleted(loaded);
+                } else {
+                    notificationService.notifyRunCompleted(loaded);
+                }
             } else {
-                notificationService.notifyRunFailed(loaded);
+                if (isRetraining) {
+                    notificationService.notifyRetrainingFailed(
+                            loaded,
+                            loaded.getErrorMessage()
+                    );
+                } else {
+                    notificationService.notifyRunFailed(loaded);
+                }
             }
+
+            System.out.println(
+                    "[NOTIFICATION] created type="
+                            + (currentStatus == ExperimentStatus.COMPLETED
+                            ? (isRetraining ? "RETRAINING_COMPLETED" : "RUN_COMPLETED")
+                            : (isRetraining ? "RETRAINING_FAILED" : "RUN_FAILED"))
+                            + " experimentId="
+                            + loaded.getId()
+                            + ", isRetraining="
+                            + isRetraining
+            );
 
         } catch (Exception e) {
             System.out.println(
@@ -4288,6 +4334,28 @@ public void recalculateAllGlobalScoresForProject(MlProject project) {
                             + e.getMessage()
             );
         }
+    }
+
+    /**
+     * Détermine si une expérience est un réentraînement automatique
+     * en se basant sur le triggerType ou le préfixe du nom.
+     */
+    private boolean isRetrainingExperiment(MlExperiment experiment) {
+        if (experiment == null) {
+            return false;
+        }
+
+        if (experiment.getTriggerType() != null
+                && !experiment.getTriggerType().isBlank()) {
+            return true;
+        }
+
+        String name = experiment.getExperimentName();
+        if (name != null && name.startsWith("scheduled_retraining_")) {
+            return true;
+        }
+
+        return false;
     }
 
 private String getDirectionFromMetric(String metric) {
@@ -5396,8 +5464,18 @@ private void syncSingleProjectAutomatically(Long projectId) {
         if (customDockerMode) {
             String customImageUri = sourceExperiment.getCustomImageUri();
 
+            System.out.println("[RETRAINING] Source experiment=" + sourceExperimentId
+                    + ", projectId=" + projectId
+                    + ", runtime=CUSTOM_DOCKERFILE"
+                    + ", hasCustomImageUri=" + hasText(customImageUri)
+                    + ", hasDockerfilePath=" + hasText(sourceExperiment.getDockerfilePath()));
+
                 /* Image déjà construite : lancer directement un Job Kubernetes. */
                 if (hasText(customImageUri)) {
+                System.out.println("[RETRAINING] customImageUri present, launching Kubernetes training job directly."
+                        + " imageUri=" + customImageUri
+                        + ", sourceExperimentId=" + sourceExperimentId);
+
                 // Persist initial experiment record in a separate transaction
                 // so that the DB row exists even if job launch later fails.
                 retraining.setStatus(ExperimentStatus.CREATED);
@@ -5413,6 +5491,10 @@ private void syncSingleProjectAutomatically(Long projectId) {
 
                 MlExperiment savedExperiment = saveExperimentInNewTransaction(retraining);
 
+                System.out.println("[RETRAINING] New experiment created. experimentId=" + savedExperiment.getId()
+                        + ", sourceExperimentId=" + sourceExperimentId
+                        + ", runtime=CUSTOM_DOCKERFILE");
+
                 try {
                     String jobName = kubernetesJobService
                         .launchCustomImageTrainingJob(
@@ -5420,6 +5502,10 @@ private void syncSingleProjectAutomatically(Long projectId) {
                             savedExperiment,
                             customImageUri
                         );
+
+                    System.out.println("[K8S] Training job created: " + jobName
+                            + ", experimentId=" + savedExperiment.getId()
+                            + ", projectId=" + projectId);
 
                     savedExperiment.setKubeflowRunName(jobName);
                     savedExperiment.setTrainingJobName(jobName);
@@ -5447,6 +5533,14 @@ private void syncSingleProjectAutomatically(Long projectId) {
                                 );
                             }
                     );
+
+                    System.out.println("[RETRAINING] Retraining launched successfully."
+                            + " experimentId=" + updated.getId()
+                            + ", sourceExperimentId=" + sourceExperimentId
+                            + ", projectId=" + projectId
+                            + ", jobName=" + jobName
+                            + ", runtime=CUSTOM_DOCKERFILE");
+
                     triggerImmediateProjectSync(projectId);
                     return mapToResponse(reloadExperimentForResponse(updated.getId()));
 
@@ -5476,6 +5570,10 @@ private void syncSingleProjectAutomatically(Long projectId) {
                 );
             }
 
+            System.out.println("[RETRAINING] No customImageUri, Kaniko build required."
+                    + " dockerfilePath=" + sourceExperiment.getDockerfilePath()
+                    + ", sourceExperimentId=" + sourceExperimentId);
+
             retraining.setStatus(ExperimentStatus.CREATED);
             retraining.setBuildStatus("WAITING_FOR_IMAGE_BUILD");
             retraining.setBuildLogs(
@@ -5490,6 +5588,11 @@ private void syncSingleProjectAutomatically(Long projectId) {
 
             MlExperiment savedExperiment = mlExperimentRepository
                     .saveAndFlush(retraining);
+
+            System.out.println("[RETRAINING] New experiment created for Kaniko build."
+                    + " experimentId=" + savedExperiment.getId()
+                    + ", sourceExperimentId=" + sourceExperimentId
+                    + ", projectId=" + projectId);
 
             triggerImmediateProjectSync(projectId);
 

@@ -1,0 +1,1023 @@
+@startuml MLOps_Platform_Class_Diagram
+
+skinparam packageStyle rectangle
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam nodesep 60
+skinparam ranksep 40
+skinparam defaultFontSize 11
+skinparam classFontSize 13
+skinparam packageFontSize 14
+skinparam packageBorderColor #555555
+skinparam classBorderColor #333333
+skinparam classBackgroundColor #FEFECE
+skinparam noteBackgroundColor #FFFFCC
+skinparam noteBorderColor #AAAAAA
+
+title MLOps Platform — Diagramme de Classes Complet\n(Sprint Boot / JPA / AKS / MLflow / Kubeflow)
+
+' ==========================================
+' ENUMS
+' ==========================================
+package "entity::enums" #FFE0B2 {
+
+    enum RoleType <<Enum>> {
+        ADMIN
+        USER
+    }
+
+    enum AccountStatus <<Enum>> {
+        ACTIVE
+        INACTIVE
+        LOCKED
+    }
+
+    enum ProjectStatus <<Enum>> {
+        CREATED
+        RUNNING
+        COMPLETED
+        FAILED
+    }
+
+    enum ExperimentStatus <<Enum>> {
+        CREATED
+        RUNNING
+        COMPLETED
+        FAILED
+        TERMINAL
+    }
+
+    enum UploadedFileType <<Enum>> {
+        TRAINING_SCRIPT
+        DATASET_FILE
+        DATASET_ARCHIVE
+        DOCKERFILE
+        REQUIREMENTS
+        AUXILIARY
+        MODEL_FILE
+        OTHER
+    }
+
+    enum DeploymentStatus <<Enum>> {
+        PENDING
+        DEPLOYING
+        DEPLOYED
+        FAILED
+        STOPPED
+    }
+
+    enum DeploymentVisibility <<Enum>> {
+        PRIVATE
+        SHARED
+        PUBLIC
+    }
+
+    enum AlertType <<Enum>> {
+        MODEL_QUALITY_FAILED
+        DATA_DRIFT
+        PREDICTION_ERROR_RATE
+        PERFORMANCE_DROP
+        GLOBAL_SCORE_TOO_LOW
+        FAILED_RUNS
+    }
+
+    enum AlertSeverity <<Enum>> {
+        INFO
+        WARNING
+        CRITICAL
+    }
+
+    enum NotificationType <<Enum>> {
+        RUN_COMPLETED
+        RUN_FAILED
+        DEPLOYMENT_DEPLOYED
+        DEPLOYMENT_FAILED
+        RETRAINING_TRIGGERED
+        RETRAINING_COMPLETED
+        NEW_PRODUCTION_VERSION
+        MONITORING_ALERT
+        SYSTEM_INFO
+    }
+
+    enum NotificationTargetType <<Enum>> {
+        EXPERIMENT
+        DEPLOYMENT
+        PROJECT
+        MONITORING
+        SYSTEM
+    }
+
+    enum RetrainingFrequencyType <<Enum>> {
+        DAY
+        WEEK
+        MONTH
+    }
+
+    enum RetrainingStrategy <<Enum>> {
+        SCHEDULED_ONLY
+        SCHEDULED_WITH_MONITORING
+        SMART_MONITORING_ONLY
+        FULL_SMART
+    }
+
+    enum RetrainingState <<Enum>> {
+        IDLE
+        EVALUATING
+        TRIGGERED
+        RUNNING
+        COMPLETED
+        FAILED
+        COOLDOWN
+    }
+
+    enum RetrainingTriggerType <<Enum>> {
+        SCHEDULED
+        MANUAL
+        GITHUB_PUSH
+        FAILED_RUNS
+        PREDICTION_ERRORS
+        DATA_DRIFT
+        PERFORMANCE_DROP
+        SMART_MONITORING
+        SKIPPED_NO_SIGNAL
+        BLOCKED_BY_SECURITY
+    }
+
+    enum RetrainingSeverity <<Enum>> {
+        NONE
+        LOW
+        MEDIUM
+        HIGH
+        CRITICAL
+    }
+
+    enum RetrainingSecurityLevel <<Enum>> {
+        NONE
+        SECURITY_ALERT_ONLY
+        BLOCK_MODEL
+        RETRAIN_RECOMMENDED
+        RETRAIN_REQUIRED
+    }
+
+    enum RetrainingDataPolicy <<Enum>> {
+        ORIGINAL_DATASET
+        LATEST_DATASET
+        MERGED_DATASET
+    }
+}
+
+' ==========================================
+' ENTITIES
+' ==========================================
+package "entity" #E3F2FD {
+
+    class User <<Entity>> {
+        - id : Long <<PK>>
+        - firstName : String
+        - lastName : String
+        - email : String <<unique>>
+        - password : String
+        - phone : String
+        - nationality : String
+        - bio : String
+        - status : AccountStatus
+        - emailVerified : boolean
+        - role : Role
+        - createdAt : LocalDateTime
+        - updatedAt : LocalDateTime
+    }
+
+    class Role <<Entity>> {
+        - id : Long <<PK>>
+        - name : RoleType <<unique>>
+    }
+
+    class PasswordResetToken <<Entity>> {
+        - id : Long <<PK>>
+        - token : String <<unique>>
+        - expiryDate : LocalDateTime
+    }
+
+    class EmailVerificationToken <<Entity>> {
+        - id : Long <<PK>>
+        - token : String
+        - expiryDate : LocalDateTime
+    }
+
+    class MlProject <<Entity>> {
+        - id : Long <<PK>>
+        - name : String
+        - description : String
+        - dataType : String
+        - projectType : String
+        - targetColumn : String
+        - primaryMetric1 : String
+        - primaryMetric2 : String
+        - primaryMetric3 : String
+        - runtimeMode : String
+        - customImageUri : String
+        - dockerfilePath : String
+        - autoPromoteBestModel : boolean
+        - owner : User
+        - createdAt : LocalDateTime
+    }
+
+    class MlExperiment <<Entity>> {
+        - id : Long <<PK>>
+        - experimentName : String
+        - status : ExperimentStatus
+        - runtimeMode : String
+        - dataType : String
+        - modelType : String
+        - registeredModelName : String
+        - modelVersion : String
+        - production : boolean
+        - productionVersion : String
+        - globalScore : Double
+        - kubeflowRunId : String
+        - kubeflowStatus : String
+        - mlflowRunId : String
+        - dockerfilePath : String
+        - requirementsPath : String
+        - customImageUri : String
+        - buildJobName : String
+        - buildStatus : String
+        - trainingJobName : String
+        - message : String
+        - failureDetails : String
+        - buildLogs : String
+        - startedAt : LocalDateTime
+        - completedAt : LocalDateTime
+        - createdAt : LocalDateTime
+        - updatedAt : LocalDateTime
+    }
+
+    class MlExperimentMetric <<Entity>> {
+        - id : Long <<PK>>
+        - metricName : String
+        - metricValue : Double
+        - direction : String
+        - productionVersion : String
+        - production : boolean
+        - globalScore : Double
+    }
+
+    class UploadedProjectFile <<Entity>> {
+        - id : Long <<PK>>
+        - originalFileName : String
+        - storedFileName : String
+        - filePath : String
+        - fileType : UploadedFileType
+        - role : UploadedFileType
+        - dataType : String
+        - fileExtension : String
+        - contentType : String
+        - sizeBytes : Long
+        - uploadedAt : LocalDateTime
+    }
+
+    class RunPipelineStep <<Entity>> {
+        - id : Long <<PK>>
+        - experimentId : Long
+        - stepCode : String
+        - label : String
+        - status : String
+        - progress : Integer
+        - orderIndex : Integer
+        - startedAt : LocalDateTime
+        - completedAt : LocalDateTime
+        - message : String
+        - errorCode : String
+        - jobName : String
+        - podName : String
+        - logs : String
+    }
+
+    class ModelDeployment <<Entity>> {
+        - id : Long <<PK>>
+        - projectId : Long
+        - experimentId : Long
+        - registeredModelName : String
+        - modelVersion : String
+        - mlflowRunId : String
+        - deploymentStatus : DeploymentStatus
+        - predictionEndpoint : String
+        - deploymentName : String
+        - serviceName : String
+        - visibility : DeploymentVisibility
+        - apiEnabled : boolean
+        - apiKey : String
+        - namespaceName : String
+        - dockerImage : String
+        - active : boolean
+        - servingTrack : String
+        - deployedAt : LocalDateTime
+        - createdAt : LocalDateTime
+        - updatedAt : LocalDateTime
+    }
+
+    class ModelDeploymentShare <<Entity>> {
+        - id : Long <<PK>>
+        - deploymentId : Long
+        - sharedWithUserId : Long
+        - permission : String
+        - createdAt : LocalDateTime
+    }
+
+    class ModelApiKey <<Entity>> {
+        - id : Long <<PK>>
+        - deploymentId : Long
+        - ownerId : Long
+        - name : String
+        - keyPrefix : String <<unique>>
+        - keyHash : String
+        - enabled : boolean
+        - dailyQuota : Long
+        - requestsToday : Long
+        - totalRequests : Long
+        - expiresAt : LocalDateTime
+        - revokedAt : LocalDateTime
+        - lastUsedAt : LocalDateTime
+        - createdAt : LocalDateTime
+    }
+
+    class ModelApiUsage <<Entity>> {
+        - id : Long <<PK>>
+        - apiKeyId : Long
+        - registeredModelName : String
+        - modelVersion : String
+        - statusCode : Integer
+        - latencyMs : Long
+        - success : boolean
+        - endpointType : String
+        - errorCode : String
+        - requestedAt : LocalDateTime
+    }
+
+    class PredictionLog <<Entity>> {
+        - id : Long <<PK>>
+        - projectId : Long
+        - deploymentId : Long
+        - experimentId : Long
+        - registeredModelName : String
+        - modelVersion : String
+        - success : boolean
+        - latencyMs : Long
+        - inputJson : String
+        - responseJson : String
+        - errorMessage : String
+        - createdAt : LocalDateTime
+    }
+
+    class MonitoringAlert <<Entity>> {
+        - id : Long <<PK>>
+        - projectId : Long
+        - registeredModelName : String
+        - modelVersion : String
+        - alertType : AlertType
+        - severity : AlertSeverity
+        - observedValue : Double
+        - thresholdValue : Double
+        - cause : String
+        - action : String
+        - message : String
+        - idempotencyKey : String <<unique>>
+        - createdAt : LocalDateTime
+    }
+
+    class Notification <<Entity>> {
+        - id : Long <<PK>>
+        - title : String
+        - message : String
+        - type : NotificationType
+        - targetType : NotificationTargetType
+        - targetId : Long
+        - read : boolean
+        - adminNotification : boolean
+        - createdAt : LocalDateTime
+    }
+
+    class RetrainingConfig <<Entity>> {
+        - id : Long <<PK>>
+        - projectId : Long <<unique>>
+        - sourceExperimentId : Long
+        - enabled : boolean
+        - frequencyType : RetrainingFrequencyType
+        - frequencyValue : Integer
+        - strategy : RetrainingStrategy
+        - state : RetrainingState
+        - failureMonitoringEnabled : boolean
+        - performanceMonitoringEnabled : boolean
+        - dataDriftMonitoringEnabled : boolean
+        - globalScoreThreshold : Double
+        - classificationMinimumGlobalScore : Double
+        - regressionMinimumGlobalScore : Double
+        - dataPolicy : RetrainingDataPolicy
+        - nextRetrainingAt : LocalDateTime
+        - lastRetrainingAt : LocalDateTime
+        - cooldownUntil : LocalDateTime
+        - consecutiveFailures : int
+        - running : boolean
+        - createdAt : LocalDateTime
+        - updatedAt : LocalDateTime
+    }
+
+    class GitHubRetrainingConfig <<Entity>> {
+        - id : Long <<PK>>
+        - projectId : Long
+        - enabled : boolean
+        - secretHash : String
+        - secretSuffix : String
+        - lastCommitSha : String
+    }
+}
+
+' ==========================================
+' REPOSITORIES
+' ==========================================
+package "repository" #E8F5E9 {
+
+    class UserRepository <<Repository>> {
+        + findByEmail(email) : Optional<User>
+    }
+
+    class RoleRepository <<Repository>> {
+        + findByName(name) : Optional<Role>
+    }
+
+    class MlProjectRepository <<Repository>> {
+        + findByOwner(user) : List<MlProject>
+        + findAllProjectIds() : List<Long>
+    }
+
+    class MlExperimentRepository <<Repository>> {
+        + findByProject(project) : List<MlExperiment>
+        + findActionableCustomDockerExperiments() : List<MlExperiment>
+        + findByIdWithFiles(id) : Optional<MlExperiment>
+        + findByMlflowRunId(runId) : Optional<MlExperiment>
+        + countByStatus(status) : long
+        + countByRuntimeMode(mode) : long
+        + findCurrentProductionExperimentForProject() : MlExperiment
+    }
+
+    class MlExperimentMetricRepository <<Repository>> {
+        + findByExperimentId(id) : List<MlExperimentMetric>
+        + upsertMetric(...) : int
+        + updateGlobalScoreByExperimentId() : int
+        + updateProductionStateByExperimentId() : int
+    }
+
+    class UploadedProjectFileRepository <<Repository>> {
+        + findByProjectId(projectId) : List<UploadedProjectFile>
+    }
+
+    class RunPipelineStepRepository <<Repository>> {
+        + findByExperimentIdOrderByOrderIndexAsc() : List<RunPipelineStep>
+    }
+
+    class ModelDeploymentRepository <<Repository>> {
+        + findByProjectIdAndActiveTrue() : Optional<ModelDeployment>
+        + findByApiKey(apiKey) : Optional<ModelDeployment>
+        + findDistinctRegisteredModelNames() : List<String>
+    }
+
+    class ModelDeploymentShareRepository <<Repository>> {
+        + findByDeploymentId(deploymentId) : List<ModelDeploymentShare>
+        + existsByDeploymentIdAndSharedWithUserId() : boolean
+    }
+
+    class ModelApiKeyRepository <<Repository>> {
+        + findByKeyPrefix(prefix) : Optional<ModelApiKey>
+        + findByDeploymentIdOrderByCreatedAtDesc() : List<ModelApiKey>
+    }
+
+    class ModelApiUsageRepository <<Repository>> {
+        + countByDeploymentIdAndRequestedAtAfter() : long
+        + findByApiKeyIdAndRequestedAtAfter() : List<ModelApiUsage>
+    }
+
+    class PredictionLogRepository <<Repository>> {
+        + countByProjectIdAndCreatedAtAfter() : Long
+        + countByProjectIdAndSuccessFalseAndCreatedAtAfter() : Long
+    }
+
+    class MonitoringAlertRepository <<Repository>> {
+        + existsByIdempotencyKey(key) : boolean
+        + findByProjectIdOrderByCreatedAtDesc() : List<MonitoringAlert>
+    }
+
+    class NotificationRepository <<Repository>> {
+        + findByUserOrderByCreatedAtDesc(user) : List<Notification>
+        + countByUserAndReadFalseAndCreatedAtGreaterThanEqual() : long
+        + markAsReadByNotificationIdAndUserId() : int
+    }
+
+    class PasswordResetTokenRepository <<Repository>> {
+        + findByToken(token) : Optional<PasswordResetToken>
+    }
+
+    class RetrainingConfigRepository <<Repository>> {
+        + findByProjectId(projectId) : Optional<RetrainingConfig>
+        + findEnabledConfigs() : List<RetrainingConfig>
+    }
+
+    class GitHubRetrainingConfigRepository <<Repository>> {
+        + findByProjectId(projectId) : Optional<GitHubRetrainingConfig>
+        + findBySecretHash(hash) : Optional<GitHubRetrainingConfig>
+    }
+}
+
+' ==========================================
+' SERVICES (key business services)
+' ==========================================
+package "service" #F3E5F5 {
+
+    class AuthService <<Service>> {
+        - userRepository : UserRepository
+        - roleRepository : RoleRepository
+        - jwtService : JwtService
+        - passwordEncoder : PasswordEncoder
+        + register(request) : ResponseEntity
+        + login(request) : ResponseEntity
+        + getMe(authHeader) : ResponseEntity
+    }
+
+    class UserService <<Service>> {
+        - userRepository : UserRepository
+        + updateProfile(user, request) : User
+        + changePassword(user, request) : void
+    }
+
+    class MlProjectService <<Service>> {
+        - mlProjectRepository : MlProjectRepository
+        + createProject(user, request) : MlProject
+        + getMyProjects(user) : List<MlProject>
+        + getProjectById(user, id) : MlProject
+        + updateProject(id, request) : MlProject
+        + deleteProject(id) : void
+    }
+
+    class MlExperimentService <<Service>> {
+        - mlExperimentRepository : MlExperimentRepository
+        - mlExperimentMetricRepository : MlExperimentMetricRepository
+        + uploadAndLaunchExperiment() : MlExperiment
+        + getExperimentsByProject(projectId) : List<MlExperiment>
+        + getPipelineStatus(experimentId) : Map
+        + syncProjectResults(projectId) : void
+        + syncRegisteredModel(registeredModelName) : void
+    }
+
+    class ModelDeploymentService <<Service>> {
+        - modelDeploymentRepository : ModelDeploymentRepository
+        + deployProductionModel(request) : ModelDeployment
+        + getActiveDeploymentByProject(projectId) : Optional<ModelDeployment>
+        + syncKubernetesDeployments() : void
+        + shareDeployment(deploymentId, userIds, permission) : void
+        + stopDeployment(deploymentId) : void
+    }
+
+    class ModelRegistryService <<Service>> {
+        + getMyRegisteredModels(user) : List
+        + chooseBestVersion(modelName, priorities) : String
+        + promoteBestVersion(modelName, priorities) : String
+        + syncModelRegistryToDatabase(modelName) : void
+    }
+
+    class ModelGatewayService <<Service>> {
+        + listApiKeys(modelId, user) : List<ModelApiKey>
+        + createApiKey(modelId, user, request) : ModelApiKey
+        + enableApiAccess(deploymentId) : String
+        + disableApiAccess(deploymentId) : void
+        + predictExternal(modelName, input, apiKey) : Map
+    }
+
+    class PredictionService <<Service>> {
+        + getMyProductionModels(user) : List
+        + predict(request, user) : Map
+        + predictImage(modelName, imageFile, user) : Map
+    }
+
+    class MonitoringService <<Service>> {
+        + getMonitoringSummary() : Map
+    }
+
+    class MonitoringAlertService <<Service>> {
+        + createAlert(alert) : MonitoringAlert
+        + evaluateProject(projectId) : void
+    }
+
+    class NotificationService <<Service>> {
+        - notificationRepository : NotificationRepository
+        + getMyNotifications(user) : List<Notification>
+        + getUnreadCount(user) : long
+        + markAsRead(notificationId, user) : void
+        + markAllAsRead(user) : void
+        + notifyAdmins(title, message, type) : void
+    }
+
+    class RetrainingConfigService <<Service>> {
+        - retrainingConfigRepository : RetrainingConfigRepository
+        + saveConfig(projectId, request) : RetrainingConfig
+        + getConfig(projectId) : Optional<RetrainingConfig>
+        + disableRetraining(projectId) : void
+    }
+
+    class AutoRetrainingService <<Service>> {
+        + evaluateAndTrigger() : void
+        + forceRetrainingNow(projectId) : void
+        + getProjectStatus(projectId) : Map
+    }
+
+    class RetrainingDryRunService <<Service>> {
+        + dryRun() : Map
+    }
+
+    class RetrainingDecisionService <<Service>> {
+        + evaluate(config) : RetrainingDecision
+    }
+
+    class GitHubRetrainingService <<Service>> {
+        + handleGitHubPush(payload) : void
+        + getGitHubConfig(projectId) : GitHubRetrainingConfig
+        + generateKey(projectId) : String
+        + revokeKey(projectId) : void
+    }
+
+    class KubernetesBuildService <<Service>> {
+        - workspaceService : CustomDockerWorkspaceService
+        + launchImageBuildJob(project, experiment) : BuildJobResult
+        + getBuildJobStatus(jobName) : String
+        + getBuildJobLogs(jobName) : String
+    }
+
+    class KubernetesJobService <<Service>> {
+        + launchTrainingJob(experiment) : String
+        + getJobStatus(jobName) : String
+        + getJobLogs(jobName) : String
+    }
+
+    class CustomDockerRunWatcher <<Service>> {
+        - kubernetesBuildService : KubernetesBuildService
+        + watchPendingExperiments() : void
+        + processExperiment(experiment) : void
+        + launchBuildJob(experiment) : void
+        + syncBuildJob(experiment) : void
+    }
+
+    class CustomDockerWorkspaceService <<Service>> {
+        - uploadsStorageProperties : UploadsStorageProperties
+        - datasetFileResolverService : DatasetFileResolverService
+        + prepareWorkspace(project, experiment) : CustomDockerWorkspace
+        + validateWorkspace(workspace) : void
+        + validateDockerfileSources(workspace, dockerfileContent) : void
+    }
+
+    class DatasetFileResolverService <<Service>> {
+        + resolveDatasetFile(project, experiment) : UploadedProjectFile
+    }
+
+    class MlflowTrackingClientService <<Service>> {
+        + getRun(runId) : Run
+        + searchRuns(experimentId) : List<Run>
+        + logMetric(runId, key, value) : void
+        + logModel(runId, modelPath) : void
+    }
+
+    class ModelConsistencyService <<Service>> {
+        + audit(modelName) : Map
+        + reconcile(modelName) : Map
+        + reconcileAll() : Map
+    }
+
+    class DashboardService <<Service>> {
+        + getSummary(user) : Map
+    }
+
+    class AdminMonitoringOverviewService <<Service>> {
+        + getOverview() : Map
+    }
+
+    class AdminUserService <<Service>> {
+        + getAllUsers() : List<User>
+        + updateUserRole(id, role) : User
+        + deleteUser(id) : void
+    }
+
+    class UserMonitoringService <<Service>> {
+        + getDashboard(user, projectId) : Map
+    }
+
+    class RunPipelineStepService <<Service>> {
+        + markSucceeded(experiment, stepCode, message) : void
+        + markFailed(experiment, stepCode, ...) : void
+        + appendLogs(experiment, stepCode, logs) : void
+    }
+
+    class CustomDockerPersistenceService <<Service>> {
+        + markBuildCompleted(experimentId, logs) : MlExperiment
+        + updateExperiment(experimentId, updater) : void
+    }
+
+    class ModelQualityService <<Service>> {
+        + computeGlobalScore(experiment) : Double
+    }
+
+    class ReconcileDeploymentsKubernetesService <<Service>> {
+        + reconcileAll() : void
+    }
+}
+
+' ==========================================
+' CONTROLLERS
+' ==========================================
+package "controller" #FFF3E0 {
+
+    class AuthController <<Controller>> {
+        + register(request) : ResponseEntity
+        + login(request) : ResponseEntity
+        + me(authHeader) : ResponseEntity
+        + verifyEmail(token) : ResponseEntity
+        + forgotPassword(request) : ResponseEntity
+        + resetPassword(request) : ResponseEntity
+    }
+
+    class UserController <<Controller>> {
+        + updateCurrentUserProfile(authHeader, request) : ResponseEntity
+        + changeCurrentUserPassword(authHeader, request) : ResponseEntity
+    }
+
+    class AdminUserController <<Controller>> {
+        + getAllUsers() : List<User>
+        + searchUsers(q, status, role, page, size) : Page
+        + updateUserRole(id, request) : User
+        + updateUserStatus(id, request) : User
+        + deleteUser(id) : void
+    }
+
+    class MlProjectController <<Controller>> {
+        + createProject(authHeader, request) : MlProject
+        + getMyProjects(authHeader) : List<MlProject>
+        + getProjectById(authHeader, id) : MlProject
+        + updateProject(authHeader, id, request) : MlProject
+        + deleteProject(authHeader, id) : void
+    }
+
+    class MlExperimentController <<Controller>> {
+        + uploadAndLaunchExperiment(...) : MlExperiment
+        + getExperimentsByProject(authHeader, projectId) : List
+        + getPipelineStatus(authHeader, experimentId) : Map
+        + syncProjectResults(authHeader, projectId) : void
+    }
+
+    class ModelDeploymentController <<Controller>> {
+        + getOwnedDeploymentsForCurrentUser(authHeader) : List
+        + getVisibleDeploymentsForCurrentUser(authHeader) : List
+        + deployProductionModel(request) : ModelDeployment
+        + shareDeploymentWithUsers(deploymentId, request) : void
+        + stopDeployment(deploymentId) : void
+        + syncKubernetesDeployments() : void
+    }
+
+    class ModelDeploymentApiAccessController <<Controller>> {
+        + enableApiAccess(deploymentId) : Map
+        + disableApiAccess(deploymentId) : Map
+        + regenerateApiKey(deploymentId) : Map
+    }
+
+    class ModelRegistryController <<Controller>> {
+        + getMyRegisteredModels(authHeader) : List
+        + getProductionVersion(name) : Map
+        + promoteBestVersion(name, priorities) : Map
+        + syncModelRegistryToDatabasePost(name) : Map
+    }
+
+    class ModelGatewayController <<Controller>> {
+        + listApiKeys(modelId, authHeader) : List
+        + createApiKey(modelId, authHeader, request) : ModelApiKey
+        + getStats(modelId, authHeader) : Map
+    }
+
+    class PredictionController <<Controller>> {
+        + getMyProductionModels(principal, authHeader) : List
+        + predict(request, principal, authHeader) : Map
+        + predictImage(modelName, imageFile, principal, authHeader) : Map
+    }
+
+    class ExternalPredictionController <<Controller>> {
+        + predictExternal(registeredModelName, body) : Map
+        + predictImageExternal(registeredModelName, image) : Map
+    }
+
+    class MonitoringController <<Controller>> {
+        + getMonitoringSummary() : Map
+    }
+
+    class AdminMonitoringOverviewController <<Controller>> {
+        + getOverview() : Map
+    }
+
+    class NotificationController <<Controller>> {
+        + getMyNotifications(authHeader) : List
+        + getUnreadCount(authHeader) : long
+        + markAsRead(authHeader, notificationId) : void
+        + markAllAsRead(authHeader) : void
+    }
+
+    class RetrainingConfigController <<Controller>> {
+        + saveProjectConfig(projectId, request) : RetrainingConfig
+        + forceRetrainingNow(projectId) : void
+        + disableRetraining(projectId) : void
+        + getProjectStatus(projectId) : Map
+        + getConfig(projectId) : Optional<RetrainingConfig>
+    }
+
+    class GitHubRetrainingController <<Controller>> {
+        + externalTrigger(key, request) : Map
+        + getGitHubConfig(projectId) : GitHubRetrainingConfig
+        + generateKey(projectId) : String
+        + revokeKey(projectId) : void
+    }
+
+    class DashboardController <<Controller>> {
+        + getSummary(authHeader) : Map
+    }
+
+    class ModelConsistencyController <<Controller>> {
+        + audit(modelName) : Map
+        + reconcile(modelName) : Map
+        + reconcileAll() : Map
+    }
+
+    class UserMonitoringController <<Controller>> {
+        + getDashboard(authHeader, projectId) : Map
+    }
+
+    class UserSearchController <<Controller>> {
+        + searchUsers(query, deploymentId) : List
+    }
+
+    class RuntimeAnalysisController <<Controller>> {
+        + analyzeScript(scriptFile) : Map
+    }
+
+    class HealthController <<Controller>> {
+        + health() : String
+    }
+
+    class GlobalApiExceptionHandler <<Controller>> {
+        + handleResponseStatus(exception) : ResponseEntity
+        + handleDataIntegrity(exception) : ResponseEntity
+        + handleBadRequest(exception) : ResponseEntity
+        + handleUnexpected(exception) : ResponseEntity
+    }
+}
+
+' ==========================================
+' CONFIG / SECURITY
+' ==========================================
+package "config" #ECEFF1 {
+
+    class JwtService <<Service>> {
+        + generateToken(user) : String
+        + extractUsername(token) : String
+        + isTokenValid(token, user) : boolean
+    }
+
+    class SecurityConfig <<Config>> {
+        - jwtAuthenticationFilter : JwtAuthenticationFilter
+        + securityFilterChain(http) : SecurityFilterChain
+        + passwordEncoder() : PasswordEncoder
+    }
+
+    class UploadsStorageProperties <<Config>> {
+        - pvcName : String
+        - mountPath : String
+        + getPvcName() : String
+        + getMountPath() : String
+    }
+
+    class TaskExecutorConfig <<Config>> {
+    }
+}
+
+' ==========================================
+' RELATIONSHIPS - ENTITIES
+' ==========================================
+
+User }o--|| Role : "1 role"
+User }o--o{ PasswordResetToken : "0..*"
+User }o--o{ Notification : "0..*"
+
+MlProject }o--|| User : "1 owner"
+MlProject }o--o{ MlExperiment : "0..*"
+MlProject }o--o{ UploadedProjectFile : "0..*"
+
+MlExperiment }o--|| MlProject : "1 project"
+MlExperiment }o--o{ MlExperimentMetric : "0..*"
+MlExperiment }o--o| UploadedProjectFile : "0..1 datasetFile"
+MlExperiment }o--o| UploadedProjectFile : "0..1 modelFile"
+
+ModelDeployment }o--o{ ModelDeploymentShare : "0..*"
+ModelDeployment }o--o{ ModelApiKey : "0..*"
+ModelApiKey }o--o{ ModelApiUsage : "0..*"
+
+' ==========================================
+' RELATIONSHIPS - CONTROLLER -> SERVICE
+' ==========================================
+
+AuthController ..> AuthService : <<uses>>
+AuthController ..> JwtService : <<uses>>
+UserController ..> UserService : <<uses>>
+AdminUserController ..> AdminUserService : <<uses>>
+MlProjectController ..> MlProjectService : <<uses>>
+MlExperimentController ..> MlExperimentService : <<uses>>
+ModelDeploymentController ..> ModelDeploymentService : <<uses>>
+ModelDeploymentController ..> JwtService : <<uses>>
+ModelDeploymentApiAccessController ..> ModelDeploymentService : <<uses>>
+ModelRegistryController ..> ModelRegistryService : <<uses>>
+ModelGatewayController ..> ModelGatewayService : <<uses>>
+PredictionController ..> PredictionService : <<uses>>
+ExternalPredictionController ..> ModelGatewayService : <<uses>>
+MonitoringController ..> MonitoringService : <<uses>>
+AdminMonitoringOverviewController ..> AdminMonitoringOverviewService : <<uses>>
+NotificationController ..> NotificationService : <<uses>>
+RetrainingConfigController ..> RetrainingConfigService : <<uses>>
+RetrainingConfigController ..> AutoRetrainingService : <<uses>>
+RetrainingConfigController ..> RetrainingDryRunService : <<uses>>
+GitHubRetrainingController ..> GitHubRetrainingService : <<uses>>
+DashboardController ..> DashboardService : <<uses>>
+ModelConsistencyController ..> ModelConsistencyService : <<uses>>
+UserMonitoringController ..> UserMonitoringService : <<uses>>
+UserSearchController ..> UserRepository : <<uses>>
+RuntimeAnalysisController ..> RestTemplate : <<uses>>
+GlobalApiExceptionHandler ..> GlobalApiExceptionHandler : <<advises>>
+
+' ==========================================
+' RELATIONSHIPS - SERVICE -> REPOSITORY
+' ==========================================
+
+AuthService ..> UserRepository : <<uses>>
+AuthService ..> RoleRepository : <<uses>>
+AuthService ..> PasswordResetTokenRepository : <<uses>>
+UserService ..> UserRepository : <<uses>>
+MlProjectService ..> MlProjectRepository : <<uses>>
+MlExperimentService ..> MlExperimentRepository : <<uses>>
+MlExperimentService ..> MlExperimentMetricRepository : <<uses>>
+MlExperimentService ..> UploadedProjectFileRepository : <<uses>>
+ModelDeploymentService ..> ModelDeploymentRepository : <<uses>>
+ModelDeploymentService ..> ModelDeploymentShareRepository : <<uses>>
+ModelRegistryService ..> MlExperimentRepository : <<uses>>
+ModelGatewayService ..> ModelApiKeyRepository : <<uses>>
+ModelGatewayService ..> ModelDeploymentRepository : <<uses>>
+ModelGatewayService ..> ModelApiUsageRepository : <<uses>>
+PredictionService ..> PredictionLogRepository : <<uses>>
+PredictionService ..> ModelDeploymentRepository : <<uses>>
+MonitoringService ..> MonitoringAlertRepository : <<uses>>
+MonitoringAlertService ..> MonitoringAlertRepository : <<uses>>
+NotificationService ..> NotificationRepository : <<uses>>
+RetrainingConfigService ..> RetrainingConfigRepository : <<uses>>
+AutoRetrainingService ..> RetrainingConfigRepository : <<uses>>
+AutoRetrainingService ..> MlExperimentRepository : <<uses>>
+GitHubRetrainingService ..> GitHubRetrainingConfigRepository : <<uses>>
+ModelConsistencyService ..> MlExperimentRepository : <<uses>>
+ModelConsistencyService ..> ModelDeploymentRepository : <<uses>>
+DashboardService ..> MlExperimentRepository : <<uses>>
+DashboardService ..> MlProjectRepository : <<uses>>
+UserMonitoringService ..> PredictionLogRepository : <<uses>>
+
+' ==========================================
+' RELATIONSHIPS - SERVICE -> SERVICE
+' ==========================================
+
+KubernetesBuildService ..> CustomDockerWorkspaceService : <<uses>>
+KubernetesBuildService ..> DatasetFileResolverService : <<uses>>
+CustomDockerRunWatcher ..> KubernetesBuildService : <<uses>>
+CustomDockerRunWatcher ..> KubernetesJobService : <<uses>>
+CustomDockerRunWatcher ..> CustomDockerPersistenceService : <<uses>>
+AutoRetrainingService ..> RetrainingDecisionService : <<uses>>
+AutoRetrainingService ..> GitHubRetrainingService : <<uses>>
+AutoRetrainingService ..> RunPipelineStepService : <<uses>>
+
+' ==========================================
+' RELATIONSHIPS - CONFIG
+' ==========================================
+
+SecurityConfig ..> JwtService : <<creates>>
+SecurityConfig ..> UserRepository : <<uses>>
+KubernetesBuildService ..> UploadsStorageProperties : <<uses>>
+CustomDockerWorkspaceService ..> UploadsStorageProperties : <<uses>>
+
+' ==========================================
+' STEREOTYPES LEGEND
+' ==========================================
+note bottom of Role
+  **Stéréotypes utilisés :**
+  «Entity» — Classes JPA
+  «Repository» — Interfaces Spring Data
+  «Service» — Classes métier Spring
+  «Controller» — RestControllers Spring
+  «Config» — Classes de configuration
+  «Enum» — Énumérations
+end note
+
+@enduml

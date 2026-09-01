@@ -1,0 +1,94 @@
+@startuml
+left to right direction
+skinparam actorStyle awesome
+skinparam usecase {
+  BackgroundColor #FEFEFE
+  BorderColor #555555
+  FontSize 11
+}
+skinparam actor {
+  FontSize 13
+  FontColor #333333
+}
+skinparam package {
+  BorderColor #AAAAAA
+  FontSize 12
+  FontStyle bold
+  BackgroundColor transparent
+}
+skinparam rectangle {
+  BorderColor #444444
+  FontSize 14
+  FontStyle bold
+  BackgroundColor transparent
+}
+
+title Diagramme de Cas d'Utilisation - Plateforme MLOps
+
+rectangle "MLOps Pilot" as system {
+
+  package "Authentification & Profil" {
+    usecase "S'inscrire" as UC1
+    usecase "Se connecter" as UC2
+    usecase "Gerer son profil" as UC3
+  }
+
+  package "Gestion des Projets ML" {
+    usecase "Gerer ses projets ML" as UC4
+    usecase "Importer un dataset" as UC5
+  }
+
+  package "Entrainement ML" {
+    usecase "Lancer un entrainement" as UC6
+    usecase "Consulter les resultats\net metriques" as UC7
+  }
+
+  package "Deploiement & Prediction" {
+    usecase "Deployer un modele" as UC8
+    usecase "Effectuer une prediction" as UC9
+  }
+
+  package "Reentrainement" {
+    usecase "Configurer le\nreentrainement" as UC10
+  }
+
+  package "Monitoring & Notifications" {
+    usecase "Consulter les notifications" as UC11
+    usecase "Consulter le monitoring\net alertes" as UC12
+  }
+
+  package "Administration" {
+    usecase "Gerer les utilisateurs" as UC13
+    usecase "Superviser les deploiements\net entraînements" as UC14
+  }
+}
+
+actor "User" as U
+actor "Admin" as A
+
+' --- User associations ---
+U --> UC1
+U --> UC2
+U --> UC3
+U --> UC4
+U --> UC5
+U --> UC6
+U --> UC7
+U --> UC8
+U --> UC9
+U --> UC10
+U --> UC11
+U --> UC12
+
+' --- Admin associations ---
+A --> UC2
+A --> UC13
+A --> UC14
+A --> UC12
+
+' --- include / extend ---
+UC6 ..> UC5 : <<include>>
+UC9 ..> UC8 : <<extend>>
+UC12 ..> UC14 : <<include>>
+
+@enduml

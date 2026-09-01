@@ -102,23 +102,28 @@ public class CustomDockerRunWatcher {
                 continue;
             }
 
+            System.out.println("[CUSTOM_PIPELINE] experimentId=" + experiment.getId()
+                    + ", projectId=" + (experiment.getProject() != null ? experiment.getProject().getId() : "?")
+                    + ", runtime=CUSTOM_DOCKERFILE"
+                    + ", status=" + experiment.getStatus()
+                    + ", buildStatus=" + experiment.getBuildStatus());
+
             try {
-                // Relecture courte : évite de traiter un objet devenu terminal entre la requête
-                // initiale et son traitement dans la boucle.
                 MlExperiment freshExperiment = mlExperimentRepository
                         .findByIdWithFiles(experiment.getId())
                         .orElse(null);
 
                 if (freshExperiment == null || isTerminalStatus(freshExperiment.getStatus())) {
+                    System.out.println("[CUSTOM_PIPELINE] STEP=SKIP experimentId=" + experiment.getId()
+                            + " reason=" + (freshExperiment == null ? "NOT_FOUND" : "TERMINAL(" + freshExperiment.getStatus() + ")"));
                     continue;
                 }
 
                 processExperiment(freshExperiment);
             } catch (Exception e) {
-                System.out.println("[CUSTOM-DOCKER] Error while processing experiment id="
-                        + safeExperimentId(experiment)
-                        + " : "
-                        + e.getMessage());
+                System.out.println("[CUSTOM_PIPELINE] STEP=ERROR experimentId=" + experiment.getId()
+                        + " exceptionType=" + e.getClass().getSimpleName()
+                        + " message=" + e.getMessage());
                 e.printStackTrace();
             }
         }
@@ -149,6 +154,12 @@ public class CustomDockerRunWatcher {
         }
 
         String buildStatus = normalize(experiment.getBuildStatus());
+
+        System.out.println("[CUSTOM_PIPELINE] STEP=DISPATCH experimentId=" + experiment.getId()
+                + ", buildStatus=" + buildStatus
+                + ", hasCustomImageUri=" + hasText(experiment.getCustomImageUri())
+                + ", hasBuildJobName=" + hasText(experiment.getBuildJobName())
+                + ", hasTrainingJobName=" + hasText(experiment.getTrainingJobName()));
 
         if (hasText(experiment.getCustomImageUri())
                 && !hasText(experiment.getBuildJobName())
@@ -262,9 +273,16 @@ public class CustomDockerRunWatcher {
         }
 
         try {
+            System.out.println("[CUSTOM_WORKSPACE] WATCHER_LAUNCH_BUILD experimentId=" + experiment.getId()
+                    + ", projectId=" + project.getId()
+                    + ", dockerfilePath=" + experiment.getDockerfilePath()
+                    + ", dockerfileContent=" + (experiment.getDockerfilePath() != null ? experiment.getDockerfilePath().length() + "chars" : "null"));
             KubernetesBuildService.BuildJobResult result =
                     kubernetesBuildService.launchImageBuildJob(project, experiment);
 
+            System.out.println("[CUSTOM_WORKSPACE] KANIKO_JOB_CREATED experimentId=" + experiment.getId()
+                    + ", jobName=" + result.getBuildJobName()
+                    + ", imageUri=" + result.getImageUri());
             experiment.setBuildJobName(result.getBuildJobName());
             experiment.setCustomImageUri(result.getImageUri());
 
@@ -305,19 +323,18 @@ public class CustomDockerRunWatcher {
             String logs = safe(e.getMessage());
 
             if (isTransientPersistenceFailure(e)) {
-                System.out.println("[CUSTOM-DOCKER] Temporary persistence error before Kaniko creation. "
-                        + "The experiment remains actionable and will be retried. experimentId="
-                        + experiment.getId()
-                        + ", reason="
-                        + logs);
+                System.out.println("[CUSTOM_PIPELINE] STEP=KANIKO_JOB_CREATE TRANSIENT_ERROR experimentId=" + experiment.getId()
+                        + ", message=" + logs + " (will retry)");
                 e.printStackTrace();
                 return;
             }
 
+            System.out.println("[CUSTOM_PIPELINE] STEP=KANIKO_JOB_CREATE FAILED experimentId=" + experiment.getId()
+                    + ", exceptionType=" + e.getClass().getSimpleName()
+                    + ", message=" + logs);
+            e.printStackTrace();
             experiment.setBuildLogs(logs);
             markFailedWithAnalyzer(experiment, logs);
-            System.out.println("[CUSTOM-DOCKER] Experiment id=" + experiment.getId()
-                    + " failed to launch build job: " + logs);
         }
     }
 
@@ -334,6 +351,9 @@ public class CustomDockerRunWatcher {
         }
 
         // Appels Kubernetes hors transaction MySQL.
+        System.out.println("[CUSTOM_WORKSPACE] SYNC_BUILD experimentId=" + experiment.getId()
+                + ", buildJobName=" + buildJobName
+                + ", buildStatus=" + experiment.getBuildStatus());
         String status =
                 kubernetesBuildService.getBuildJobStatus(buildJobName);
         String logs =
@@ -609,6 +629,18 @@ public class CustomDockerRunWatcher {
         }
 
         if (!hasText(trainingJobName)) {
+            if ("CUSTOM_IMAGE_JOB_STARTING".equals(experiment.getBuildStatus())) {
+                System.out.println("[CUSTOM_PIPELINE] STEP=SYNC_TRAINING experimentId="
+                        + experiment.getId()
+                        + " buildStatus=CUSTOM_IMAGE_JOB_STARTING trainingJobName=null"
+                        + " - waiting for job launch to complete.");
+                experiment.setStatus(ExperimentStatus.RUNNING);
+                experiment.setMessage(
+                        "Training job launch in progress. Waiting for job name to be set."
+                );
+                mlExperimentRepository.saveAndFlush(experiment);
+                return;
+            }
             markFailed(experiment, "TRAINING", "Training job name is empty.");
             return;
         }
@@ -624,9 +656,22 @@ public class CustomDockerRunWatcher {
         }
 
         if ("FAILED".equalsIgnoreCase(status)) {
+            experiment.setStatus(ExperimentStatus.FAILED);
             experiment.setBuildStatus("CUSTOM_IMAGE_JOB_FAILED");
             experiment.setKubeflowStatus("FAILED");
             experiment.setTrainingLogs(logs);
+            experiment.setErrorMessage("Kubernetes job failed: " + safe(logs).lines().findFirst().orElse("unknown"));
+            experiment.setFailurePhase("TRAINING");
+            experiment.setFailureReason("Kubernetes job failed");
+            experiment.setFinishedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+
+            System.out.println("[RETRAINING_STATE] projectId="
+                    + (experiment.getProject() != null ? experiment.getProject().getId() : "?")
+                    + ", experimentId=" + experiment.getId()
+                    + ", dbStatus=RUNNING"
+                    + ", k8sJobStatus=FAILED"
+                    + ", jobName=" + trainingJobName
+                    + ", action=MARK_FAILED");
 
             runPipelineStepService.markFailed(
                     experiment,
@@ -637,15 +682,43 @@ public class CustomDockerRunWatcher {
                     logs
             );
 
-            markFailedWithAnalyzer(experiment, logs);
+            mlExperimentService.markExperimentFailedWithDetails(
+                    experiment,
+                    "TRAINING",
+                    "Kubernetes job failed",
+                    "Le Job Kubernetes d'entraînement a échoué.",
+                    "Vérifiez les logs du job et la configuration du Dockerfile/image custom.",
+                    safe(logs),
+                    "kubernetes-job"
+            );
             return;
         }
 
         if ("NOT_FOUND".equalsIgnoreCase(status)) {
-            markFailed(
+            experiment.setStatus(ExperimentStatus.FAILED);
+            experiment.setBuildStatus("CUSTOM_IMAGE_JOB_FAILED");
+            experiment.setKubeflowStatus("FAILED");
+            experiment.setErrorMessage("Training job not found in Kubernetes: " + trainingJobName);
+            experiment.setFailurePhase("TRAINING");
+            experiment.setFailureReason("Training job not found in Kubernetes");
+            experiment.setFinishedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+
+            System.out.println("[RETRAINING_STATE] projectId="
+                    + (experiment.getProject() != null ? experiment.getProject().getId() : "?")
+                    + ", experimentId=" + experiment.getId()
+                    + ", dbStatus=RUNNING"
+                    + ", k8sJobStatus=NOT_FOUND"
+                    + ", jobName=" + trainingJobName
+                    + ", action=MARK_FAILED");
+
+            mlExperimentService.markExperimentFailedWithDetails(
                     experiment,
                     "TRAINING",
-                    "Training job not found in Kubernetes: " + trainingJobName
+                    "Training job not found in Kubernetes: " + trainingJobName,
+                    "Le Job Kubernetes associé est introuvable.",
+                    "Vérifiez que le job existe bien dans le namespace.",
+                    "",
+                    "kubernetes-job"
             );
             return;
         }
@@ -1279,18 +1352,7 @@ public class CustomDockerRunWatcher {
             return;
         }
 
-        experiment.setStatus(ExperimentStatus.FAILED);
         markDockerTrainingFinishedIfNeeded(experiment);
-        experiment.setBuildStatus("CUSTOM_DOCKER_FAILED");
-        experiment.setErrorMessage(message);
-        experiment.setFailurePhase(phase);
-        experiment.setFailureReason(message);
-        experiment.setFailureDetails(message);
-        experiment.setFailureSuggestion("Check Kubernetes job logs and Dockerfile/custom image configuration.");
-        experiment.setFailureLogExcerpt(message);
-        experiment.setFailureSourceFile("custom-docker-runtime");
-        experiment.setMessage(message);
-
         clearExperimentPerformanceMetrics(experiment);
 
         String stepCode = mapPhaseToStepCode(phase);
@@ -1305,7 +1367,15 @@ public class CustomDockerRunWatcher {
             );
         }
 
-        mlExperimentRepository.saveAndFlush(experiment);
+        mlExperimentService.markExperimentFailedWithDetails(
+                experiment.getId(),
+                phase,
+                message,
+                message,
+                "Check Kubernetes job logs and Dockerfile/custom image configuration.",
+                message,
+                "custom-docker-runtime"
+        );
     }
 
     private String mapPhaseToStepCode(String phase) {

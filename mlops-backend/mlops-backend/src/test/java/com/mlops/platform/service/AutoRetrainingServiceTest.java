@@ -116,7 +116,7 @@ class AutoRetrainingServiceTest {
         RetrainingConfig config = new RetrainingConfig();
         config.setProjectId(PROJECT_ID);
         config.setEnabled(true);
-        config.setStrategy(RetrainingStrategy.SCHEDULED_ONLY);
+        config.setStrategy(RetrainingStrategy.MONITORING_SMART);
         config.setNextRetrainingAt(now().minusMinutes(5));
         return config;
     }
@@ -135,6 +135,7 @@ class AutoRetrainingServiceTest {
         when(retrainingConfigRepository.claimDueConfig(eq(CONFIG_ID), any()))
                 .thenReturn(1);
 
+        config.setManualTriggerRequested(true);
         int claimed = service.tryValidateAndClaimInNewTransaction(CONFIG_ID);
 
         assertEquals(1, claimed);
@@ -150,42 +151,30 @@ class AutoRetrainingServiceTest {
                 .thenReturn(Optional.of(config));
         when(sourceResolver.resolveSourceExperimentIdOrNull(PROJECT_ID, null))
                 .thenReturn(null);
-        when(retrainingConfigRepository.updateStateForUnclaimedConfig(
-                eq(CONFIG_ID),
-                eq(RetrainingState.IDLE),
-                any(),
-                any(),
-                any()))
-                .thenReturn(1);
 
         int claimed = service.tryValidateAndClaimInNewTransaction(CONFIG_ID);
 
         assertEquals(0, claimed);
-        verify(retrainingConfigRepository)
-                .updateStateForUnclaimedConfig(
-                        eq(CONFIG_ID),
-                        eq(RetrainingState.IDLE),
-                        any(),
-                        any(),
-                        any()
-                );
+        verify(retrainingConfigRepository).findById(CONFIG_ID);
         verify(retrainingConfigRepository, never()).claimDueConfig(any(), any());
     }
 
     @Test
-    void validateAndClaim_whenNotDue_returnsZero() {
+    void validateAndClaim_whenNotDue_claimsBecauseScheduleRemoved() {
         RetrainingConfig config = dueConfig();
         config.setNextRetrainingAt(now().plusDays(7));
 
         when(retrainingConfigRepository.findById(CONFIG_ID))
                 .thenReturn(Optional.of(config));
+        when(sourceResolver.resolveSourceExperimentIdOrNull(PROJECT_ID, null))
+                .thenReturn(42L);
+        when(retrainingConfigRepository.claimDueConfig(eq(CONFIG_ID), any()))
+                .thenReturn(1);
 
         int claimed = service.tryValidateAndClaimInNewTransaction(CONFIG_ID);
 
-        assertEquals(0, claimed);
-        verify(retrainingConfigRepository, never()).claimDueConfig(any(), any());
-        verify(retrainingConfigRepository, never())
-                .updateStateForUnclaimedConfig(any(), any(), any(), any(), any());
+        assertEquals(1, claimed);
+        verify(retrainingConfigRepository).claimDueConfig(eq(CONFIG_ID), any());
     }
 
     @Test
@@ -329,13 +318,13 @@ class AutoRetrainingServiceTest {
                 .thenReturn(List.of(finished));
         when(mlExperimentRepository.countActiveScheduledRetrainingForProject(PROJECT_ID))
                 .thenReturn(0L);
-        when(retrainingConfigRepository.resetFinishedConfigToIdle(eq(CONFIG_ID), any()))
+        when(retrainingConfigRepository.resetFinishedConfigToIdle(eq(CONFIG_ID), any(), any()))
                 .thenReturn(1);
 
         int reset = service.reconcileFinishedRunningConfigs();
 
         assertEquals(1, reset);
-        verify(retrainingConfigRepository).resetFinishedConfigToIdle(eq(CONFIG_ID), any());
+        verify(retrainingConfigRepository).resetFinishedConfigToIdle(eq(CONFIG_ID), any(), any());
     }
 
     @Test
@@ -356,6 +345,6 @@ class AutoRetrainingServiceTest {
 
         assertEquals(0, reset);
         verify(retrainingConfigRepository, never())
-                .resetFinishedConfigToIdle(anyLong(), any());
+                .resetFinishedConfigToIdle(anyLong(), any(), any());
     }
 }

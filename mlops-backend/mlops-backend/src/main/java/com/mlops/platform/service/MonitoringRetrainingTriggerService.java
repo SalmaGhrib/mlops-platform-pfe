@@ -91,12 +91,11 @@ public class MonitoringRetrainingTriggerService {
     }
 
     /**
-     * Analyse toutes les configurations intelligentes actives.
+     * Analyse toutes les configurations actives.
      *
      * Une configuration détectée en drift est marquée par une mise à jour
      * atomique :
      * - manualTriggerRequested=true ;
-     * - nextRetrainingAt dans le passé ;
      * - raison et décision conservées.
      */
     public int evaluateSmartTriggersForAllConfigs() {
@@ -106,7 +105,7 @@ public class MonitoringRetrainingTriggerService {
 
         if (configs == null || configs.isEmpty()) {
             System.out.println(
-                    "[MONITORING_RETRAINING] No enabled smart config found."
+                    "[MONITORING_RETRAINING] No enabled config found."
             );
             return 0;
         }
@@ -117,13 +116,6 @@ public class MonitoringRetrainingTriggerService {
             if (config == null
                     || config.getId() == null
                     || config.getProjectId() == null) {
-                continue;
-            }
-
-            RetrainingStrategy strategy = config.getStrategy();
-
-            if (strategy != RetrainingStrategy.SMART_MONITORING_ONLY
-                    && strategy != RetrainingStrategy.FULL_SMART) {
                 continue;
             }
 
@@ -266,22 +258,6 @@ public class MonitoringRetrainingTriggerService {
         }
 
         LocalDateTime now = utcNow();
-
-        /*
-         * Si la configuration est déjà échue, AutoRetrainingScheduler doit la
-         * traiter directement. Le monitoring n'a pas besoin de la redemander.
-         */
-        if (config.getNextRetrainingAt() != null
-                && !config.getNextRetrainingAt().isAfter(now)) {
-            System.out.println(
-                    "[MONITORING_RETRAINING] Ignored: config already due "
-                            + "for scheduler. projectId="
-                            + projectId
-                            + ", nextRetrainingAt="
-                            + config.getNextRetrainingAt()
-            );
-            return false;
-        }
 
         if (config.getLastRetrainingAt() != null
                 && cooldownMinutes > 0

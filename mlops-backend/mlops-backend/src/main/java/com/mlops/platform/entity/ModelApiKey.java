@@ -1,23 +1,23 @@
 package com.mlops.platform.entity;
 
 import jakarta.persistence.*;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /*
- * Clé API SMART MODEL GATEWAY.
+ * Cle API SMART MODEL GATEWAY.
  *
- * Principe de sécurité :
- * - le secret complet n'est affiché qu'une seule fois, à la création
- * - en base, on ne stocke que le préfixe (pour la recherche) + un hash du secret
- * - jamais de clé en clair en base
+ * Principe de securite :
+ * - le secret complet n'est affiche qu'une seule fois, a la creation
+ * - en base, on ne stocke que le prefixe (pour la recherche) + un hash du secret
+ * - jamais de cle en clair en base
  */
 @Entity
 @Table(
         name = "model_api_keys",
         indexes = {
                 @Index(name = "idx_model_api_keys_deployment", columnList = "deployment_id"),
-                @Index(name = "idx_model_api_keys_prefix", columnList = "key_prefix")
+                @Index(name = "idx_model_api_keys_prefix", columnList = "key_prefix"),
+                @Index(name = "idx_model_api_keys_owner", columnList = "owner_id")
         }
 )
 public class ModelApiKey {
@@ -56,17 +56,14 @@ public class ModelApiKey {
     @Column(name = "last_used_at")
     private LocalDateTime lastUsedAt;
 
-    @Column(name = "daily_quota")
-    private Long dailyQuota;
-
-    @Column(name = "requests_today", nullable = false)
-    private Long requestsToday = 0L;
-
-    @Column(name = "usage_date")
-    private LocalDate usageDate;
-
     @Column(name = "total_requests", nullable = false)
     private Long totalRequests = 0L;
+
+    @Column(name = "successful_requests", nullable = false)
+    private Long successfulRequests = 0L;
+
+    @Column(name = "failed_requests", nullable = false)
+    private Long failedRequests = 0L;
 
     public ModelApiKey() {
     }
@@ -80,9 +77,6 @@ public class ModelApiKey {
         if (enabled == null) {
             enabled = true;
         }
-        if (requestsToday == null) {
-            requestsToday = 0L;
-        }
         if (totalRequests == null) {
             totalRequests = 0L;
         }
@@ -94,121 +88,46 @@ public class ModelApiKey {
                 && (expiresAt == null || expiresAt.isAfter(now));
     }
 
-    public Long getId() {
-        return id;
-    }
+    public Long getId() { return id; }
 
-    public Long getDeploymentId() {
-        return deploymentId;
-    }
+    public Long getDeploymentId() { return deploymentId; }
+    public void setDeploymentId(Long deploymentId) { this.deploymentId = deploymentId; }
 
-    public void setDeploymentId(Long deploymentId) {
-        this.deploymentId = deploymentId;
-    }
+    public Long getOwnerId() { return ownerId; }
+    public void setOwnerId(Long ownerId) { this.ownerId = ownerId; }
 
-    public Long getOwnerId() {
-        return ownerId;
-    }
+    public String getName() { return name; }
+    public void setName(String name) { this.name = cleanText(name); }
 
-    public void setOwnerId(Long ownerId) {
-        this.ownerId = ownerId;
-    }
+    public String getKeyPrefix() { return keyPrefix; }
+    public void setKeyPrefix(String keyPrefix) { this.keyPrefix = cleanText(keyPrefix); }
 
-    public String getName() {
-        return name;
-    }
+    public String getKeyHash() { return keyHash; }
+    public void setKeyHash(String keyHash) { this.keyHash = cleanText(keyHash); }
 
-    public void setName(String name) {
-        this.name = cleanText(name);
-    }
+    public Boolean getEnabled() { return enabled; }
+    public void setEnabled(Boolean enabled) { this.enabled = enabled != null ? enabled : false; }
 
-    public String getKeyPrefix() {
-        return keyPrefix;
-    }
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 
-    public void setKeyPrefix(String keyPrefix) {
-        this.keyPrefix = cleanText(keyPrefix);
-    }
+    public LocalDateTime getExpiresAt() { return expiresAt; }
+    public void setExpiresAt(LocalDateTime expiresAt) { this.expiresAt = expiresAt; }
 
-    public String getKeyHash() {
-        return keyHash;
-    }
+    public LocalDateTime getRevokedAt() { return revokedAt; }
+    public void setRevokedAt(LocalDateTime revokedAt) { this.revokedAt = revokedAt; }
 
-    public void setKeyHash(String keyHash) {
-        this.keyHash = cleanText(keyHash);
-    }
+    public LocalDateTime getLastUsedAt() { return lastUsedAt; }
+    public void setLastUsedAt(LocalDateTime lastUsedAt) { this.lastUsedAt = lastUsedAt; }
 
-    public Boolean getEnabled() {
-        return enabled;
-    }
+    public Long getTotalRequests() { return totalRequests; }
+    public void setTotalRequests(Long totalRequests) { this.totalRequests = totalRequests != null ? totalRequests : 0L; }
 
-    public void setEnabled(Boolean enabled) {
-        this.enabled = enabled != null ? enabled : false;
-    }
+    public Long getSuccessfulRequests() { return successfulRequests; }
+    public void setSuccessfulRequests(Long successfulRequests) { this.successfulRequests = successfulRequests != null ? successfulRequests : 0L; }
 
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public LocalDateTime getExpiresAt() {
-        return expiresAt;
-    }
-
-    public void setExpiresAt(LocalDateTime expiresAt) {
-        this.expiresAt = expiresAt;
-    }
-
-    public LocalDateTime getRevokedAt() {
-        return revokedAt;
-    }
-
-    public void setRevokedAt(LocalDateTime revokedAt) {
-        this.revokedAt = revokedAt;
-    }
-
-    public LocalDateTime getLastUsedAt() {
-        return lastUsedAt;
-    }
-
-    public void setLastUsedAt(LocalDateTime lastUsedAt) {
-        this.lastUsedAt = lastUsedAt;
-    }
-
-    public Long getDailyQuota() {
-        return dailyQuota;
-    }
-
-    public void setDailyQuota(Long dailyQuota) {
-        this.dailyQuota = dailyQuota;
-    }
-
-    public Long getRequestsToday() {
-        return requestsToday;
-    }
-
-    public void setRequestsToday(Long requestsToday) {
-        this.requestsToday = requestsToday != null ? requestsToday : 0L;
-    }
-
-    public LocalDate getUsageDate() {
-        return usageDate;
-    }
-
-    public void setUsageDate(LocalDate usageDate) {
-        this.usageDate = usageDate;
-    }
-
-    public Long getTotalRequests() {
-        return totalRequests;
-    }
-
-    public void setTotalRequests(Long totalRequests) {
-        this.totalRequests = totalRequests != null ? totalRequests : 0L;
-    }
+    public Long getFailedRequests() { return failedRequests; }
+    public void setFailedRequests(Long failedRequests) { this.failedRequests = failedRequests != null ? failedRequests : 0L; }
 
     private String cleanText(String value) {
         if (value == null || value.isBlank()) {

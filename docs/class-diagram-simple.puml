@@ -1,0 +1,144 @@
+@startuml
+left to right direction
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+skinparam class {
+  BackgroundColor #FEFEFE
+  BorderColor #444444
+  ArrowColor #555555
+  FontSize 11
+  AttributeFontSize 10
+}
+
+skinparam package {
+  BorderColor #AAAAAA
+  FontSize 13
+  FontStyle bold
+  BackgroundColor transparent
+}
+
+title Diagramme de Classes - Plateforme MLOps
+
+' ===== UTILISATEURS =====
+package "Utilisateurs" <<Rectangle>> {
+  class Role {
+    name : RoleType
+  }
+  class User {
+    firstName : String
+    lastName : String
+    email : String
+    status : AccountStatus
+  }
+}
+
+' ===== PROJETS =====
+package "Projets & Fichiers" <<Rectangle>> {
+  class MlProject {
+    name : String
+    description : String
+    projectType : String
+    dataType : String
+    targetColumn : String
+    primaryMetric1 : String
+  }
+  class UploadedProjectFile {
+    originalFileName : String
+    fileType : UploadedFileType
+    dataType : String
+    sizeBytes : Long
+  }
+}
+
+' ===== ENTRAINEMENT =====
+package "Experimentation" <<Rectangle>> {
+  class MlExperiment {
+    experimentName : String
+    status : ExperimentStatus
+    modelName : String
+    registeredModelName : String
+    modelVersion : String
+    globalScore : Double
+    production : Boolean
+  }
+  class MlExperimentMetric {
+    metricName : String
+    metricValue : Double
+    direction : String
+    production : Boolean
+  }
+}
+
+' ===== DEPLOIEMENT =====
+package "Deploiement & API" <<Rectangle>> {
+  class ModelDeployment {
+    registeredModelName : String
+    modelVersion : String
+    deploymentStatus : DeploymentStatus
+    predictionEndpoint : String
+    active : Boolean
+    visibility : DeploymentVisibility
+  }
+  class ModelApiKey {
+    name : String
+    keyPrefix : String
+    enabled : Boolean
+    dailyQuota : Long
+  }
+  class PredictionLog {
+    registeredModelName : String
+    modelVersion : String
+    success : Boolean
+    latencyMs : Long
+  }
+}
+
+' ===== MONITORING =====
+package "Monitoring & Reentrainement" <<Rectangle>> {
+  class RetrainingConfig {
+    enabled : Boolean
+    frequencyType : RetrainingFrequencyType
+    strategy : RetrainingStrategy
+    state : RetrainingState
+    failureMonitoringEnabled : Boolean
+    performanceMonitoringEnabled : Boolean
+  }
+  class MonitoringAlert {
+    alertType : AlertType
+    severity : AlertSeverity
+    observedValue : Double
+    thresholdValue : Double
+    message : String
+  }
+  class Notification {
+    title : String
+    message : String
+    type : NotificationType
+    read : Boolean
+  }
+}
+
+' ==============================
+' RELATIONS JPA (associations fortes)
+' ==============================
+Role "1" -- "0..*" User : attribue a
+User "1" -- "0..*" MlProject : possede
+MlProject "1" -- "0..*" MlExperiment : contient
+MlProject "1" -- "0..*" UploadedProjectFile : contient
+MlExperiment "0..*" -- "0..1" UploadedProjectFile : dataset
+MlExperiment "0..*" -- "0..1" UploadedProjectFile : modele
+MlExperiment "1" -- "0..*" MlExperimentMetric : evalue
+Notification "0..*" -- "1" User : notifie
+
+' ==============================
+' REFERENCES LOGIQUES (FK sans JPA relation)
+' ==============================
+ModelDeployment ..> MlProject
+ModelDeployment ..> MlExperiment
+ModelApiKey ..> ModelDeployment
+PredictionLog ..> ModelDeployment
+RetrainingConfig ..> MlProject
+MonitoringAlert ..> MlProject
+
+@enduml

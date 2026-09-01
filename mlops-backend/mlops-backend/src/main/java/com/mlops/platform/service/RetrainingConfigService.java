@@ -118,7 +118,7 @@ public class RetrainingConfigService {
          * En l'absence de stratégie explicite, on applique le mode planifié simple.
          */
         if (request.getStrategy() == null) {
-            config.setStrategy(RetrainingStrategy.SCHEDULED_ONLY);
+            config.setStrategy(RetrainingStrategy.MONITORING_SMART);
         }
 
         applyMonitoringSettings(config, request);
@@ -179,7 +179,7 @@ public class RetrainingConfigService {
         request.setEnabled(true);
         request.setFrequencyType(RetrainingFrequencyType.WEEK);
         request.setFrequencyValue(1);
-        request.setStrategy(RetrainingStrategy.SCHEDULED_ONLY);
+        request.setStrategy(RetrainingStrategy.MONITORING_SMART);
 
         return saveOrUpdateConfig(projectId, sourceExperimentId, request);
     }
@@ -327,6 +327,18 @@ public class RetrainingConfigService {
         if (request.getGlobalScoreThreshold() != null) {
             config.setGlobalScoreThreshold(
                     request.getGlobalScoreThreshold()
+            );
+        }
+
+        if (request.getClassificationMinimumGlobalScore() != null) {
+            config.setClassificationMinimumGlobalScore(
+                    request.getClassificationMinimumGlobalScore()
+            );
+        }
+
+        if (request.getRegressionMinimumGlobalScore() != null) {
+            config.setRegressionMinimumGlobalScore(
+                    request.getRegressionMinimumGlobalScore()
             );
         }
 

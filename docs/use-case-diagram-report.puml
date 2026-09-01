@@ -1,0 +1,114 @@
+@startuml
+left to right direction
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+skinparam usecase {
+  BackgroundColor #FEFEFE
+  BorderColor #555555
+  FontSize 11
+  BorderThickness 1
+}
+skinparam actor {
+  FontSize 13
+  FontColor #333333
+}
+skinparam rectangle {
+  BorderColor #444444
+  FontSize 15
+  FontStyle bold
+  BackgroundColor transparent
+  BorderThickness 2
+}
+skinparam note {
+  BackgroundColor #FFFFF0
+  BorderColor #BBBBBB
+  FontSize 10
+  FontStyle italic
+}
+
+title Diagramme de cas d'utilisation — MLOps Pilot
+
+rectangle "MLOps Pilot" as system {
+
+  ' ============================================
+  ' USER - Fonctionnalites principales
+  ' ============================================
+
+  usecase "S'inscrire" as UC1
+  usecase "S'authentifier" as UC2
+  usecase "Gerer son profil" as UC3
+
+  usecase "Gerer ses projets ML" as UC4
+  usecase "Gerer les donnees\net fichiers du projet" as UC5
+
+  usecase "Gerer les\nentrainements ML" as UC6
+  usecase "Consulter les resultats\net metriques" as UC7
+
+  usecase "Gerer les modeles" as UC8
+  usecase "Deployer un modele" as UC9
+  usecase "Effectuer des\npredictions" as UC10
+
+  usecase "Configurer le\nreentrainement" as UC11
+
+  usecase "Consulter le monitoring\net alertes" as UC12
+  usecase "Consulter les\nnotifications" as UC13
+
+  ' ============================================
+  ' ADMIN - Fonctionnalites d'administration
+  ' ============================================
+
+  usecase "Gerer les utilisateurs" as UC_A1
+  usecase "Superviser la plateforme" as UC_A2
+}
+
+' ============================================
+' ACTEURS
+' ============================================
+actor "User" as U
+actor "Admin" as A
+
+' ============================================
+' GENERALISATION : Admin herite de User
+' ============================================
+A --|> U
+
+' ============================================
+' ASSOCIATIONS USER
+' ============================================
+U --> UC1
+U --> UC2
+U --> UC3
+U --> UC4
+U --> UC5
+U --> UC6
+U --> UC7
+U --> UC8
+U --> UC9
+U --> UC10
+U --> UC11
+U --> UC12
+U --> UC13
+
+' ============================================
+' ASSOCIATIONS ADMIN
+' ============================================
+A --> UC_A1
+A --> UC_A2
+
+' ============================================
+' RELATIONS <<include>>
+' ============================================
+UC11 ..> UC6 : <<include>>
+
+' ============================================
+' NOTE - Authentification
+' ============================================
+note as N1
+  Toutes les fonctionnalites metier
+  necessitent une authentification prealable.
+end note
+
+@enduml

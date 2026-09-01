@@ -6,7 +6,8 @@ import {
   ModelApiKeyStats,
   ModelDeploymentResponse,
   ModelRegistryItem,
-  ModelRegistryService
+  ModelRegistryService,
+  SharedUserKeyStatus
 } from '../../core/services/model-registry.service';
 import { SmartSearchComponent } from '../../shared/components/common/smart-search/smart-search.component';
 import {
@@ -521,10 +522,11 @@ export class ModelRegistryComponent implements OnInit {
   gatewayStats: { [deploymentId: number]: ModelApiKeyStats } = {};
   gatewayLoading: { [deploymentId: number]: boolean } = {};
   gatewayNewName: { [deploymentId: number]: string } = {};
-  gatewayNewQuota: { [deploymentId: number]: number | null } = {};
   gatewayNewKey: { [deploymentId: number]: string | null } = {};
   gatewayNewExpiry: { [deploymentId: number]: string } = {};
   gatewayKeyModalDeploymentId: number | null = null;
+  sharedUsersStatus: { [deploymentId: number]: SharedUserKeyStatus[] } = {};
+  sharedUsersLoading: { [deploymentId: number]: boolean } = {};
 
   isGatewayOpen(deploymentId?: number | null): boolean {
     return deploymentId != null && this.gatewayOpen[deploymentId] === true;
@@ -548,6 +550,7 @@ export class ModelRegistryComponent implements OnInit {
 
     this.gatewayOpen[deploymentId] = true;
     this.loadGateway(model);
+    this.loadSharedUsersStatus(deploymentId);
   }
 
   loadGateway(model: ModelRegistryItem): void {
@@ -619,6 +622,39 @@ export class ModelRegistryComponent implements OnInit {
     return latest ? this.formatDate(latest) : 'Aucune utilisation';
   }
 
+  loadSharedUsersStatus(deploymentId: number): void {
+    if (!deploymentId || this.sharedUsersLoading[deploymentId]) {
+      return;
+    }
+
+    this.sharedUsersLoading[deploymentId] = true;
+
+    this.modelRegistryService.getSharedUsersKeyStatus(deploymentId).subscribe({
+      next: (status) => {
+        this.sharedUsersStatus[deploymentId] = status;
+        this.sharedUsersLoading[deploymentId] = false;
+      },
+      error: () => {
+        this.sharedUsersStatus[deploymentId] = [];
+        this.sharedUsersLoading[deploymentId] = false;
+      }
+    });
+  }
+
+  getSharedUsersStatus(model: ModelRegistryItem): SharedUserKeyStatus[] {
+    const deploymentId = model?.activeDeploymentId;
+    return deploymentId != null ? (this.sharedUsersStatus[deploymentId] || []) : [];
+  }
+
+  isSharedUsersLoading(model: ModelRegistryItem): boolean {
+    const deploymentId = model?.activeDeploymentId;
+    return deploymentId != null && this.sharedUsersLoading[deploymentId] === true;
+  }
+
+  getSharedUserDisplayName(user: SharedUserKeyStatus): string {
+    return user.username || user.email || user.userId ? `Utilisateur #${user.userId}` : 'Inconnu';
+  }
+
   getProductionVersion(model: ModelRegistryItem): string {
     const version =
       model?.productionVersion ||
@@ -645,10 +681,6 @@ export class ModelRegistryComponent implements OnInit {
     return deploymentId != null ? (this.gatewayNewName[deploymentId] || '') : '';
   }
 
-  getGatewayNewQuota(deploymentId?: number | null): number | null {
-    return deploymentId != null ? (this.gatewayNewQuota[deploymentId] ?? null) : null;
-  }
-
   getGatewayNewExpiry(deploymentId?: number | null): string {
     return deploymentId != null ? (this.gatewayNewExpiry[deploymentId] || '') : '';
   }
@@ -667,20 +699,18 @@ export class ModelRegistryComponent implements OnInit {
     return !this.isApiEnabled(model) && !model.visibility;
   }
 
-  parseGatewayQuota(value: any): number | null {
-    if (value === null || value === undefined) {
-      return null;
-    }
+  getVisibilityLabel(model: any): string {
+    const v = String(model?.visibility || '').toUpperCase();
+    if (v === 'PUBLIC_API') return 'PUBLIC_API';
+    if (v === 'SHARED') return 'SHARED';
+    return 'PRIVATE';
+  }
 
-    const raw = String(value).trim();
-
-    if (raw === '') {
-      return null;
-    }
-
-    const parsed = Number(raw);
-
-    return !isNaN(parsed) && parsed > 0 ? parsed : null;
+  getVisibilityBadgeClass(model: any): string {
+    const v = String(model?.visibility || '').toUpperCase();
+    if (v === 'PUBLIC_API') return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300';
+    if (v === 'SHARED') return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300';
+    return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300';
   }
 
   formatGatewayExpiry(value: string): string | null {
@@ -721,21 +751,15 @@ export class ModelRegistryComponent implements OnInit {
     }
 
     const name = this.gatewayNewName[deploymentId] || '';
-    const quota = this.gatewayNewQuota[deploymentId];
     const expiryValue = this.gatewayNewExpiry[deploymentId] || '';
 
     const body: {
       name?: string | null;
-      dailyQuota?: number | null;
       expiresAt?: string | null;
     } = {};
 
     if (name.trim()) {
       body.name = name.trim();
-    }
-
-    if (quota != null && quota > 0) {
-      body.dailyQuota = quota;
     }
 
     if (expiryValue) {
@@ -765,7 +789,6 @@ export class ModelRegistryComponent implements OnInit {
         this.gatewayKeys[deploymentId] = [key, ...keys];
 
         this.gatewayNewName[deploymentId] = '';
-        this.gatewayNewQuota[deploymentId] = null;
         this.gatewayNewExpiry[deploymentId] = '';
 
         this.clearSuccessAfterDelay();
@@ -856,7 +879,7 @@ export class ModelRegistryComponent implements OnInit {
   }
 
   isKeyEnabled(key: ModelApiKeyItem): boolean {
-    return key?.enabled === true && !key?.revokedAt;
+    return key?.status === 'ACTIVE' || (key?.enabled !== false && !this.isKeyExpired(key));
   }
 
   isKeyExpired(key: ModelApiKeyItem): boolean {
@@ -868,36 +891,7 @@ export class ModelRegistryComponent implements OnInit {
     return !isNaN(expiry.getTime()) && expiry.getTime() < Date.now();
   }
 
-  toggleKeyEnabled(key: ModelApiKeyItem, model: ModelRegistryItem): void {
-    const deploymentId = model?.activeDeploymentId;
-
-    if (!deploymentId || !key?.id) {
-      return;
-    }
-
-    const currentlyEnabled = this.isKeyEnabled(key);
-
-    const observable = currentlyEnabled
-      ? this.modelRegistryService.disableApiKey(key.id)
-      : this.modelRegistryService.enableApiKey(key.id);
-
-    observable.subscribe({
-      next: (updated) => {
-        const keys = this.gatewayKeys[deploymentId] || [];
-        this.gatewayKeys[deploymentId] = keys.map((item) =>
-          item.id === updated.id ? updated : item
-        );
-      },
-      error: (error) => {
-        this.errorMessage = this.extractErrorMessage(
-          error,
-          'Impossible de modifier la clé API.'
-        );
-      }
-    });
-  }
-
-  revokeKey(key: ModelApiKeyItem, model: ModelRegistryItem): void {
+  deleteKey(key: ModelApiKeyItem, model: ModelRegistryItem): void {
     const deploymentId = model?.activeDeploymentId;
 
     if (!deploymentId || !key?.id) {
@@ -905,54 +899,37 @@ export class ModelRegistryComponent implements OnInit {
     }
 
     const confirmed = confirm(
-      'Révoquer cette clé API ? Elle deviendra immédiatement inutilisable.'
+      'Supprimer definitivement cette cle API ? Cette action est irreversible.'
     );
 
     if (!confirmed) {
       return;
     }
 
-    this.modelRegistryService.revokeApiKey(key.id).subscribe({
+    this.modelRegistryService.deleteApiKey(key.id).subscribe({
       next: () => {
         const keys = this.gatewayKeys[deploymentId] || [];
-        this.gatewayKeys[deploymentId] = keys.map((item) => {
-          if (item.id !== key.id) {
-            return item;
-          }
-          return {
-            ...item,
-            enabled: false,
-            revokedAt: new Date().toISOString()
-          };
-        });
+        this.gatewayKeys[deploymentId] = keys.filter((item) => item.id !== key.id);
       },
       error: (error) => {
         this.errorMessage = this.extractErrorMessage(
           error,
-          'Impossible de révoquer la clé API.'
+          'Impossible de supprimer la cle API.'
         );
       }
     });
   }
 
-  formatQuota(quota?: number | null): string {
-    if (quota == null) {
-      return 'Illimité';
-    }
-    return `${quota} req/jour`;
-  }
-
   formatKeyStatus(key: ModelApiKeyItem): string {
+    if (key?.status) {
+      if (key.status === 'ACTIVE') return 'Active';
+      if (key.status === 'EXPIRED') return 'Expiree';
+      return key.status;
+    }
     if (this.isKeyExpired(key)) {
-      return 'Expirée';
+      return 'Expiree';
     }
-    if (key?.revokedAt) {
-      return 'Révoquée';
-    }
-    if (this.isKeyEnabled(key)) {
-      return 'Active';
-    }
-    return 'Désactivée';
+    return 'Active';
   }
 
   formatLastUsed(lastUsedAt?: string | null): string {

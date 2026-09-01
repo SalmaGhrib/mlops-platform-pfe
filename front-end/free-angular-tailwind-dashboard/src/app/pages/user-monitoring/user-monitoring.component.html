@@ -117,12 +117,11 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
             </svg>
           </span>
-          <div>
-            <span class="pkpi-label">Prochain réentraînement</span>
-            <strong class="pkpi-value" *ngIf="project.retrainingEnabled">
+           <div>
+            <span class="pkpi-label">Dernier monitoring</span>
+            <strong class="pkpi-value">
               {{ getRetrainingNextDate(project) }}
             </strong>
-            <strong class="pkpi-value pkpi-muted" *ngIf="!project.retrainingEnabled">Non planifié</strong>
           </div>
         </div>
 
@@ -467,25 +466,17 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
             </svg>
           </span>
-          <h3>{{ getRetrainingSectionTitle(project.retrainingStrategy) }}</h3>
+          <h3>Monitoring & Réentraînement</h3>
         </div>
 
         <div class="details-list">
           <div>
-            <span>Activé :</span>
-            <strong>{{ project.retrainingEnabled ? 'Oui' : 'Non' }}</strong>
-          </div>
-          <div>
-            <span>Stratégie :</span>
-            <strong>{{ getRetrainingStrategyLabel(project.retrainingStrategy) }}</strong>
+            <span>Monitoring :</span>
+            <strong>Toujours actif</strong>
           </div>
           <div>
             <span>Dernier retraining :</span>
             <strong>{{ formatDate(project.lastRetrainingAt) }}</strong>
-          </div>
-          <div>
-            <span>Prochain retraining :</span>
-            <strong>{{ formatDate(project.nextRetrainingAt) }}</strong>
           </div>
           <div>
             <span>Dernier monitoring :</span>

@@ -188,6 +188,9 @@ export class NotificationDropdownComponent
       case 'RUN_FAILED':
         return 'RF';
 
+      case 'DEPLOYMENT_STARTED':
+        return 'DS';
+
       case 'DEPLOYMENT_DEPLOYED':
         return 'DD';
 
@@ -239,6 +242,9 @@ export class NotificationDropdownComponent
     switch (type) {
       case 'RUN_COMPLETED':
       case 'DEPLOYMENT_DEPLOYED':
+      case 'RETRAINING_TRIGGERED':
+      case 'RETRAINING_COMPLETED':
+      case 'NEW_PRODUCTION_VERSION':
         return (
           'bg-green-100 text-green-700 ' +
           'dark:bg-green-900/30 dark:text-green-400'
@@ -265,12 +271,10 @@ export class NotificationDropdownComponent
           'dark:bg-yellow-900/30 dark:text-yellow-400'
         );
 
-      case 'RETRAINING_TRIGGERED':
-      case 'RETRAINING_COMPLETED':
-      case 'NEW_PRODUCTION_VERSION':
+      case 'DEPLOYMENT_STARTED':
         return (
-          'bg-green-100 text-green-700 ' +
-          'dark:bg-green-900/30 dark:text-green-400'
+          'bg-blue-100 text-blue-700 ' +
+          'dark:bg-blue-900/30 dark:text-blue-400'
         );
 
       default:
@@ -288,6 +292,9 @@ export class NotificationDropdownComponent
 
       case 'RUN_FAILED':
         return 'Run échoué';
+
+      case 'DEPLOYMENT_STARTED':
+        return 'Déploiement démarré';
 
       case 'DEPLOYMENT_DEPLOYED':
         return 'Déploiement réussi';
@@ -308,7 +315,7 @@ export class NotificationDropdownComponent
         return 'Data drift détecté';
 
       case 'PREDICTION_ERROR_RATE':
-        return 'Taux d’erreur de prédiction';
+        return 'Taux d\'erreur de prédiction';
 
       case 'PERFORMANCE_DROP':
         return 'Baisse de performance';

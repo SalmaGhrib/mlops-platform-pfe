@@ -1,0 +1,1221 @@
+% =========================================================
+% CHAPITRE 4 : SPRINT 2
+% =========================================================
+
+\clearpage
+
+\refstepcounter{chapter}
+
+\setcounter{section}{0}
+\setcounter{subsection}{0}
+\setcounter{subsubsection}{0}
+
+\phantomsection
+\addcontentsline{toc}{chapter}
+{Chapitre \thechapter : Sprint 2 -- Développement applicatif et moteur d'entraînement MLOps}
+
+\markboth{Chapitre \thechapter}{Chapitre \thechapter}
+
+\thispagestyle{empty}
+
+
+% =========================================================
+% PAGE D'OUVERTURE + PLAN
+% =========================================================
+
+\vspace*{0.8cm}
+
+\begin{center}
+
+\rule{0.30\textwidth}{1.2pt}
+\hspace{0.5cm}
+\textit{Chapitre \thechapter}
+\hspace{0.5cm}
+\rule{0.30\textwidth}{1.2pt}
+
+\vspace{0.9cm}
+
+\rule{\textwidth}{0.8pt}
+
+\vspace{0.35cm}
+
+{\fontsize{21}{24}\selectfont
+\textsc{
+\parbox{0.95\textwidth}{
+\centering
+Chapitre \thechapter : Sprint 2 -- Développement applicatif\\
+et moteur d'entraînement MLOps
+}
+}
+}
+
+\vspace{0.35cm}
+
+\rule{\textwidth}{0.8pt}
+
+\end{center}
+
+
+\vspace{1.4cm}
+
+{\Large\bfseries Plan}
+
+\vspace{0.65cm}
+
+\begin{center}
+
+\renewcommand{\arraystretch}{1.35}
+
+\begin{tabular}{p{0.8cm}p{10.7cm}r}
+
+\textbf{1}
+&
+\textbf{Introduction}
+&
+\pageref{sec:ch4-introduction}
+\\[0.22cm]
+
+\textbf{2}
+&
+\textbf{Objectifs et travaux du Sprint 2}
+&
+\pageref{sec:sprint2-objectifs}
+\\[0.22cm]
+
+\textbf{3}
+&
+\textbf{Développement de la partie applicative}
+&
+\pageref{sec:sprint2-developpement-applicatif}
+\\[0.22cm]
+
+\textbf{4}
+&
+\textbf{Gestion des projets, fichiers et types de données}
+&
+\pageref{sec:sprint2-projets-donnees}
+\\[0.22cm]
+
+\textbf{5}
+&
+\textbf{Gestion des métriques et du score global}
+&
+\pageref{sec:sprint2-evaluation}
+\\[0.22cm]
+
+\textbf{6}
+&
+\textbf{Mise en place du moteur d'entraînement}
+&
+\pageref{sec:sprint2-training-engine}
+\\[0.22cm]
+
+\textbf{7}
+&
+\textbf{Suivi des expériences, notifications et résultats}
+&
+\pageref{sec:sprint2-tracking-results}
+\\[0.22cm]
+
+\textbf{8}
+&
+\textbf{Diagrammes de séquence UML}
+&
+\pageref{sec:sprint2-uml}
+\\[0.22cm]
+
+\textbf{9}
+&
+\textbf{Bilan du Sprint 2}
+&
+\pageref{sec:sprint2-bilan}
+\\[0.22cm]
+
+\textbf{10}
+&
+\textbf{Conclusion}
+&
+\pageref{sec:ch4-conclusion}
+\\[0.22cm]
+
+\end{tabular}
+
+\renewcommand{\arraystretch}{1}
+
+\end{center}
+
+\clearpage
+
+
+% =========================================================
+% 4.1 INTRODUCTION
+% =========================================================
+
+\section{Introduction}
+\label{sec:ch4-introduction}
+
+Après la préparation de l'environnement technique réalisée pendant le
+premier sprint, le travail s'est concentré sur le développement des
+premières fonctionnalités réellement utilisables de la plateforme.
+
+Ce deuxième sprint marque le passage d'un environnement simplement
+opérationnel vers une application capable de gérer les utilisateurs,
+les projets Machine Learning et les fichiers nécessaires aux
+entraînements.
+
+Il couvre également la prise en charge de plusieurs types de données,
+la gestion des métriques, le calcul du score global, la mise en place
+des deux modes d'entraînement ainsi que le suivi des expériences avec
+MLflow.
+
+Le développement a donc été mené sur deux axes complémentaires. Le
+premier concerne la partie applicative, avec l'évolution du frontend
+Angular et du backend Spring Boot. Le second concerne le moteur MLOps,
+avec les mécanismes nécessaires à la préparation, à l'exécution et au
+suivi des entraînements.
+
+L'objectif de ce sprint était d'obtenir un premier parcours cohérent :
+s'authentifier, créer un projet, importer les fichiers et les données,
+configurer l'évaluation, lancer un entraînement puis consulter son état
+et ses résultats.
+
+
+% =========================================================
+% 4.2 OBJECTIFS ET TRAVAUX
+% =========================================================
+
+\section{Objectifs et travaux du Sprint 2}
+\label{sec:sprint2-objectifs}
+
+Le Sprint 2 s'est déroulé du \textbf{19 mars au 16 mai}. Les principaux
+travaux réalisés pendant cette période sont résumés dans le tableau
+\ref{tab:travaux-sprint2}.
+
+\begin{table}[H]
+
+\centering
+\small
+
+\renewcommand{\arraystretch}{1.16}
+\setlength{\tabcolsep}{5pt}
+
+\begin{tabular}{|p{4cm}|p{9.2cm}|}
+
+\hline
+
+\rowcolor{cyan!20}
+\textbf{Élément}
+&
+\textbf{Rôle dans le Sprint 2}
+\\
+\hline
+
+\textbf{Authentification et profils}
+&
+Permettre l'accès à la plateforme, la gestion du compte utilisateur
+et la séparation des droits entre utilisateur et administrateur.
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{Gestion des projets et fichiers}
+&
+Créer les projets Machine Learning et importer les datasets, scripts
+Python, fichiers de dépendances et Dockerfiles.
+\\
+\hline
+
+\textbf{Types de données}
+&
+Prendre en charge les données tabulaires, textuelles et images afin
+de couvrir plusieurs cas d'usage Machine Learning.
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{Gestion des métriques}
+&
+Adapter les métriques utilisées au type de problème :
+classification ou régression.
+\\
+\hline
+
+\textbf{Score global}
+&
+Combiner les métriques sélectionnées selon leur ordre de priorité
+afin de disposer d'un indicateur commun pour comparer les expériences.
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{Mode standard}
+&
+Permettre un entraînement rapide à partir d'une image Docker fixe
+déjà préparée.
+\\
+\hline
+
+\textbf{Mode Docker personnalisé}
+&
+Construire un environnement spécifique au projet à partir du
+Dockerfile et des dépendances fournis par l'utilisateur.
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{MLflow}
+&
+Conserver le suivi des runs, des métriques et des artefacts produits
+pendant les entraînements.
+\\
+\hline
+
+\textbf{Notifications et résultats}
+&
+Informer l'utilisateur du succès ou de l'échec d'un run et lui
+permettre de consulter les résultats depuis la plateforme.
+\\
+\hline
+
+\end{tabular}
+
+\caption{Principaux travaux réalisés lors du Sprint 2}
+\label{tab:travaux-sprint2}
+
+\end{table}
+
+
+% =========================================================
+% 4.3 DÉVELOPPEMENT APPLICATIF
+% =========================================================
+
+\section{Développement de la partie applicative}
+\label{sec:sprint2-developpement-applicatif}
+
+Le développement applicatif a évolué en parallèle du moteur MLOps.
+Le frontend devait proposer un parcours simple à l'utilisateur, tandis
+que le backend devait centraliser la logique métier et assurer les
+échanges avec la base de données, Kubernetes et les services MLOps.
+
+
+% =========================================================
+\subsection{Authentification et gestion des profils}
+\label{subsec:sprint2-auth}
+
+La première fonctionnalité développée a été l'authentification. Elle
+repose sur un système d'inscription, de connexion et de gestion des
+rôles, avec une vérification par email.
+
+Lors de l'inscription, l'utilisateur fournit son nom, son email et
+un mot de passe. Un email de vérification est automatiquement envoyé
+avant de pouvoir accéder à la plateforme. La connexion s'effectue
+ensuite via un token JWT qui sécurise les échanges entre le frontend
+et le backend.
+
+Un mécanisme de récupération de mot de passe a également été mis en
+place. L'utilisateur peut demander la réinitialisation de son mot de
+passe depuis la page de connexion. Un email contenant un lien
+temporaire lui est envoyé, lui permettant de définir un nouveau mot
+de passe.
+
+Côté frontend, trois guards contrôlent l'accès aux pages :
+\texttt{guestGuard} pour les pages d'inscription et de connexion
+(accessibles uniquement aux utilisateurs non connectés),
+\texttt{authGuard} pour les pages protégées, et
+\texttt{adminGuard} pour les pages réservées à l'administration.
+
+Deux acteurs principaux ont été définis. L'\textbf{utilisateur
+standard} dispose de toutes les fonctionnalités de la plateforme :
+création de projets, importation de fichiers, lancement d'entraînements,
+suivi des expériences, déploiement et monitoring. L'\textbf{administrateur}
+peut en outre gérer les comptes utilisateurs et consulter une vue
+globale sur l'état de la plateforme.
+
+Le diagramme de séquence \ref{fig:uml-auth-sequence} illustre le flux
+complet d'authentification, depuis l'inscription jusqu'à la connexion.
+L'utilisateur soumet ses informations via le frontend Angular, le
+backend Spring Boot valide les données, insère le compte dans MySQL
+et déclenche l'envoi d'un email de vérification. Une fois le compte
+confirmé, l'utilisateur se connecte et reçoit un token JWT qui lui
+donne accès aux fonctionnalités protégées de la plateforme.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.92\textwidth,
+        keepaspectratio
+    ]{images/uml_auth_sequence.png}
+
+    \caption{Diagramme de séquence -- Authentification}
+    \label{fig:uml-auth-sequence}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.76\textwidth,
+        keepaspectratio
+    ]{images/sprint2_authentication.png}
+
+    \caption{Interface d'authentification de la plateforme}
+    \label{fig:sprint2-authentication}
+\end{figure}
+
+La figure \ref{fig:sprint2-authentication} présente les pages
+d'inscription et de connexion. Après authentification, l'utilisateur
+est redirigé vers le tableau de bord et retrouve son espace personnel
+ainsi que les fonctionnalités associées à son compte.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.78\textwidth,
+        keepaspectratio
+    ]{images/sprint2_profile.png}
+
+    \caption{Interface de gestion du profil utilisateur}
+    \label{fig:sprint2-profile}
+\end{figure}
+
+La figure \ref{fig:sprint2-profile} montre la page de profil. Elle
+permet à l'utilisateur de consulter et de modifier ses informations
+personnelles ainsi que de gérer les paramètres de son compte.
+
+
+% =========================================================
+\subsection{Frontend Angular et backend Spring Boot}
+\label{subsec:sprint2-front-back}
+
+Le frontend Angular a été enrichi avec les interfaces nécessaires à la
+création des projets, à l'importation des fichiers, au lancement des
+expériences et à la consultation des résultats.
+
+En parallèle, le backend Spring Boot a été étendu avec les API REST et
+les services nécessaires à la gestion de ces opérations. Il joue le
+rôle d'intermédiaire entre l'interface, MySQL et les différents
+composants du moteur MLOps.
+
+Swagger a également été utilisé pendant le développement afin de tester
+les endpoints de manière indépendante avant leur intégration complète
+dans l'interface.
+
+
+% =========================================================
+% 4.4 PROJETS, FICHIERS ET DONNÉES
+% =========================================================
+
+\section{Gestion des projets, fichiers et types de données}
+\label{sec:sprint2-projets-donnees}
+
+
+% =========================================================
+\subsection{Gestion des projets et des fichiers}
+\label{subsec:sprint2-projets-fichiers}
+
+La gestion des projets constitue le point de départ du workflow
+d'entraînement. Un projet regroupe les informations et les fichiers
+nécessaires à l'exécution d'une expérience.
+
+Pour le mode standard, l'utilisateur fournit principalement son script
+Python et son dataset. Pour le mode Docker personnalisé, il peut
+également fournir un fichier \textit{requirements.txt} ainsi qu'un
+Dockerfile afin de définir son propre environnement d'exécution.
+
+Cette organisation permet de conserver un lien clair entre le projet,
+les fichiers utilisés, le run lancé et les résultats obtenus.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.80\textwidth,
+        keepaspectratio
+    ]{images/sprint2_projects.png}
+
+    \caption{Interface de gestion des projets Machine Learning}
+    \label{fig:sprint2-projects}
+\end{figure}
+
+La gestion des fichiers complète ensuite cette étape en permettant
+d'associer au projet les ressources nécessaires à l'entraînement.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.80\textwidth,
+        keepaspectratio
+    ]{images/sprint2_upload_files.png}
+
+    \caption{Importation des fichiers nécessaires à l'entraînement}
+    \label{fig:sprint2-upload-files}
+\end{figure}
+
+% =========================================================
+\subsection{Prise en charge de différents types de données}
+\label{subsec:sprint2-data-types}
+
+La plateforme a été conçue pour prendre en charge plusieurs types de
+données afin de couvrir différents cas d'usage Machine Learning.
+
+Lors de la création d'un projet, c'est \textbf{l'utilisateur qui choisit
+le type de données} qu'il souhaite utiliser. Trois catégories principales
+sont supportées :
+
+\begin{itemize}
+    \item les \textbf{données tabulaires}, principalement sous forme de fichiers CSV ;
+    \item les \textbf{données textuelles}, utilisées pour les projets NLP ;
+    \item les \textbf{données images}, utilisées notamment pour la classification d'images.
+\end{itemize}
+
+Ce choix est associé au projet et permet à la plateforme de gérer
+correctement les données utilisées lors des entraînements.
+
+
+% =========================================================
+% 4.5 MÉTRIQUES ET SCORE GLOBAL
+% =========================================================
+
+\section{Gestion des métriques et du score global}
+\label{sec:sprint2-evaluation}
+
+
+% =========================================================
+\subsection{Métriques selon le type de problème}
+\label{subsec:sprint2-metrics}
+
+Les performances d'un modèle ne s'évaluent pas de la même manière
+selon qu'il s'agit d'un problème de classification ou de régression.
+
+La plateforme adapte donc les métriques proposées au type de projet.
+
+Pour la classification, les principales métriques utilisées sont
+l'Accuracy, la Precision, le Recall et le F1-score.
+
+Pour la régression, l'évaluation repose principalement sur le MAE,
+le MSE, le RMSE et le coefficient $R^2$.
+
+Chaque métrique est associée à une \textbf{direction} qui indique
+si une valeur élevée ou basse est préférable : \textbf{max} pour
+les métriques où une valeur élevée est souhaitée (Accuracy, Precision,
+Recall, F1, $R^2$) et \textbf{min} pour les métriques où une valeur
+basse est préférable (RMSE, MAE, MSE, loss).
+
+\begin{table}[H]
+
+\centering
+\small
+
+\renewcommand{\arraystretch}{1.15}
+
+\begin{tabular}{|p{4cm}|p{6.5cm}|p{2cm}|}
+
+\hline
+
+\rowcolor{cyan!20}
+\textbf{Type de problème}
+&
+\textbf{Métriques principales}
+&
+\textbf{Direction}
+\\
+\hline
+
+\textbf{Classification}
+&
+Accuracy, Precision, Recall, F1-score
+&
+max
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{Régression}
+&
+MAE, MSE, RMSE, $R^2$
+&
+min (sauf $R^2$ : max)
+\\
+\hline
+
+\end{tabular}
+
+\caption{Métriques utilisées selon le type de problème}
+\label{tab:sprint2-metrics}
+
+\end{table}
+
+Cette distinction permet de conserver une évaluation cohérente avec la
+nature du modèle et d'éviter de proposer des métriques qui ne
+correspondent pas au cas d'usage.
+
+
+% =========================================================
+\subsection{Calcul du score global}
+\label{subsec:sprint2-global-score}
+
+Afin de disposer d'un indicateur unique pour comparer les expériences,
+la plateforme calcule un \textbf{score global} à partir des métriques
+sélectionnées par l'utilisateur.
+
+\subsubsection{Normalisation des métriques}
+
+Les métriques n'ont pas toutes la même échelle. Certaines, comme
+l'Accuracy ou le F1-score, sont naturellement comprises entre 0 et 1.
+D'autres, comme le MAE ou le RMSE, peuvent prendre des valeurs
+beaucoup plus grandes sans borne supérieure claire.
+
+Avant de calculer le score global, chaque métrique est donc
+\textbf{normalisée dans l'intervalle $[0, 1]$} selon sa direction :
+
+\begin{itemize}
+    \item Pour les métriques de direction \textbf{max} (Accuracy,
+    Precision, Recall, F1, $R^2$) dont la valeur est supérieure à 1
+    mais inférieure ou égale à 100, la valeur est divisée par 100.
+    Les valeurs déjà dans $[0, 1]$ sont conservées telles quelles.
+
+    \item Pour les métriques de direction \textbf{min} (RMSE, MAE,
+    MSE, loss), la transformation suivante est appliquée :
+    \[
+    score = \frac{1}{1 + max(valeur, 0)}
+    \]
+    Cette formule garantit que le résultat reste toujours dans
+    $[0, 1]$, où une valeur proche de 0 est préférable.
+
+    \item Les valeurs négatives sont ramenées à 0 et les valeurs
+    supérieures à 100 à 1.
+\end{itemize}
+
+\subsubsection{Formule du score global}
+
+Le calcul prend en compte l'ordre de priorité attribué aux trois
+métriques principales :
+
+\begin{itemize}
+    \item \textbf{Priorité 1 : 50 \%} ;
+    \item \textbf{Priorité 2 : 30 \%} ;
+    \item \textbf{Priorité 3 : 20 \%}.
+\end{itemize}
+
+La formule utilisée est la suivante :
+
+\[
+\boxed{
+Score_{global}
+=
+\frac{0{,}50 \times M_{1} + 0{,}30 \times M_{2} + 0{,}20 \times M_{3}}
+{appliedWeight}
+}
+\]
+
+où $M_{1}$, $M_{2}$ et $M_{3}$ représentent les métriques
+normalisées selon leur priorité. Si une des métriques n'est pas
+disponible pour un run donné, son poids n'est pas appliqué et le
+dénominateur \texttt{appliedWeight} est ajusté en conséquence. Cette
+renormalisation permet de conserver des scores comparables entre
+des runs n'ayant pas tous les mêmes métriques.
+
+Ainsi, la métrique considérée comme la plus importante influence
+davantage le résultat, tandis que les deux autres restent prises en
+compte dans l'évaluation globale.
+
+Le score global facilite ensuite la comparaison entre plusieurs
+expériences ou plusieurs versions d'un même modèle. Les mécanismes de
+sélection, de promotion et de mise en production seront détaillés dans
+le Sprint 3.
+
+
+% =========================================================
+% 4.6 MOTEUR D'ENTRAÎNEMENT
+% =========================================================
+
+\section{Mise en place du moteur d'entraînement}
+\label{sec:sprint2-training-engine}
+
+Afin de répondre à différents niveaux de maîtrise et à différents
+besoins techniques, deux modes d'entraînement ont été intégrés à la
+plateforme : un \textbf{mode standard}, basé sur un environnement déjà
+préparé, et un \textbf{mode Docker personnalisé}, permettant à
+l'utilisateur de définir son propre environnement.
+
+% =========================================================
+\subsection{Mode d'entraînement standard}
+\label{subsec:sprint2-standard}
+
+Le premier mode d'exécution est le \textbf{mode standard}. Il permet à
+l'utilisateur de lancer rapidement un entraînement sans avoir à préparer
+lui-même un environnement Docker.
+
+Ce mode est principalement destiné aux premiers essais, aux prototypes,
+aux tests rapides ainsi qu'aux utilisateurs qui souhaitent se concentrer
+sur le script et les données plutôt que sur la préparation de
+l'environnement technique.
+
+Dans ce mode, la plateforme utilise une \textbf{image Docker fixe déjà
+construite et prête à l'emploi}. Cette image contient notamment
+\textit{NumPy}, \textit{Pandas}, \textit{Scikit-learn},
+\textit{SciPy}, \textit{Joblib}, \textit{Matplotlib},
+\textit{Seaborn}, \textit{XGBoost}, \textit{LightGBM},
+\textit{PyTorch}, \textit{TorchVision}, \textit{OpenCV},
+\textit{Pillow}, \textit{CloudPickle}, \textit{PyYAML},
+\textit{Requests} et \textit{MLflow}.
+
+L'un de ses principaux avantages est donc la rapidité : aucune nouvelle
+image n'est construite avant chaque entraînement.
+
+Cette simplicité impose cependant une limite. Le script Python doit
+rester compatible avec les dépendances présentes dans l'image standard.
+
+Une \textbf{analyse automatique du script} est donc réalisée avant
+l'exécution. Le backend soumet le fichier à un service FastAPI dédié
+qui analyse les imports via un parser AST et détecte les algorithmes
+ML utilisés. Cette analyse permet de vérifier la compatibilité avec
+le runtime standard, de déduire le type de problème
+(classification ou régression) et le type de données
+(tabulaire, textuel ou image).
+
+Si les dépendances sont compatibles, le run peut être lancé. Dans le
+cas contraire, l'utilisateur peut utiliser le mode Docker personnalisé.
+
+
+% =========================================================
+\subsubsection{Workflow du mode standard}
+\label{subsubsec:sprint2-standard-workflow}
+
+Après la validation du script, le backend envoie le fichier et le
+dataset au \textbf{Pipeline Gateway}, un service FastAPI dédié qui
+assure la passerelle entre le backend et Kubeflow Pipelines. Le
+Gateway génère un fichier de configuration YAML contenant les
+paramètres du run, puis soumet le pipeline au serveur Kubeflow.
+
+Le pipeline standard est composé d'un seul step. Il utilise
+l'image standard déjà construite, télécharge le dataset depuis le
+Gateway puis exécute le script Python. Les métriques et les artefacts
+sont automatiquement enregistrés dans MLflow.
+
+Le diagramme de séquence \ref{fig:uml-standard-sequence} montre les
+échanges entre les cinq composants impliqués dans un entraînement
+standard : le frontend, le backend, le Pipeline Gateway, Kubeflow
+et MLflow.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.92\textwidth,
+        keepaspectratio
+    ]{images/uml_standard_sequence.png}
+
+    \caption{Diagramme de séquence -- Entraînement standard}
+    \label{fig:uml-standard-sequence}
+\end{figure}
+
+Le workflow peut être résumé comme suit :
+
+\begin{center}
+
+\fbox{
+\parbox{7cm}{
+\centering
+\textbf{Script Python (.py) + Dataset}
+}
+}
+
+\vspace{0.10cm}
+
+$\downarrow$
+
+\vspace{0.10cm}
+
+\fbox{
+\parbox{7cm}{
+\centering
+\textbf{Backend Spring Boot}\\
+{\small Analyse AST et préparation du run}
+}
+}
+
+\vspace{0.10cm}
+
+$\downarrow$
+
+\vspace{0.10cm}
+
+\fbox{
+\parbox{7cm}{
+\centering
+\textbf{Pipeline Gateway (FastAPI:8001)}\\
+{\small Génération du YAML et soumission Kubeflow}
+}
+}
+
+\vspace{0.10cm}
+
+$\downarrow$
+
+\vspace{0.10cm}
+
+\fbox{
+\parbox{7cm}{
+\centering
+\textbf{Kubeflow Pipeline (un seul step)}\\
+{\small Image standard + téléchargement dataset + exécution}
+}
+}
+
+\vspace{0.10cm}
+
+$\downarrow$
+
+\vspace{0.10cm}
+
+\fbox{
+\parbox{7cm}{
+\centering
+\textbf{MLflow}
+$\rightarrow$
+\textbf{Métriques, artefacts et résultats}
+}
+}
+
+\end{center}
+
+\begin{figure}[H]
+
+    \centering
+
+    \includegraphics[
+        width=0.80\textwidth,
+        keepaspectratio
+    ]{images/sprint2_kubeflow_run.png}
+
+    \caption{Exécution du pipeline d'entraînement standard dans Kubeflow}
+    \label{fig:sprint2-kubeflow-run}
+
+\end{figure}
+
+
+% =========================================================
+\subsection{Mode Docker personnalisé}
+\label{subsec:sprint2-custom}
+
+Le second mode d'exécution est le \textbf{mode Docker personnalisé}.
+Il s'adresse principalement aux utilisateurs avancés qui souhaitent
+garder la maîtrise de leur environnement d'entraînement.
+
+Dans ce mode, l'utilisateur fournit le \textbf{script Python}, le
+\textbf{dataset}, le fichier \textbf{requirements.txt} ainsi que le
+\textbf{Dockerfile}.
+
+Il peut ainsi utiliser des bibliothèques particulières, choisir leurs
+versions et préparer un environnement adapté aux besoins de son modèle.
+
+La plateforme reste cependant responsable de l'orchestration. Elle
+modifie le Dockerfile fourni par l'utilisateur pour y injecter le
+code platform (script d'orchestration MLflow, dépendances communes,
+gestion des artefacts), prépare les fichiers nécessaires puis
+construit l'image personnalisée.
+
+
+% =========================================================
+\subsubsection{Jobs Kubernetes de build et d'entraînement}
+\label{subsubsec:sprint2-custom-jobs}
+
+L'exécution repose sur deux Jobs Kubernetes successifs.
+
+Le premier job utilise \textbf{Kaniko} pour construire l'image Docker
+directement dans le cluster, sans dépendre d'un démon Docker. L'image
+est ensuite poussée vers \textbf{Azure Container Registry} afin d'être
+disponible pour le second job. Kaniko construit l'image à partir du
+Dockerfile modifié et des fichiers préparés par la plateforme, puis
+l'enregistre dans le registre avec un tag identifiant le projet et
+l'expérience.
+
+Le second job, nommé \texttt{mlops-custom-...}, utilise l'image créée
+pour exécuter le script d'entraînement. Le dataset est monté via un
+volume persistant partagé afin d'être accessible sans avoir été
+intégré dans l'image.
+
+Le diagramme de séquence \ref{fig:uml-custom-sequence} présente la
+séquence en deux jobs : le build de l'image via Kaniko puis
+l'exécution du script d'entraînement.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.92\textwidth,
+        keepaspectratio
+    ]{images/uml_custom_sequence.png}
+
+    \caption{Diagramme de séquence -- Entraînement Docker personnalisé}
+    \label{fig:uml-custom-sequence}
+\end{figure}
+
+\begin{center}
+
+\fbox{
+\parbox{7.3cm}{
+\centering
+\textbf{Script + Dataset + Dockerfile + requirements.txt}
+}
+}
+
+\vspace{0.10cm}
+
+$\downarrow$
+
+\vspace{0.10cm}
+
+\fbox{
+\parbox{7.3cm}{
+\centering
+\textbf{Backend Spring Boot}\\
+{\small Injection du code platform dans le Dockerfile}
+}
+}
+
+\vspace{0.10cm}
+
+$\downarrow$
+
+\vspace{0.10cm}
+
+\fbox{
+\parbox{7.3cm}{
+\centering
+\textbf{Job Kubernetes de build (Kaniko)}\\
+{\small Construction et push vers Azure Container Registry}
+}
+}
+
+\vspace{0.10cm}
+
+$\downarrow$
+
+\vspace{0.10cm}
+
+\fbox{
+\parbox{7.3cm}{
+\centering
+\textbf{Image Docker personnalisée (ACR)}
+}
+}
+
+\vspace{0.10cm}
+
+$\downarrow$
+
+\vspace{0.10cm}
+
+\fbox{
+\parbox{7.3cm}{
+\centering
+\textbf{Job Kubernetes d'entraînement}\\
+{\small Montage du dataset via PVC partagé, exécution du script}
+}
+}
+
+\vspace{0.10cm}
+
+$\downarrow$
+
+\vspace{0.10cm}
+
+\fbox{
+\parbox{7.3cm}{
+\centering
+\textbf{MLflow}
+$\rightarrow$
+\textbf{Résultats}
+}
+}
+
+\end{center}
+
+La figure \ref{fig:sprint2-custom-jobs} présente un exemple des Jobs
+créés lors d'un entraînement personnalisé.
+
+\begin{figure}[H]
+
+    \centering
+
+    \includegraphics[
+        width=0.76\textwidth,
+        keepaspectratio
+    ]{images/sprint2_custom_jobs.png}
+
+    \caption{Jobs Kubernetes de construction de l'image et d'entraînement personnalisé}
+    \label{fig:sprint2-custom-jobs}
+
+\end{figure}
+
+Cette séparation facilite également le diagnostic. Un échec du Job de
+build indique généralement un problème lié à la préparation de
+l'environnement (Dockerfile, dépendances, syntaxe), tandis qu'un
+échec du Job d'entraînement oriente davantage l'analyse vers le
+script, les données ou le modèle.
+
+
+% =========================================================
+\subsection{Comparaison des deux modes d'entraînement}
+\label{subsec:sprint2-comparison}
+
+Les deux modes d'entraînement restent complémentaires et répondent à
+des besoins différents.
+
+\begin{table}[H]
+
+\centering
+\small
+
+\renewcommand{\arraystretch}{1.15}
+\setlength{\tabcolsep}{4pt}
+
+\begin{tabular}{|p{3.1cm}|p{5.1cm}|p{5.1cm}|}
+
+\hline
+
+\rowcolor{cyan!20}
+\textbf{Critère}
+&
+\textbf{Mode standard}
+&
+\textbf{Mode Docker personnalisé}
+\\
+\hline
+
+\textbf{Environnement}
+&
+Image fixe déjà préparée
+&
+Image propre au projet
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{Build avant entraînement}
+&
+Non
+&
+Oui (Kaniko)
+\\
+\hline
+
+\textbf{Dépendances}
+&
+Disponibles dans l'image standard
+&
+Définies par l'utilisateur
+\\
+\hline
+
+\rowcolor{cyan!7}
+\textbf{Public visé}
+&
+Débutants, prototypes et tests rapides
+&
+Utilisateurs avancés et projets spécifiques
+\\
+\hline
+
+\textbf{Avantage principal}
+&
+Simplicité et rapidité
+&
+Flexibilité et contrôle
+\\
+\hline
+
+\end{tabular}
+
+\caption{Comparaison des modes standard et Docker personnalisé}
+\label{tab:sprint2-mode-comparison}
+
+\end{table}
+
+
+% =========================================================
+% 4.7 SUIVI, NOTIFICATIONS ET RÉSULTATS
+% =========================================================
+
+\section{Suivi des expériences, notifications et résultats}
+\label{sec:sprint2-tracking-results}
+
+
+% =========================================================
+\subsection{Suivi des expériences avec MLflow}
+\label{subsec:sprint2-mlflow}
+
+MLflow est intégré aux deux modes afin de conserver une trace des
+expériences exécutées.
+
+Pour chaque run, il permet de retrouver les métriques produites ainsi
+que les artefacts associés. Le backend synchronise automatiquement
+les informations entre MLflow et la base de données de la plateforme,
+afin que les résultats soient consultables directement depuis
+l'interface sans avoir à accéder à l'outil MLflow.
+
+Cette intégration assure la traçabilité entre le projet, le run et
+les résultats produits, tout en préparant les fonctions de
+versionnement développées dans le sprint suivant.
+
+\begin{figure}[H]
+
+    \centering
+
+    \includegraphics[
+        width=0.80\textwidth,
+        keepaspectratio
+    ]{images/sprint2_mlflow_run.png}
+
+    \caption{Suivi d'une expérience d'entraînement dans MLflow}
+    \label{fig:sprint2-mlflow-run}
+
+\end{figure}
+
+
+% =========================================================
+\subsection{Notifications liées aux runs}
+\label{subsec:sprint2-notifications}
+
+Les entraînements pouvant durer plusieurs minutes, un mécanisme de
+notification en temps réel a été mis en place pour informer
+l'utilisateur sans qu'il ait besoin de recharger la page.
+
+Ce système repose sur \textbf{WebSocket} via le protocole STOMP
+avec SockJS. Chaque utilisateur s'abonne à un topic dédié
+(\texttt{/topic/users/\{userId\}/notifications}) et reçoit
+directement les événements émis par le backend.
+
+Lorsqu'un run se termine correctement, une notification confirmant la
+réussite est envoyée. En cas d'échec, l'utilisateur est informé que
+l'entraînement n'a pas abouti. Le même mécanisme est utilisé pour
+d'autres événements du cycle de vie du modèle : démarrage et résultat
+d'un déploiement, déclenchement d'un réentraînement ou encore alertes
+de monitoring.
+
+Côté administrateur, une diffusion séparée permet de suivre
+l'ensemble des événements plateforme depuis un seul canal.
+
+Les notifications opérationnelles ne passent pas par email. Ce canal
+est réservé à la vérification de compte et à la réinitialisation du
+mot de passe.
+
+\begin{figure}[H]
+
+    \centering
+
+    \includegraphics[
+        width=0.76\textwidth,
+        keepaspectratio
+    ]{images/sprint2_notifications.png}
+
+    \caption{Notifications associées au succès ou à l'échec des runs}
+    \label{fig:sprint2-notifications}
+
+\end{figure}
+
+
+% =========================================================
+\subsection{Consultation des résultats}
+\label{subsec:sprint2-results}
+
+Les informations utiles sont finalement remontées vers le backend puis
+affichées dans l'interface.
+
+L'utilisateur peut consulter le statut du run, les métriques obtenues
+ainsi que le score global calculé pour l'expérience sans devoir accéder
+directement aux outils techniques.
+
+Le score facilite également la comparaison entre plusieurs expériences
+ou plusieurs versions d'un même modèle.
+
+Une version satisfaisant les conditions de qualité peut ensuite devenir
+candidate à la production. Les mécanismes de versionnement, de promotion
+et de déploiement seront détaillés dans le Sprint 3.
+
+\begin{figure}[H]
+
+    \centering
+
+    \includegraphics[
+        width=0.80\textwidth,
+        keepaspectratio
+    ]{images/sprint2_training_results.png}
+
+    \caption{Consultation des résultats d'entraînement depuis la plateforme}
+    \label{fig:sprint2-training-results}
+
+\end{figure}
+
+
+% =========================================================
+% 4.8 DIAGRAMMES DE SÉQUENCE UML
+% =========================================================
+
+\section{Diagrammes de séquence UML}
+\label{sec:sprint2-uml}
+
+Afin de mieux illustrer les interactions entre les différents
+composants de la plateforme, deux diagrammes de séquence ont été
+réalisés. Ils couvrent le mode d'entraînement standard et le mode
+Docker personnalisé.
+
+
+% =========================================================
+% 4.9 BILAN DU SPRINT 2
+% =========================================================
+
+\section{Bilan du Sprint 2}
+\label{sec:sprint2-bilan}
+
+À la fin du Sprint 2, la plateforme disposait d'un premier parcours
+réellement exploitable.
+
+Les utilisateurs pouvaient s'authentifier, gérer leur espace, créer
+leurs projets, importer les fichiers nécessaires et travailler avec
+plusieurs types de données.
+
+Les deux modes d'exécution étaient opérationnels : le mode standard
+pour les tests rapides dans un environnement déjà préparé, et le mode
+Docker personnalisé pour les projets nécessitant davantage de contrôle
+sur les dépendances et l'environnement d'exécution.
+
+La gestion des métriques permettait d'adapter l'évaluation aux problèmes
+de classification ou de régression. Le score global apportait un
+indicateur commun pour comparer les expériences tout en tenant compte
+des priorités définies par l'utilisateur.
+
+MLflow assurait le suivi des runs, tandis que les notifications WebSocket
+et l'affichage des résultats facilitaient le suivi directement depuis
+l'interface de la plateforme.
+
+
+% =========================================================
+% 4.10 CONCLUSION
+% =========================================================
+
+\section{Conclusion}
+\label{sec:ch4-conclusion}
+
+Ce deuxième sprint a permis de construire le cœur fonctionnel de la
+plateforme et de relier la partie applicative au moteur d'entraînement
+MLOps.
+
+La solution permet désormais de gérer les utilisateurs et les projets,
+de prendre en charge différents types de données, de configurer les
+métriques, de choisir un mode d'exécution, de lancer un entraînement et
+d'en suivre le résultat dans un environnement centralisé.
+
+Le chapitre suivant sera consacré au Sprint 3, qui étend ce
+fonctionnement au reste du cycle de vie du modèle, notamment au
+versionnement, au déploiement, à la prédiction, au monitoring et au
+réentraînement.
+
+% =========================================================
+% FIN DU CHAPITRE 4
+% =========================================================

@@ -13,10 +13,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
-import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,7 +27,7 @@ import java.util.UUID;
  * POST /api/external/models/{registeredModelName}/predict-image
  * POST /api/external/models/{registeredModelName}/predict-text
  *
- * Header obligatoire : X-API-KEY (la clé identifie modèle, propriétaire, quota et usage).
+ * Header obligatoire : X-API-KEY (la clé identifie modèle, propriétaire et usage).
  *
  * Le client externe ne fournit JAMAIS model_name / model_alias : le modèle est
  * identifié par l'URL et le Gateway injecte automatiquement model_name +
@@ -42,7 +39,6 @@ import java.util.UUID;
  * - 403 KEY_DISABLED / KEY_NOT_FOR_MODEL / EXTERNAL_ACCESS_DISABLED
  * - 404 MODEL_NOT_FOUND
  * - 410 KEY_REVOKED / KEY_EXPIRED
- * - 429 QUOTA_EXCEEDED
  * - 503 MODEL_NOT_DEPLOYED
  *
  * Le URL Kubernetes interne du modèle n'est JAMAIS exposée dans la réponse.
@@ -137,29 +133,9 @@ public class ExternalPredictionController {
         }
 
         /*
-         * 3. QUOTA journalier (compteur atomique).
+         * 3. INCREMENT USAGE (compteur atomique, ne bloque jamais).
+         *    On incrementera success/failure apres le resultat.
          */
-        ModelGatewayService.QuotaResult quota = modelGatewayService.reserveQuota(key.getId());
-
-        if (!quota.isAllowed()) {
-            long latency = System.currentTimeMillis() - start;
-
-            recordAndLog(key, deployment, registeredModelName, 429, "QUOTA_EXCEEDED", latency, null);
-
-            System.out.println("[SMART_GATEWAY_QUOTA] requestId=" + requestId
-                    + " keyId=" + key.getId()
-                    + " modelName=" + registeredModelName
-                    + " requestsToday=" + quota.getRemaining()
-                    + " dailyQuota=" + quota.getLimit()
-                    + " latencyMs=" + latency);
-
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                    .headers(rateLimitHeaders(quota))
-                    .body(errorResponse(
-                            "QUOTA_EXCEEDED",
-                            "Quota journalier dépassé. Réessayez demain."
-                    ));
-        }
 
         if (requestBody == null || requestBody.isEmpty()) {
             long latency = System.currentTimeMillis() - start;
@@ -231,7 +207,6 @@ public class ExternalPredictionController {
             response.put("timestamp", LocalDateTime.now().toString());
 
             return ResponseEntity.status(modelResponse.getStatusCode())
-                    .headers(rateLimitHeaders(quota))
                     .body(response);
 
         } catch (HttpStatusCodeException e) {
@@ -298,6 +273,16 @@ public class ExternalPredictionController {
                 + " latencyMs=" + latencyMs);
 
         try {
+            if (success) {
+                modelGatewayService.incrementUsageSuccess(key.getId());
+            } else {
+                modelGatewayService.incrementUsageFailure(key.getId());
+            }
+        } catch (Exception e) {
+            System.out.println("[SMART_GATEWAY_USAGE] incrementUsage failed: " + e.getMessage());
+        }
+
+        try {
             modelGatewayService.recordUsage(
                     key.getId(),
                     modelId,
@@ -310,25 +295,12 @@ public class ExternalPredictionController {
                     errorCode
             );
         } catch (Exception e) {
-            System.out.println("[SMART_GATEWAY_USAGE] recordAndLog failed: " + e.getMessage());
+            System.err.println("[SMART_GATEWAY_USAGE] recordAndLog FAILED for keyId=" + key.getId()
+                    + " modelName=" + modelName
+                    + " status=" + statusCode
+                    + " error=" + e);
+            e.printStackTrace();
         }
-    }
-
-    private HttpHeaders rateLimitHeaders(ModelGatewayService.QuotaResult quota) {
-        HttpHeaders headers = new HttpHeaders();
-
-        if (quota.getLimit() != null) {
-            headers.set("X-RateLimit-Limit", String.valueOf(quota.getLimit()));
-            headers.set("X-RateLimit-Remaining", String.valueOf(quota.getRemaining()));
-        }
-
-        LocalDateTime reset = LocalDate.now().plusDays(1).atStartOfDay();
-        headers.set(
-                "X-RateLimit-Reset",
-                reset.atOffset(ZoneOffset.UTC).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-        );
-
-        return headers;
     }
 
     /*

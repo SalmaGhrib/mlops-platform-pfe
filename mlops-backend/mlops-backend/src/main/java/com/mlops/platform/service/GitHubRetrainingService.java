@@ -416,7 +416,7 @@ public class GitHubRetrainingService {
                     created.setEnabled(true);
                     created.setFrequencyType(RetrainingFrequencyType.WEEK);
                     created.setFrequencyValue(1);
-                    created.setStrategy(RetrainingStrategy.SCHEDULED_ONLY);
+                    created.setStrategy(RetrainingStrategy.MONITORING_SMART);
                     return retrainingConfigRepository.save(created);
                 });
     }

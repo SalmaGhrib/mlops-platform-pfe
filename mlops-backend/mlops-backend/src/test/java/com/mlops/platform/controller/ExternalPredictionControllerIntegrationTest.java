@@ -80,8 +80,7 @@ class ExternalPredictionControllerIntegrationTest {
         ModelDeployment deployment = deployment(modelName, version, endpoint);
         when(modelGatewayService.validateApiKey(any(), any())).thenReturn(apiKey());
         when(modelGatewayService.resolveGatewayDeployment(any())).thenReturn(deployment);
-        when(modelGatewayService.reserveQuota(any()))
-                .thenReturn(new ModelGatewayService.QuotaResult(true, 1000L, 999L));
+        org.mockito.Mockito.doNothing().when(modelGatewayService).incrementUsage(any());
     }
 
     private static String bodyOf(ClientHttpRequest request) {

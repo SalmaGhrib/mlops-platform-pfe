@@ -578,20 +578,12 @@ export class UserMonitoringComponent implements OnInit, OnDestroy {
 
     const s = strategy.toUpperCase();
 
-    if (s === 'SCHEDULED_ONLY') {
-      return 'Réentraînement planifié';
-    }
-
-    if (s === 'SCHEDULED_WITH_MONITORING') {
-      return 'Réentraînement planifié avec monitoring';
-    }
-
-    if (s === 'SMART_MONITORING_ONLY') {
+    if (s === 'MONITORING_SMART') {
       return 'Réentraînement intelligent';
     }
 
-    if (s === 'FULL_SMART') {
-      return 'Réentraînement intelligent complet';
+    if (s === 'GITHUB_ACTIONS') {
+      return 'Réentraînement GitHub Actions';
     }
 
     return 'Réentraînement';
@@ -612,7 +604,7 @@ export class UserMonitoringComponent implements OnInit, OnDestroy {
 
   /**
    * Date à afficher pour "Prochain réentraînement" : pour une stratégie
-   * pilotée par monitoring (SMART_MONITORING_ONLY), l'échéance planifiée
+   * pilotée par monitoring (MONITORING_SMART), l'échéance planifiée
    * n'existe pas : on affiche la prochaine échéance de contrôle.
    */
   getRetrainingNextDate(project: UserMonitoringProjectDashboard): string {
@@ -621,14 +613,8 @@ export class UserMonitoringComponent implements OnInit, OnDestroy {
     }
 
     const strategy = String(
-      project.retrainingStrategy || 'SCHEDULED_ONLY'
+      project.retrainingStrategy || 'MONITORING_SMART'
     ).toUpperCase();
-
-    if (strategy === 'SMART_MONITORING_ONLY') {
-      return project.nextMonitoringCheckAt
-        ? this.formatShortDate(project.nextMonitoringCheckAt)
-        : 'Déclenché par monitoring';
-    }
 
     return project.nextRetrainingAt
       ? this.formatShortDate(project.nextRetrainingAt)

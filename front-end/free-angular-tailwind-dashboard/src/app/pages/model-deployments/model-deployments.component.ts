@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Observable, catchError, of } from 'rxjs';
+import { Observable, Subject, debounceTime, distinctUntilChanged, catchError, of } from 'rxjs';
 
 import {
   DeploymentVisibility,
@@ -44,8 +44,14 @@ export class ModelDeploymentsComponent implements OnInit, OnDestroy {
   savingVisibility: Record<number, boolean> = {};
   savingShares: Record<number, boolean> = {};
 
+  searchTerms: Record<number, Subject<string>> = {};
+  dropdownOpen: Record<number, boolean> = {};
+  searchLoading: Record<number, boolean> = {};
+  highlightIndex: Record<number, number> = {};
+
   private refreshIntervalId: any = null;
   private readonly autoRefreshMs = 30000;
+  private readonly debounceMs = 350;
 
   constructor(private modelRegistryService: ModelRegistryService) {}
 
@@ -327,20 +333,109 @@ export class ModelDeploymentsComponent implements OnInit, OnDestroy {
 
     const query = String(this.sharedUserSearch[deploymentId] || '').trim();
 
+    if (!this.searchTerms[deploymentId]) {
+      this.searchTerms[deploymentId] = new Subject<string>();
+
+      this.searchTerms[deploymentId]
+        .pipe(debounceTime(this.debounceMs), distinctUntilChanged())
+        .subscribe((q) => this.executeUserSearch(model, q));
+    }
+
     if (query.length < 2) {
       this.sharedUserResults[deploymentId] = [];
+      this.dropdownOpen[deploymentId] = false;
+      this.searchTerms[deploymentId].next('');
       return;
     }
+
+    this.searchTerms[deploymentId].next(query);
+  }
+
+  private executeUserSearch(model: any, query: string): void {
+    const deploymentId = this.getDeploymentId(model);
+
+    if (!deploymentId || query.length < 2) {
+      return;
+    }
+
+    this.searchLoading[deploymentId] = true;
 
     this.modelRegistryService.searchUsers(query, deploymentId).subscribe({
       next: (users) => {
         this.sharedUserResults[deploymentId] = users || [];
+        this.dropdownOpen[deploymentId] = true;
+        this.highlightIndex[deploymentId] = -1;
+        this.searchLoading[deploymentId] = false;
       },
       error: (error) => {
         console.error('[ModelDeployments] user search error', error);
         this.sharedUserResults[deploymentId] = [];
+        this.dropdownOpen[deploymentId] = false;
+        this.searchLoading[deploymentId] = false;
       }
     });
+  }
+
+  toggleDropdown(model: any): void {
+    const deploymentId = this.getDeploymentId(model);
+
+    if (!deploymentId) {
+      return;
+    }
+
+    const results = this.sharedUserResults[deploymentId] || [];
+
+    if (results.length > 0) {
+      this.dropdownOpen[deploymentId] = !this.dropdownOpen[deploymentId];
+    }
+  }
+
+  closeDropdown(deploymentId: number): void {
+    setTimeout(() => {
+      this.dropdownOpen[deploymentId] = false;
+    }, 200);
+  }
+
+  onDropdownKeyDown(model: any, event: KeyboardEvent): void {
+    const deploymentId = this.getDeploymentId(model);
+
+    if (!deploymentId) {
+      return;
+    }
+
+    const results = this.sharedUserResults[deploymentId] || [];
+    const idx = this.highlightIndex[deploymentId] ?? -1;
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      this.highlightIndex[deploymentId] = Math.min(idx + 1, results.length - 1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      this.highlightIndex[deploymentId] = Math.max(idx - 1, 0);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+
+      if (idx >= 0 && idx < results.length) {
+        this.addSharedUser(model, results[idx]);
+        this.sharedUserSearch[deploymentId] = '';
+        this.sharedUserResults[deploymentId] = [];
+        this.dropdownOpen[deploymentId] = false;
+      }
+    } else if (event.key === 'Escape') {
+      this.dropdownOpen[deploymentId] = false;
+    }
+  }
+
+  selectUserFromDropdown(model: any, user: UserSearchResult): void {
+    this.addSharedUser(model, user);
+
+    const deploymentId = this.getDeploymentId(model);
+
+    if (deploymentId) {
+      this.sharedUserSearch[deploymentId] = '';
+      this.sharedUserResults[deploymentId] = [];
+      this.dropdownOpen[deploymentId] = false;
+    }
   }
 
   onVisibilitySelectChange(model: any, event: Event): void {
@@ -398,7 +493,7 @@ export class ModelDeploymentsComponent implements OnInit, OnDestroy {
 
         this.errorMessage = this.extractErrorMessage(
           error,
-          'Erreur lors du changement du mode d’accès.'
+          'Erreur lors du changement du mode d\u2019accès.'
         );
 
         this.loadDeployments(false);
@@ -489,7 +584,7 @@ export class ModelDeploymentsComponent implements OnInit, OnDestroy {
         this.savingShares[deploymentId] = false;
         this.errorMessage = this.extractErrorMessage(
           error,
-          'Erreur lors de l’enregistrement des utilisateurs autorisés.'
+          'Erreur lors de l\u2019enregistrement des utilisateurs autorisés.'
         );
       }
     });
@@ -528,10 +623,33 @@ export class ModelDeploymentsComponent implements OnInit, OnDestroy {
       `${user.firstName || user.prenom || ''} ${user.lastName || user.nom || ''}`.trim();
 
     if (fullName && user.email) {
-      return `${fullName} — ${user.email}`;
+      return `${fullName} \u2014 ${user.email}`;
     }
 
     return fullName || user.email || `Utilisateur #${user.id}`;
+  }
+
+  getUserShortName(user: any): string {
+    if (!user) {
+      return '?';
+    }
+
+    const fullName =
+      user.fullName ||
+      user.name ||
+      `${user.firstName || user.prenom || ''} ${user.lastName || user.nom || ''}`.trim();
+
+    if (fullName) {
+      return fullName.length > 20 ? fullName.substring(0, 20) + '...' : fullName;
+    }
+
+    return user.email || `#${user.id}`;
+  }
+
+  getSharedUserCount(model: any): number {
+    const deploymentId = this.getDeploymentId(model);
+    if (deploymentId === null) { return 0; }
+    return (this.selectedSharedUsers[deploymentId] || []).length;
   }
 
   copyToClipboard(value: string, message = 'Copié.'): void {

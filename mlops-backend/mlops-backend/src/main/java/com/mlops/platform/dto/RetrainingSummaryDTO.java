@@ -10,7 +10,7 @@ public class RetrainingSummaryDTO {
 
     private Long projectId;
     private boolean enabled;
-    private String strategy = "SCHEDULED_ONLY";
+    private String strategy = "MONITORING_SMART";
     private String state = "IDLE";
     private String lastRetrainingAt;
     private String nextRetrainingAt;

@@ -2,6 +2,7 @@ package com.mlops.platform.service;
 
 import com.mlops.platform.dto.NotificationResponse;
 import com.mlops.platform.entity.MlExperiment;
+import com.mlops.platform.entity.MlProject;
 import com.mlops.platform.entity.Notification;
 import com.mlops.platform.entity.NotificationTargetType;
 import com.mlops.platform.entity.NotificationType;
@@ -398,6 +399,157 @@ public class NotificationService {
                 NotificationType.DEPLOYMENT_FAILED,
                 NotificationTargetType.DEPLOYMENT,
                 deploymentId
+        );
+    }
+
+    // =========================================================
+    // NOTIFICATIONS RÉENTRAÎNEMENT
+    // =========================================================
+
+    public void notifyRetrainingCompleted(
+            MlExperiment experiment
+    ) {
+        if (experiment == null) {
+            return;
+        }
+
+        User owner = getExperimentOwner(experiment);
+
+        if (owner == null) {
+            return;
+        }
+
+        String modelName = experiment.getRegisteredModelName() != null
+                ? experiment.getRegisteredModelName()
+                : safeExperimentName(experiment);
+
+        String message =
+                "Le réentraînement du modèle \""
+                        + modelName
+                        + "\" s'est terminé avec succès.";
+
+        if (experiment.getGlobalScore() != null) {
+            message += " Score global : "
+                    + String.format("%.4f", experiment.getGlobalScore())
+                    + ".";
+        }
+
+        if (experiment.getModelVersion() != null
+                && !experiment.getModelVersion().isBlank()) {
+            message += " Version : "
+                    + experiment.getModelVersion()
+                    + ".";
+        }
+
+        notifyUser(
+                owner,
+                "Réentraînement terminé",
+                message,
+                NotificationType.RETRAINING_COMPLETED,
+                NotificationTargetType.EXPERIMENT,
+                experiment.getId()
+        );
+    }
+
+    public void notifyRetrainingFailed(
+            MlExperiment experiment,
+            String reason
+    ) {
+        if (experiment == null) {
+            return;
+        }
+
+        User owner = getExperimentOwner(experiment);
+
+        if (owner == null) {
+            return;
+        }
+
+        String modelName = experiment.getRegisteredModelName() != null
+                ? experiment.getRegisteredModelName()
+                : safeExperimentName(experiment);
+
+        String message =
+                "Le réentraînement du modèle \""
+                        + modelName
+                        + "\" a échoué.";
+
+        if (reason != null && !reason.isBlank()) {
+            String cleanReason = reason.length() > 200
+                    ? reason.substring(0, 197) + "..."
+                    : reason;
+            message += " Raison : " + cleanReason + ".";
+        }
+
+        notifyUser(
+                owner,
+                "Réentraînement échoué",
+                message,
+                NotificationType.RETRAINING_FAILED,
+                NotificationTargetType.EXPERIMENT,
+                experiment.getId()
+        );
+    }
+
+    // =========================================================
+    // NOTIFICATIONS DÉPLOIEMENT DÉMARRÉ
+    // =========================================================
+
+    public void notifyDeploymentStarted(
+            Long deploymentId,
+            User owner,
+            String deploymentName
+    ) {
+        if (owner == null) {
+            return;
+        }
+
+        notifyUser(
+                owner,
+                "Déploiement démarré",
+                "Le déploiement \""
+                        + safeValue(
+                                deploymentName,
+                                "model deployment"
+                        )
+                        + "\" a été lancé.",
+                NotificationType.DEPLOYMENT_STARTED,
+                NotificationTargetType.DEPLOYMENT,
+                deploymentId
+        );
+    }
+
+    // =========================================================
+    // NOTIFICATION PRODUCTION PROMOTED
+    // =========================================================
+
+    public void notifyProductionPromoted(
+            Long experimentId,
+            User owner,
+            String modelName,
+            String version
+    ) {
+        if (owner == null) {
+            return;
+        }
+
+        String safeModelName =
+                safeValue(modelName, "modèle");
+
+        String message =
+                "La version "
+                        + safeValue(version, "N/A")
+                        + " du modèle \""
+                        + safeModelName
+                        + "\" est maintenant en Production.";
+
+        notifyUser(
+                owner,
+                "Nouvelle version en Production",
+                message,
+                NotificationType.NEW_PRODUCTION_VERSION,
+                NotificationTargetType.EXPERIMENT,
+                experimentId
         );
     }
 

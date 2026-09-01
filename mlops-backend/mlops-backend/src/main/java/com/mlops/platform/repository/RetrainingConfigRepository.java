@@ -94,40 +94,31 @@ public interface RetrainingConfigRepository
     /**
      * Configurations réclamables par le scheduler.
      *
-     * Une configuration est due lorsque :
-     * - une demande manuelle existe ;
-     * - ou nextRetrainingAt est atteint.
-     *
-     * La stratégie seule ne rend jamais une configuration due.
-     *
-     * Seules les configurations réclamables (isClaimable) sont renvoyées :
-     * les états EVALUATING / TRIGGERED / RUNNING sont exclus, et une
-     * configuration en COOLDOWN doit avoir dépassé sa période d'attente.
+     * Monitoring est toujours actif : toute configuration enabled + not running
+     * est éligible. Les états EVALUATING / TRIGGERED / RUNNING sont exclus,
+     * et une configuration en COOLDOWN doit avoir dépassé sa période d'attente.
      */
     @Query("""
         select c
         from RetrainingConfig c
         where c.enabled = true
           and c.running = false
+          and (
+                c.manualTriggerRequested = true
+                or c.nextRetrainingAt is null
+                or c.nextRetrainingAt <= :now
+              )
           and c.state in (
                 com.mlops.platform.entity.RetrainingState.IDLE,
                 com.mlops.platform.entity.RetrainingState.COMPLETED,
                 com.mlops.platform.entity.RetrainingState.FAILED,
                 com.mlops.platform.entity.RetrainingState.COOLDOWN
           )
-          and (
-                c.manualTriggerRequested = true
-                or (
-                    c.nextRetrainingAt is not null
-                    and c.nextRetrainingAt <= :now
-                )
-          )
         order by
             case
                 when c.manualTriggerRequested = true then 0
                 else 1
             end,
-            c.nextRetrainingAt asc,
             c.id asc
         """)
     List<RetrainingConfig> findDueConfigs(
@@ -167,7 +158,7 @@ public interface RetrainingConfigRepository
         update RetrainingConfig c
            set c.running = true,
                c.state = com.mlops.platform.entity.RetrainingState.EVALUATING,
-               c.lastTriggerWindow = coalesce(c.nextRetrainingAt, :now),
+               c.lastTriggerWindow = :now,
                c.updatedAt = :now
          where c.id = :id
            and c.enabled = true
@@ -177,13 +168,6 @@ public interface RetrainingConfigRepository
                 com.mlops.platform.entity.RetrainingState.COMPLETED,
                 com.mlops.platform.entity.RetrainingState.FAILED,
                 com.mlops.platform.entity.RetrainingState.COOLDOWN
-           )
-           and (
-                c.manualTriggerRequested = true
-                or (
-                    c.nextRetrainingAt is not null
-                    and c.nextRetrainingAt <= :now
-                )
            )
         """)
     int claimDueConfig(
@@ -573,6 +557,7 @@ public interface RetrainingConfigRepository
     @Query("""
         update RetrainingConfig c
            set c.state = com.mlops.platform.entity.RetrainingState.IDLE,
+               c.nextRetrainingAt = :nextRetrainingAt,
                c.lastTriggerReason = 'RECONCILED',
                c.lastDecisionReason =
                    'Expérience de réentraînement terminée : état réinitialisé.',
@@ -587,6 +572,9 @@ public interface RetrainingConfigRepository
     int resetFinishedConfigToIdle(
             @Param("id")
             Long id,
+
+            @Param("nextRetrainingAt")
+            LocalDateTime nextRetrainingAt,
 
             @Param("now")
             LocalDateTime now

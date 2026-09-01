@@ -23,6 +23,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.nio.file.*;
 
 @Service
 public class KubernetesJobService {
@@ -639,28 +640,134 @@ public class KubernetesJobService {
          *  - on n'injecte la variable QUE si le fichier existe réellement sur
          *    le PVC partagé /app/uploads (vérifié par le resolver).
          */
-        UploadedProjectFile resolvedDataset = datasetFileResolverService.resolveDatasetFile(project, experiment);
-
         String datasetPath = null;
-        if (resolvedDataset != null && hasText(resolvedDataset.getFilePath())) {
-            datasetPath = normalizeMountPath(resolvedDataset.getFilePath());
+        UploadedProjectFile resolvedDataset = null;
+
+        Path workspaceDatasetPath = Path.of(
+                uploadsStorageProperties.getMountPath(),
+                "workspaces",
+                String.valueOf(experiment.getId()),
+                "dataset.csv"
+        );
+        if (Files.exists(workspaceDatasetPath)) {
+            datasetPath = workspaceDatasetPath.toString();
+            System.out.println("[DATASET_SELECTION] Using workspace dataset: " + datasetPath);
+        } else {
+            Path workspaceExtractedPath = Path.of(
+                    uploadsStorageProperties.getMountPath(),
+                    "workspaces",
+                    String.valueOf(experiment.getId()),
+                    "dataset-extracted"
+            );
+            if (Files.isDirectory(workspaceExtractedPath)) {
+                try (java.util.stream.Stream<Path> files = Files.list(workspaceExtractedPath)) {
+                    Path csvFile = files
+                            .filter(p -> p.toString().toLowerCase(Locale.ROOT).endsWith(".csv"))
+                            .findFirst()
+                            .orElse(null);
+                    if (csvFile != null) {
+                        datasetPath = csvFile.toString();
+                        System.out.println("[DATASET_SELECTION] Using workspace extracted dataset: " + datasetPath);
+                    }
+                } catch (Exception e) {
+                    System.out.println("[DATASET_SELECTION] Failed to list workspace extracted dir: " + e.getMessage());
+                }
+            }
         }
 
-        if (datasetPath != null && datasetPath.toLowerCase(Locale.ROOT).endsWith(".py")) {
-            throw new IllegalStateException(
-                    "Invalid dataset path: Python script selected as dataset: " + datasetPath
-                            + " (file=" + resolvedDataset.getOriginalFileName()
-                            + ", role=" + (resolvedDataset.getRole() == null ? "-" : resolvedDataset.getRole().name())
-                            + "). La plateforme ne transmet jamais un script comme dataset."
-            );
+        if (datasetPath == null) {
+            resolvedDataset = datasetFileResolverService.resolveDatasetFile(project, experiment);
+
+            if (resolvedDataset != null && hasText(resolvedDataset.getFilePath())) {
+                datasetPath = normalizeMountPath(resolvedDataset.getFilePath());
+            }
+
+            if (datasetPath != null && datasetPath.toLowerCase(Locale.ROOT).endsWith(".py")) {
+                throw new IllegalStateException(
+                        "Invalid dataset path: Python script selected as dataset: " + datasetPath
+                                + " (file=" + resolvedDataset.getOriginalFileName()
+                                + ", role=" + (resolvedDataset.getRole() == null ? "-" : resolvedDataset.getRole().name())
+                                + "). La plateforme ne transmet jamais un script comme dataset."
+                );
+            }
+
+            if (datasetPath != null) {
+                System.out.println("[DATASET_SELECTION] Using resolved dataset: " + datasetPath
+                        + ", file=" + resolvedDataset.getOriginalFileName()
+                        + ", role=" + (resolvedDataset.getRole() == null ? "-" : resolvedDataset.getRole().name()));
+            }
         }
 
         if (datasetPath != null) {
+            Path dp = Path.of(datasetPath);
+            boolean fileExists = Files.exists(dp);
+
+            if (!fileExists) {
+                System.out.println("[RETRAINING_DATASET_PREFLIGHT] File NOT found at resolved path. "
+                        + "Attempting dotless legacy fix. path=" + datasetPath);
+                String fixedPath = attemptDotlessDatasetFix(datasetPath, experiment, resolvedDataset);
+                if (fixedPath != null) {
+                    datasetPath = fixedPath;
+                }
+                dp = Path.of(datasetPath);
+                fileExists = Files.exists(dp);
+            }
+
+            String resolvedExt = "";
+            String dpName = dp.getFileName().toString();
+            int dotIdx = dpName.lastIndexOf(".");
+            if (dotIdx > 0 && dotIdx < dpName.length() - 1) {
+                resolvedExt = dpName.substring(dotIdx + 1);
+            }
+
+            if (fileExists && resolvedExt.isBlank()) {
+                System.out.println("[RETRAINING_DATASET_PREFLIGHT] File exists but has no dot extension. "
+                        + "Attempting dotless legacy fix. path=" + datasetPath);
+                String fixedPath = attemptDotlessDatasetFix(datasetPath, experiment, resolvedDataset);
+                if (fixedPath != null) {
+                    datasetPath = fixedPath;
+                    dp = Path.of(datasetPath);
+                    dpName = dp.getFileName().toString();
+                    dotIdx = dpName.lastIndexOf(".");
+                    if (dotIdx > 0 && dotIdx < dpName.length() - 1) {
+                        resolvedExt = dpName.substring(dotIdx + 1);
+                    }
+                }
+            }
+
+            if (!fileExists) {
+                throw new IllegalStateException(
+                        "[RETRAINING_DATASET_PREFLIGHT] ABORT: Dataset file does not exist at path: "
+                                + datasetPath
+                                + ". projectId=" + project.getId()
+                                + ", experimentId=" + experiment.getId()
+                                + ". Cannot launch K8s Job without a valid dataset."
+                );
+            }
+
+            if (resolvedExt.isBlank()) {
+                System.out.println("[RETRAINING_DATASET_PREFLIGHT] WARNING: No detectable extension. "
+                        + "path=" + datasetPath + ". Job may fail with 'Unsupported dataset format'.");
+            }
+
             addEnv(envVars, "DATASET_PATH", datasetPath);
             addEnv(envVars, "DATA_PATH", datasetPath);
-            System.out.println("[DATASET_SELECTION] DATASET_PATH=" + datasetPath
-                    + ", file=" + resolvedDataset.getOriginalFileName()
-                    + ", role=" + (resolvedDataset.getRole() == null ? "-" : resolvedDataset.getRole().name()));
+
+            System.out.println("[RETRAINING_DATASET]"
+                    + " projectId=" + project.getId()
+                    + ", sourceExperimentId=" + experiment.getId()
+                    + ", originalFilename=" + (experiment.getDatasetFile() != null
+                        ? experiment.getDatasetFile().getOriginalFileName() : "null")
+                    + ", storedFilename=" + (experiment.getDatasetFile() != null
+                        ? experiment.getDatasetFile().getStoredFileName() : "null")
+                    + ", databasePath=" + (experiment.getDatasetFile() != null
+                        ? experiment.getDatasetFile().getFilePath() : "null")
+                    + ", resolvedPath=" + datasetPath
+                    + ", extension=" + resolvedExt
+                    + ", exists=" + fileExists
+                    + ", fallbackUsed=" + (datasetPath != null && !datasetPath.equals(
+                        experiment.getDatasetFile() != null ? experiment.getDatasetFile().getFilePath() : ""))
+            );
         }
 
         String trainingScriptPath = experiment.getModelFile() != null && hasText(experiment.getModelFile().getFilePath())
@@ -684,10 +791,8 @@ public class KubernetesJobService {
         System.out.println("[TRAINING-FILES] dockerfilePath=" + dockerfilePath);
         System.out.println("[TRAINING-FILES] trainingScriptRuntimeName=" + (experiment.getModelFile() != null
                 ? UploadFileNameNormalizer.runtimeName(experiment.getModelFile().getOriginalFileName(), UploadedFileType.TRAINING_SCRIPT) : "-"));
-        System.out.println("[TRAINING-FILES] datasetRuntimeName=" + (resolvedDataset != null
-                ? UploadFileNameNormalizer.runtimeName(
-                        resolvedDataset.getOriginalFileName(),
-                        resolvedDataset.getRole() != null ? resolvedDataset.getRole() : resolvedDataset.getFileType()) : "-"));
+        System.out.println("[TRAINING-FILES] datasetRuntimeName=" + (datasetPath != null
+                ? datasetPath.substring(datasetPath.lastIndexOf('/') + 1) : "-"));
         System.out.println("[TRAINING-FILES] requirementsRuntimeName=" + UploadFileNameNormalizer.REQUIREMENTS_RUNTIME_NAME
                 + ", dockerfileRuntimeName=" + UploadFileNameNormalizer.DOCKERFILE_RUNTIME_NAME);
 
@@ -853,6 +958,124 @@ public class KubernetesJobService {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private static final java.util.Set<String> KNOWN_DATASET_EXTENSIONS = java.util.Set.of(
+            "csv", "tsv", "json", "jsonl", "parquet", "xlsx", "xls",
+            "zip", "tar", "gz", "tgz", "7z", "rar",
+            "txt", "jpg", "jpeg", "png", "tif", "tiff"
+    );
+
+    private String attemptDotlessDatasetFix(String datasetPath, MlExperiment experiment,
+                                            UploadedProjectFile resolvedDataset) {
+        try {
+            Path brokenPath = Path.of(datasetPath);
+            String fileName = brokenPath.getFileName().toString();
+
+            if (fileName.contains(".")) {
+                return null;
+            }
+
+            String ext = null;
+
+            // 1) Try from the resolved dataset returned by DatasetFileResolverService
+            if (resolvedDataset != null) {
+                ext = resolvedDataset.getFileExtension();
+            }
+
+            // 2) Fallback to experiment's own dataset file
+            if (ext == null || ext.isBlank()) {
+                if (experiment.getDatasetFile() != null) {
+                    ext = experiment.getDatasetFile().getFileExtension();
+                }
+            }
+
+            // 3) Try originalFileName from either source
+            if (ext == null || ext.isBlank()) {
+                String origName = null;
+                if (resolvedDataset != null) {
+                    origName = resolvedDataset.getOriginalFileName();
+                }
+                if (origName == null && experiment.getDatasetFile() != null) {
+                    origName = experiment.getDatasetFile().getOriginalFileName();
+                }
+                if (origName != null && origName.contains(".")) {
+                    ext = origName.substring(origName.lastIndexOf(".") + 1);
+                }
+            }
+
+            if (ext == null || ext.isBlank()) {
+                System.out.println("[RETRAINING_DATASET_PREFLIGHT] Cannot determine extension for dotless fix. "
+                        + "path=" + datasetPath
+                        + ", resolvedDataset=" + (resolvedDataset != null ? resolvedDataset.getId() : "null")
+                        + ", experimentDatasetFile=" + (experiment.getDatasetFile() != null
+                            ? experiment.getDatasetFile().getId() : "null"));
+                return null;
+            }
+
+            ext = ext.trim().toLowerCase(Locale.ROOT);
+            if (ext.startsWith(".")) {
+                ext = ext.substring(1);
+            }
+
+            if (!KNOWN_DATASET_EXTENSIONS.contains(ext)) {
+                return null;
+            }
+
+            if (!Files.exists(brokenPath)) {
+                System.out.println("[RETRAINING_DATASET_PREFLIGHT] Source file also not found. "
+                        + "path=" + brokenPath + ". Cannot rename.");
+                return null;
+            }
+
+            String uuidPart = fileName.substring(0, fileName.length() - ext.length());
+            String fixedName = uuidPart + "." + ext;
+
+            Path parentDir = brokenPath.getParent();
+            if (parentDir == null) {
+                return null;
+            }
+            Path fixedPath = parentDir.resolve(fixedName);
+
+            if (Files.exists(fixedPath)) {
+                System.out.println("[RETRAINING_DATASET_PREFLIGHT] Fixed file already exists. "
+                        + "fixedPath=" + fixedPath);
+            } else {
+                try {
+                    java.nio.file.Files.move(brokenPath, fixedPath, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                    java.nio.file.Files.copy(brokenPath, fixedPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    java.nio.file.Files.deleteIfExists(brokenPath);
+                }
+                System.out.println("[RETRAINING_DATASET_PREFLIGHT] Renamed dotless file on disk. "
+                        + "oldPath=" + brokenPath
+                        + ", newPath=" + fixedPath);
+            }
+
+            if (resolvedDataset != null) {
+                resolvedDataset.setFilePath(fixedPath.toString());
+                resolvedDataset.setStoredFileName(fixedName);
+            }
+            if (experiment.getDatasetFile() != null
+                    && experiment.getDatasetFile().getId() != null
+                    && resolvedDataset != null
+                    && experiment.getDatasetFile().getId().equals(resolvedDataset.getId())) {
+                experiment.getDatasetFile().setFilePath(fixedPath.toString());
+                experiment.getDatasetFile().setStoredFileName(fixedName);
+            }
+
+            System.out.println("[RETRAINING_DATASET_PREFLIGHT] Dotless legacy fix applied. "
+                    + "oldPath=" + brokenPath
+                    + ", fixedPath=" + fixedPath
+                    + ", extension=" + ext);
+
+            return fixedPath.toString();
+
+        } catch (Exception e) {
+            System.out.println("[RETRAINING_DATASET_PREFLIGHT] Dotless fix failed. "
+                    + "reason=" + e.getMessage());
+            return null;
+        }
     }
 
     private String safe(String value) {

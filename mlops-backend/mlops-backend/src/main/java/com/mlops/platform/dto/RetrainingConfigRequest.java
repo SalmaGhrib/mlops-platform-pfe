@@ -25,6 +25,8 @@ public class RetrainingConfigRequest {
     private Double dataDriftThresholdPercent;
     private RetrainingDataPolicy dataPolicy;
     private Double globalScoreThreshold;
+    private Double classificationMinimumGlobalScore;
+    private Double regressionMinimumGlobalScore;
 
     public boolean isEnabled() {
         return enabled;
@@ -136,5 +138,21 @@ public class RetrainingConfigRequest {
 
     public void setGlobalScoreThreshold(Double globalScoreThreshold) {
         this.globalScoreThreshold = globalScoreThreshold;
+    }
+
+    public Double getClassificationMinimumGlobalScore() {
+        return classificationMinimumGlobalScore;
+    }
+
+    public void setClassificationMinimumGlobalScore(Double classificationMinimumGlobalScore) {
+        this.classificationMinimumGlobalScore = classificationMinimumGlobalScore;
+    }
+
+    public Double getRegressionMinimumGlobalScore() {
+        return regressionMinimumGlobalScore;
+    }
+
+    public void setRegressionMinimumGlobalScore(Double regressionMinimumGlobalScore) {
+        this.regressionMinimumGlobalScore = regressionMinimumGlobalScore;
     }
 }

@@ -46,4 +46,17 @@ public interface ModelApiUsageRepository extends JpaRepository<ModelApiUsage, Lo
             @Param("deploymentId") Long deploymentId,
             @Param("after") LocalDateTime after
     );
+
+    @Query("SELECT NEW map("
+            + "COUNT(u) as total, "
+            + "SUM(CASE WHEN u.success = true THEN 1 ELSE 0 END) as successCount, "
+            + "COALESCE(AVG(CAST(u.latencyMs AS double)), 0.0) as avgLatency, "
+            + "MAX(u.requestedAt) as lastUsedAt) "
+            + "FROM ModelApiUsage u "
+            + "WHERE u.apiKeyId IN (SELECT k.id FROM ModelApiKey k WHERE k.deploymentId = :deploymentId) "
+            + "AND u.requestedAt > :after")
+    java.util.Map<String, Object> getAggregatedStats(
+            @Param("deploymentId") Long deploymentId,
+            @Param("after") LocalDateTime after
+    );
 }

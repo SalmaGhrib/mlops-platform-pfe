@@ -17,17 +17,13 @@ import java.util.List;
 import java.util.Map;
 
 /*
- * SMART MODEL GATEWAY — gestion des clés API.
- *
- * Toutes ces opérations sont réservées au propriétaire du modèle
- * (vérification via le header Authorization JWT).
+ * SMART MODEL GATEWAY — gestion des cles API.
  *
  * Endpoints :
  * - GET    /api/models/{modelId}/api-keys
  * - POST   /api/models/{modelId}/api-keys
  * - GET    /api/models/{modelId}/api-keys/stats
- * - PATCH  /api/model-api-keys/{keyId}/enable
- * - PATCH  /api/model-api-keys/{keyId}/disable
+ * - GET    /api/models/{modelId}/api-keys/my
  * - DELETE /api/model-api-keys/{keyId}
  */
 @RestController
@@ -76,35 +72,72 @@ public class ModelGatewayController {
         return ResponseEntity.ok(modelGatewayService.getStats(modelId, currentUser));
     }
 
-    @PatchMapping("/api/model-api-keys/{keyId}/enable")
-    public ResponseEntity<ModelApiKeyResponse> enableApiKey(
-            @PathVariable Long keyId,
+    @GetMapping("/api/models/{modelId}/api-keys/my")
+    public ResponseEntity<List<ModelApiKeyResponse>> getMyApiKeys(
+            @PathVariable Long modelId,
             @RequestHeader("Authorization") String authHeader
     ) {
         User currentUser = getUserFromAuthorizationHeader(authHeader);
-        return ResponseEntity.ok(modelGatewayService.setKeyEnabled(keyId, currentUser, true));
+        return ResponseEntity.ok(modelGatewayService.getMyApiKeys(modelId, currentUser));
     }
 
-    @PatchMapping("/api/model-api-keys/{keyId}/disable")
-    public ResponseEntity<ModelApiKeyResponse> disableApiKey(
-            @PathVariable Long keyId,
+    @GetMapping("/api/models/{modelId}/api-keys/all")
+    public ResponseEntity<List<ModelApiKeyResponse>> listAllApiKeysForDeployment(
+            @PathVariable Long modelId,
             @RequestHeader("Authorization") String authHeader
     ) {
         User currentUser = getUserFromAuthorizationHeader(authHeader);
-        return ResponseEntity.ok(modelGatewayService.setKeyEnabled(keyId, currentUser, false));
+        return ResponseEntity.ok(modelGatewayService.listAllApiKeysForDeployment(modelId, currentUser));
+    }
+
+    @GetMapping("/api/models/by-name/{registeredModelName}/api-keys")
+    public ResponseEntity<List<ModelApiKeyResponse>> listAllApiKeysForModel(
+            @PathVariable String registeredModelName,
+            @RequestHeader("Authorization") String authHeader
+    ) {
+        User currentUser = getUserFromAuthorizationHeader(authHeader);
+        return ResponseEntity.ok(modelGatewayService.listAllApiKeysForModel(registeredModelName, currentUser));
+    }
+
+    @PostMapping("/api/models/by-name/{registeredModelName}/api-keys")
+    public ResponseEntity<ModelApiKeyResponse> createApiKeyByName(
+            @PathVariable String registeredModelName,
+            @RequestHeader("Authorization") String authHeader,
+            @RequestBody(required = false) ModelApiKeyCreateRequest request
+    ) {
+        User currentUser = getUserFromAuthorizationHeader(authHeader);
+        return ResponseEntity.ok(modelGatewayService.createApiKeyByName(registeredModelName, currentUser, request));
+    }
+
+    @GetMapping("/api/models/by-name/{registeredModelName}/api-keys/my")
+    public ResponseEntity<List<ModelApiKeyResponse>> getMyApiKeysByName(
+            @PathVariable String registeredModelName,
+            @RequestHeader("Authorization") String authHeader
+    ) {
+        User currentUser = getUserFromAuthorizationHeader(authHeader);
+        return ResponseEntity.ok(modelGatewayService.getMyApiKeysByName(registeredModelName, currentUser));
+    }
+
+    @GetMapping("/api/models/{modelId}/api-keys/shared-users-status")
+    public ResponseEntity<List<Map<String, Object>>> getSharedUsersKeyStatus(
+            @PathVariable Long modelId,
+            @RequestHeader("Authorization") String authHeader
+    ) {
+        User currentUser = getUserFromAuthorizationHeader(authHeader);
+        return ResponseEntity.ok(modelGatewayService.getSharedUsersKeyStatus(modelId, currentUser));
     }
 
     @DeleteMapping("/api/model-api-keys/{keyId}")
-    public ResponseEntity<Map<String, Object>> revokeApiKey(
+    public ResponseEntity<Map<String, Object>> deleteApiKey(
             @PathVariable Long keyId,
             @RequestHeader("Authorization") String authHeader
     ) {
         User currentUser = getUserFromAuthorizationHeader(authHeader);
-        modelGatewayService.revokeApiKey(keyId, currentUser);
+        modelGatewayService.deleteApiKey(keyId, currentUser);
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("status", "success");
-        body.put("message", "Clé API révoquée.");
+        body.put("message", "Cle API supprimee definitivement.");
         body.put("timestamp", LocalDateTime.now().toString());
         return ResponseEntity.ok(body);
     }

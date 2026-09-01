@@ -126,6 +126,17 @@ public class AutoRetrainingScheduler {
                 );
             }
 
+            int k8sReconciled =
+                    autoRetrainingService
+                            .reconcileKubernetesJobStatuses(null);
+
+            if (k8sReconciled > 0) {
+                System.out.println(
+                        "[AUTO_RETRAINING] Reconciled K8s job statuses="
+                                + k8sReconciled
+                );
+            }
+
             List<RetrainingConfig> dueConfigs =
                     retrainingConfigRepository
                             .findDueConfigs(now);
@@ -214,8 +225,6 @@ public class AutoRetrainingScheduler {
 
         try {
             LocalDateTime now = utcNow();
-            LocalDateTime retryAt =
-                    now.plusMinutes(5);
 
             int released =
                     executeInNewTransaction(
@@ -223,7 +232,7 @@ public class AutoRetrainingScheduler {
                                     retrainingConfigRepository
                                             .releaseAfterFailure(
                                                     configId,
-                                                    retryAt,
+                                                    null,
                                                     now
                                             )
                     );
@@ -233,8 +242,6 @@ public class AutoRetrainingScheduler {
                             + configId
                             + ", result="
                             + released
-                            + ", retryAt="
-                            + retryAt
             );
 
         } catch (Exception releaseError) {
