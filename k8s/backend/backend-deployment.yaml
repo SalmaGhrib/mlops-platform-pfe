@@ -46,7 +46,7 @@ spec:
       containers:
         - name: mlops-backend
 
-          image: acrmlopssalmav2.azurecr.io/mlops-backend:mlops-pilot-api-keys-v2
+          image: acrmlopssalmav2.azurecr.io/mlops-backend:mlops-pilot-api-keys-v3
           imagePullPolicy: IfNotPresent
 
           ports:
