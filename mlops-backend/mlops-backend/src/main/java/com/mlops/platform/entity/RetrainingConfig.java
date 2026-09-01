@@ -19,9 +19,18 @@ public class RetrainingConfig {
 
     private boolean enabled = true;
 
+    /**
+     * @deprecated Les fréquences calendaires ne sont plus utilisées.
+     * Le retraining est déclenché uniquement par monitoring ou GitHub Actions.
+     */
+    @Deprecated
     @Enumerated(EnumType.STRING)
     private RetrainingFrequencyType frequencyType = RetrainingFrequencyType.WEEK;
 
+    /**
+     * @deprecated Les fréquences calendaires ne sont plus utilisées.
+     */
+    @Deprecated
     private Integer frequencyValue = 1;
 
     /**
@@ -92,14 +101,13 @@ public class RetrainingConfig {
     private LocalDateTime lastMonitoringCheckAt;
 
     /**
-     * Politique de source de données pour un retraining.
-     * Valeurs : ORIGINAL_DATASET, LATEST_DATASET, MERGED_DATASET.
-     * Conservée en base pour la reproductibilité (le retraining ne dépend pas de
-     * fichiers temporaires déjà supprimés).
+     * @deprecated La sélection manuelle de la source est supprimée.
+     * Le retraining utilise automatiquement le dernier dataset valide du projet.
      */
+    @Deprecated
     @Enumerated(EnumType.STRING)
     @Column(name = "data_policy", length = 40)
-    private RetrainingDataPolicy dataPolicy = RetrainingDataPolicy.ORIGINAL_DATASET;
+    private RetrainingDataPolicy dataPolicy = RetrainingDataPolicy.LATEST_DATASET;
 
     /**
      * Prochaine échéance du contrôle périodique (stratégies avec monitoring).
@@ -111,6 +119,11 @@ public class RetrainingConfig {
 
     private LocalDateTime lastRetrainingAt;
 
+    /**
+     * @deprecated La planification calendaire est supprimée.
+     * Le retraining est déclenché uniquement par monitoring ou GitHub Actions.
+     */
+    @Deprecated
     private LocalDateTime nextRetrainingAt;
 
     private boolean running = false;
@@ -192,6 +205,10 @@ public class RetrainingConfig {
         normalizeMonitoringSettings();
     }
 
+    /**
+     * @deprecated La normalisation des fréquences n'est plus nécessaire.
+     */
+    @Deprecated
     public void normalizeFrequency() {
         if (this.frequencyType == null) {
             this.frequencyType = RetrainingFrequencyType.WEEK;
@@ -241,6 +258,10 @@ public class RetrainingConfig {
         return value;
     }
 
+    /**
+     * @deprecated La planification calendaire est supprimée.
+     */
+    @Deprecated
     public LocalDateTime calculateNextRetrainingDate(LocalDateTime fromDate) {
         LocalDateTime base = fromDate != null ? fromDate : LocalDateTime.now(Clock.systemUTC());
         normalizeFrequency();
@@ -252,6 +273,10 @@ public class RetrainingConfig {
         };
     }
 
+    /**
+     * @deprecated La planification calendaire est supprimée.
+     */
+    @Deprecated
     public void scheduleNextFrom(LocalDateTime fromDate) {
         if (!enabled) {
             this.nextRetrainingAt = null;
@@ -263,10 +288,9 @@ public class RetrainingConfig {
     }
 
     /**
-     * Échéance du prochain contrôle périodique de monitoring.
-     * Par défaut aligné sur la période de retraining (même fréquence) mais stocké
-     * dans un champ dédié (nextMonitoringCheckAt) distinct de nextRetrainingAt.
+     * @deprecated La planification calendaire est supprimée.
      */
+    @Deprecated
     public LocalDateTime calculateNextMonitoringCheckDate(LocalDateTime fromDate) {
         LocalDateTime base = fromDate != null ? fromDate : LocalDateTime.now(Clock.systemUTC());
         return switch (frequencyType) {
@@ -467,12 +491,21 @@ public class RetrainingConfig {
         this.nextMonitoringCheckAt = nextMonitoringCheckAt;
     }
 
+    /**
+     * @deprecated La sélection manuelle de la source est supprimée.
+     * Le retraining utilise automatiquement le dernier dataset valide du projet.
+     */
+    @Deprecated
     public RetrainingDataPolicy getDataPolicy() {
-        return dataPolicy != null ? dataPolicy : RetrainingDataPolicy.ORIGINAL_DATASET;
+        return dataPolicy != null ? dataPolicy : RetrainingDataPolicy.LATEST_DATASET;
     }
 
+    /**
+     * @deprecated La sélection manuelle de la source est supprimée.
+     */
+    @Deprecated
     public void setDataPolicy(RetrainingDataPolicy dataPolicy) {
-        this.dataPolicy = dataPolicy != null ? dataPolicy : RetrainingDataPolicy.ORIGINAL_DATASET;
+        this.dataPolicy = dataPolicy != null ? dataPolicy : RetrainingDataPolicy.LATEST_DATASET;
     }
 
     public LocalDateTime getLastRetrainingAt() {
@@ -582,8 +615,9 @@ public class RetrainingConfig {
     }
 
     /**
-     * Vrai si l'échéance planifiée est atteinte à la date fournie.
+     * @deprecated La vérification d'échéance calendaire n'est plus utilisée.
      */
+    @Deprecated
     public boolean isScheduleDue(LocalDateTime now) {
         return nextRetrainingAt != null
                 && !nextRetrainingAt.isAfter(now);

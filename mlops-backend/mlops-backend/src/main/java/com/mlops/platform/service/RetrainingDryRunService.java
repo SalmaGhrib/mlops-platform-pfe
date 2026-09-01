@@ -118,10 +118,6 @@ public class RetrainingDryRunService {
         entry.setEnabled(config.isEnabled());
         entry.setState(config.getState());
         entry.setStrategy(config.getStrategy());
-        entry.setFrequency(
-                config.getFrequencyType() + "/" + config.getFrequencyValue()
-        );
-        entry.setNextRetrainingAt(config.getNextRetrainingAt());
         entry.setLastRetrainingAt(config.getLastRetrainingAt());
         entry.setManualRequest(config.isManualTriggerRequested());
         entry.setCachedSourceExperimentId(config.getSourceExperimentId());
@@ -134,11 +130,6 @@ public class RetrainingDryRunService {
             entry.setReason("Configuration invalide : projectId absent.");
             return entry;
         }
-
-        entry.setDue(
-                config.isManualTriggerRequested()
-                        || config.isScheduleDue(now)
-        );
 
         if (!config.isEnabled()) {
             entry.setAction(
@@ -158,19 +149,6 @@ public class RetrainingDryRunService {
             entry.setWouldRetrain(false);
             entry.setReason(
                     "Tentative en cours : état " + config.getState() + "."
-            );
-            return entry;
-        }
-
-        if (!entry.isDue()) {
-            entry.setAction(
-                    RetrainingDryRunResponse.RecommendedAction.NOT_DUE
-            );
-            entry.setWouldRetrain(false);
-            entry.setReason(
-                    "Échéance non atteinte : prochaine vérification "
-                            + config.getNextRetrainingAt()
-                            + "."
             );
             return entry;
         }

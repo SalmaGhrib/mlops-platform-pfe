@@ -422,25 +422,10 @@
                           class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
                         />
                       </div>
-
-                      <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                          Source des données
-                        </label>
-                        <select
-                          [(ngModel)]="projectForm.retrainingDataPolicy"
-                          name="retrainingDataPolicy"
-                          class="h-11 w-full rounded-xl border border-gray-300 bg-white px-4 text-sm text-gray-900 outline-none transition focus:border-green-500 focus:ring-4 focus:ring-green-500/10 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                        >
-                          <option value="ORIGINAL_DATASET">Dataset d'origine</option>
-                          <option value="LATEST_DATASET">Dernier dataset</option>
-                          <option value="MERGED_DATASET">Fusion (origine + nouveau)</option>
-                        </select>
-                      </div>
                     </div>
 
                     <div class="rounded-2xl border border-green-100 bg-green-50 px-4 py-3 text-xs leading-5 text-green-700 dark:border-green-900/40 dark:bg-green-900/20 dark:text-green-300">
-                      Le monitoring est toujours actif pour les modèles en Production. La plateforme surveille automatiquement les performances du modèle et l'évolution des données.
+                      Le monitoring est toujours actif pour les modèles en Production. En cas de baisse de performance ou de data drift, la plateforme utilise automatiquement le dernier dataset et les derniers fichiers valides du projet pour lancer un réentraînement.
                     </div>
                   </div>
                 </div>

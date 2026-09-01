@@ -2,16 +2,12 @@ import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
-export type RetrainingFrequencyType = 'DAY' | 'WEEK' | 'MONTH';
-
 export type RetrainingStrategy =
   | 'MONITORING_SMART'
   | 'GITHUB_ACTIONS';
 
 export interface RetrainingConfigRequest {
   enabled: boolean;
-  frequencyType: RetrainingFrequencyType;
-  frequencyValue: number;
 
   strategy?: RetrainingStrategy;
 
@@ -19,8 +15,6 @@ export interface RetrainingConfigRequest {
   minPredictionsForMonitoring?: number;
   performanceDropThresholdPercent?: number;
   dataDriftThresholdPercent?: number;
-
-  dataPolicy?: string;
 }
 
 export interface RetrainingConfigResponse {
@@ -28,10 +22,7 @@ export interface RetrainingConfigResponse {
   projectId: number;
   sourceExperimentId: number | null;
   enabled: boolean;
-  frequencyType: RetrainingFrequencyType;
-  frequencyValue: number;
   lastRetrainingAt: string | null;
-  nextRetrainingAt: string | null;
   running: boolean;
   createdAt: string;
   updatedAt: string;
@@ -48,7 +39,6 @@ export interface RetrainingConfigResponse {
   nextMonitoringCheckAt?: string | null;
   state?: string | null;
   cooldownUntil?: string | null;
-  dataPolicy?: string | null;
   experimentId?: number | null;
   jobName?: string | null;
   kubeflowRunName?: string | null;
@@ -87,7 +77,6 @@ export interface ProjectRetrainingSummaryDTO {
   strategy: string;
   state: string;
   lastRetrainingAt?: string | null;
-  nextRetrainingAt?: string | null;
   lastMonitoringCheckAt?: string | null;
   nextMonitoringCheckAt?: string | null;
   lastTriggerReason?: string | null;

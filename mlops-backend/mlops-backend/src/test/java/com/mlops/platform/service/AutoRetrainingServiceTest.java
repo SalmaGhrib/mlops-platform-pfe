@@ -82,6 +82,9 @@ class AutoRetrainingServiceTest {
     @Mock
     private PlatformTransactionManager transactionManager;
 
+    @Mock
+    private GitHubFileFetcherService gitHubFileFetcherService;
+
     private AutoRetrainingService service;
 
     private static final Long CONFIG_ID = 1L;
@@ -98,7 +101,8 @@ class AutoRetrainingServiceTest {
                 retrainingDecisionService,
                 sourceResolver,
                 kubernetesJobService,
-                transactionManager
+                transactionManager,
+                gitHubFileFetcherService
         );
 
         ReflectionTestUtils.setField(service, "maxConsecutiveFailures", 3);

@@ -23,6 +23,7 @@ public class MonitoringRetrainingTriggerService {
     private final MlExperimentRepository mlExperimentRepository;
     private final RetrainingDecisionService retrainingDecisionService;
     private final RetrainingSourceResolverService sourceResolver;
+    private final AutoRetrainingService autoRetrainingService;
     private final PlatformTransactionManager transactionManager;
 
     @Value("${monitoring.retraining.cooldown-minutes:120}")
@@ -33,12 +34,14 @@ public class MonitoringRetrainingTriggerService {
             MlExperimentRepository mlExperimentRepository,
             RetrainingDecisionService retrainingDecisionService,
             RetrainingSourceResolverService sourceResolver,
+            AutoRetrainingService autoRetrainingService,
             PlatformTransactionManager transactionManager
     ) {
         this.retrainingConfigRepository = retrainingConfigRepository;
         this.mlExperimentRepository = mlExperimentRepository;
         this.retrainingDecisionService = retrainingDecisionService;
         this.sourceResolver = sourceResolver;
+        this.autoRetrainingService = autoRetrainingService;
         this.transactionManager = transactionManager;
     }
 
@@ -71,32 +74,47 @@ public class MonitoringRetrainingTriggerService {
             return false;
         }
 
-        boolean requested = requestNow(
-                config.getId(),
-                "MONITORING_ALERT",
-                reason
-        );
+        try {
+            int claimed = autoRetrainingService.tryValidateAndClaimInNewTransaction(config.getId());
 
-        System.out.println(
-                "[MONITORING_RETRAINING] Retraining requested from "
-                        + "monitoring alert. projectId="
-                        + projectId
-                        + ", requested="
-                        + requested
-                        + ", reason="
-                        + safeMessage(reason)
-        );
+            if (claimed != 1) {
+                System.out.println(
+                        "[MONITORING_RETRAINING] Could not claim config. "
+                                + "projectId="
+                                + projectId
+                );
+                return false;
+            }
 
-        return requested;
+            autoRetrainingService.processClaimedConfig(config.getId());
+
+            System.out.println(
+                    "[MONITORING_RETRAINING] Retraining triggered from "
+                            + "monitoring alert. projectId="
+                            + projectId
+                            + ", reason="
+                            + safeMessage(reason)
+            );
+
+            return true;
+
+        } catch (Exception e) {
+            System.err.println(
+                    "[MONITORING_RETRAINING] Failed to trigger. "
+                            + "projectId="
+                            + projectId
+                            + ", reason="
+                            + safeMessage(e.getMessage())
+            );
+            return false;
+        }
     }
 
     /**
      * Analyse toutes les configurations actives.
      *
-     * Une configuration détectée en drift est marquée par une mise à jour
-     * atomique :
-     * - manualTriggerRequested=true ;
-     * - raison et décision conservées.
+     * Si un signal de monitoring justifie un réentraînement, la config est
+     * directement réclamée et traitée (pas de passage par le scheduler).
      */
     public int evaluateSmartTriggersForAllConfigs() {
         List<RetrainingConfig> configs =
@@ -170,20 +188,21 @@ public class MonitoringRetrainingTriggerService {
                     continue;
                 }
 
-                String triggerReason =
-                        decision.getTriggerType() != null
-                                ? decision.getTriggerType().name()
-                                : "SMART_MONITORING";
+                int claimed = autoRetrainingService.tryValidateAndClaimInNewTransaction(config.getId());
 
-                boolean requested = requestNow(
-                        config.getId(),
-                        triggerReason,
-                        decision.getReason()
-                );
-
-                if (requested) {
-                    requestedCount++;
+                if (claimed != 1) {
+                    System.out.println(
+                            "[MONITORING_RETRAINING] Could not claim config. "
+                                    + "projectId="
+                                    + projectId
+                                    + ", configId="
+                                    + config.getId()
+                    );
+                    continue;
                 }
+
+                autoRetrainingService.processClaimedConfig(config.getId());
+                requestedCount++;
 
             } catch (Exception exception) {
                 System.err.println(
@@ -277,42 +296,6 @@ public class MonitoringRetrainingTriggerService {
         }
 
         return true;
-    }
-
-    private boolean requestNow(
-            Long configId,
-            String triggerReason,
-            String decisionReason
-    ) {
-        if (configId == null) {
-            return false;
-        }
-
-        LocalDateTime now = utcNow();
-        LocalDateTime dueAt = now.minusSeconds(5);
-
-        int updatedRows = executeInNewTransaction(() ->
-                retrainingConfigRepository.requestSmartRetraining(
-                        configId,
-                        dueAt,
-                        safeMessage(triggerReason),
-                        safeMessage(decisionReason),
-                        now
-                )
-        );
-
-        System.out.println(
-                "[MONITORING_RETRAINING] Atomic request. configId="
-                        + configId
-                        + ", updatedRows="
-                        + updatedRows
-                        + ", dueAt="
-                        + dueAt
-                        + ", trigger="
-                        + safeMessage(triggerReason)
-        );
-
-        return updatedRows == 1;
     }
 
     private int executeInNewTransaction(

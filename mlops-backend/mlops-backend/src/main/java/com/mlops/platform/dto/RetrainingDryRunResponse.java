@@ -43,10 +43,7 @@ public class RetrainingDryRunResponse {
         private boolean enabled;
         private RetrainingState state;
         private RetrainingStrategy strategy;
-        private String frequency;
-        private LocalDateTime nextRetrainingAt;
         private LocalDateTime lastRetrainingAt;
-        private boolean due;
         private boolean manualRequest;
         private Long cachedSourceExperimentId;
         private boolean sourceReady;
@@ -98,36 +95,12 @@ public class RetrainingDryRunResponse {
             this.strategy = strategy;
         }
 
-        public String getFrequency() {
-            return frequency;
-        }
-
-        public void setFrequency(String frequency) {
-            this.frequency = frequency;
-        }
-
-        public LocalDateTime getNextRetrainingAt() {
-            return nextRetrainingAt;
-        }
-
-        public void setNextRetrainingAt(LocalDateTime nextRetrainingAt) {
-            this.nextRetrainingAt = nextRetrainingAt;
-        }
-
         public LocalDateTime getLastRetrainingAt() {
             return lastRetrainingAt;
         }
 
         public void setLastRetrainingAt(LocalDateTime lastRetrainingAt) {
             this.lastRetrainingAt = lastRetrainingAt;
-        }
-
-        public boolean isDue() {
-            return due;
-        }
-
-        public void setDue(boolean due) {
-            this.due = due;
         }
 
         public boolean isManualRequest() {

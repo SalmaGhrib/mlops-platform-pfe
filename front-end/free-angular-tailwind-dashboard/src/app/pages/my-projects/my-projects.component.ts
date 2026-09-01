@@ -42,7 +42,6 @@ type ProjectFormModel = MlProjectRequest & {
   minPredictionsForMonitoring: number;
   performanceDropThresholdPercent: number;
   dataDriftThresholdPercent: number;
-  retrainingDataPolicy: string;
 };
 
 @Component({
@@ -127,7 +126,6 @@ export class MyProjectsComponent implements OnInit {
             manualTriggerRequested: status?.manualTriggerRequested ?? config.manualTriggerRequested,
             lastDecisionReason: status?.lastDecisionReason ?? config.lastDecisionReason,
             lastTriggerReason: status?.lastTriggerReason ?? config.lastTriggerReason,
-            nextRetrainingAt: status?.nextRetrainingAt ?? config.nextRetrainingAt,
             lastRetrainingAt: status?.lastRetrainingAt ?? config.lastRetrainingAt,
           } as RetrainingConfigResponse;
         }
@@ -172,7 +170,6 @@ export class MyProjectsComponent implements OnInit {
       minPredictionsForMonitoring: 20,
       performanceDropThresholdPercent: 10,
       dataDriftThresholdPercent: 5,
-      retrainingDataPolicy: 'ORIGINAL_DATASET'
     };
   }
 
@@ -548,7 +545,6 @@ export class MyProjectsComponent implements OnInit {
       minPredictionsForMonitoring: 20,
       performanceDropThresholdPercent: 10,
       dataDriftThresholdPercent: 5,
-      retrainingDataPolicy: 'ORIGINAL_DATASET'
     };
 
     this.loadRetrainingConfigIntoForm(project.id);
@@ -577,8 +573,6 @@ export class MyProjectsComponent implements OnInit {
           config.performanceDropThresholdPercent ?? 10;
         this.projectForm.dataDriftThresholdPercent =
           config.dataDriftThresholdPercent ?? 5;
-        this.projectForm.retrainingDataPolicy =
-          config.dataPolicy || 'ORIGINAL_DATASET';
       },
       error: () => {
         this.retrainingConfigs[projectId] = null;
@@ -945,8 +939,6 @@ export class MyProjectsComponent implements OnInit {
   ): void {
     const request: RetrainingConfigRequest = {
       enabled: true,
-      frequencyType: 'WEEK',
-      frequencyValue: 1,
       strategy: 'MONITORING_SMART',
 
       minPredictionsForMonitoring:
@@ -955,7 +947,6 @@ export class MyProjectsComponent implements OnInit {
         this.projectForm.performanceDropThresholdPercent ?? 10,
       dataDriftThresholdPercent:
         this.projectForm.dataDriftThresholdPercent ?? 5,
-      dataPolicy: this.projectForm.retrainingDataPolicy || 'ORIGINAL_DATASET'
     };
 
     this.retrainingService.saveProjectConfig(projectId, request).subscribe({

@@ -79,11 +79,6 @@ public class RetrainingConfigService {
         boolean enabled = request.isEnabled();
 
         if (requireSourceExperiment && sourceExperimentId == null && enabled) {
-            /*
-             * Pour un projet déjà en Production, la source sera retrouvée plus bas
-             * avec RetrainingSourceResolverService. On ne bloque donc pas la création
-             * de la configuration si l'identifiant n'est pas transmis par le frontend.
-             */
             System.out.println(
                     "[RETRAINING_CONFIG] sourceExperimentId not provided; "
                             + "Production source will be resolved automatically. projectId="
@@ -101,9 +96,6 @@ public class RetrainingConfigService {
 
         boolean newConfig = config.getId() == null;
 
-        RetrainingFrequencyType frequencyType = resolveFrequencyType(request);
-        Integer frequencyValue = resolveFrequencyValue(request);
-
         config.setProjectId(projectId);
 
         if (sourceExperimentId != null) {
@@ -111,22 +103,13 @@ public class RetrainingConfigService {
         }
 
         config.setEnabled(enabled);
-        config.setFrequencyType(frequencyType);
-        config.setFrequencyValue(frequencyValue);
 
-        /*
-         * En l'absence de stratégie explicite, on applique le mode planifié simple.
-         */
         if (request.getStrategy() == null) {
             config.setStrategy(RetrainingStrategy.MONITORING_SMART);
         }
 
         applyMonitoringSettings(config, request);
 
-        /*
-         * Une simple modification ne doit jamais forcer running=false
-         * lorsqu'un réentraînement est réellement en cours.
-         */
         if (newConfig) {
             config.setRunning(false);
             config.setManualTriggerRequested(false);
@@ -137,21 +120,10 @@ public class RetrainingConfigService {
         config.setLastTriggerReason(enabled ? "CONFIG_UPDATED" : "DISABLED");
         config.setLastDecisionReason(null);
 
-        if (enabled) {
-            config.scheduleNextFrom(LocalDateTime.now());
-        } else {
-            config.setNextRetrainingAt(null);
-        }
+        config.setNextRetrainingAt(null);
 
         RetrainingConfig saved = retrainingConfigRepository.saveAndFlush(config);
 
-        /*
-         * IMPORTANT :
-         * La résolution de la source Production n'est plus effectuée ici.
-         * Elle peut appeler plusieurs services et prolonger la transaction HTTP.
-         * Le scheduler / RetrainingSourcePersistenceService résoudra la source
-         * lorsqu'une version Production sera disponible.
-         */
         return saved;
     }
 
@@ -177,8 +149,6 @@ public class RetrainingConfigService {
 
         RetrainingConfigRequest request = new RetrainingConfigRequest();
         request.setEnabled(true);
-        request.setFrequencyType(RetrainingFrequencyType.WEEK);
-        request.setFrequencyValue(1);
         request.setStrategy(RetrainingStrategy.MONITORING_SMART);
 
         return saveOrUpdateConfig(projectId, sourceExperimentId, request);
@@ -342,10 +312,6 @@ public class RetrainingConfigService {
             );
         }
 
-        if (request.getDataPolicy() != null) {
-            config.setDataPolicy(request.getDataPolicy());
-        }
-
         config.normalizeMonitoringSettings();
     }
 
@@ -366,28 +332,6 @@ public class RetrainingConfigService {
                     "Source experiment does not belong to projectId=" + projectId
             );
         }
-    }
-
-    private RetrainingFrequencyType resolveFrequencyType(
-            RetrainingConfigRequest request
-    ) {
-        if (request == null || request.getFrequencyType() == null) {
-            return RetrainingFrequencyType.WEEK;
-        }
-
-        return request.getFrequencyType();
-    }
-
-    private Integer resolveFrequencyValue(
-            RetrainingConfigRequest request
-    ) {
-        if (request == null
-                || request.getFrequencyValue() == null
-                || request.getFrequencyValue() <= 0) {
-            return 1;
-        }
-
-        return Math.min(request.getFrequencyValue(), 365);
     }
 
     private void notifyConfigChanged(

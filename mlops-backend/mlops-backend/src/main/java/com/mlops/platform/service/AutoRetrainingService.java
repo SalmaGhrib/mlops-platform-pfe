@@ -26,6 +26,7 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.nio.file.Path;
 
 @Service
 public class AutoRetrainingService {
@@ -58,6 +59,7 @@ public class AutoRetrainingService {
     private final RetrainingSourceResolverService sourceResolver;
     private final KubernetesJobService kubernetesJobService;
     private final PlatformTransactionManager transactionManager;
+    private final GitHubFileFetcherService gitHubFileFetcherService;
 
     public AutoRetrainingService(
             RetrainingConfigRepository retrainingConfigRepository,
@@ -68,7 +70,8 @@ public class AutoRetrainingService {
             RetrainingDecisionService retrainingDecisionService,
             RetrainingSourceResolverService sourceResolver,
             KubernetesJobService kubernetesJobService,
-            PlatformTransactionManager transactionManager
+            PlatformTransactionManager transactionManager,
+            GitHubFileFetcherService gitHubFileFetcherService
     ) {
         this.retrainingConfigRepository = retrainingConfigRepository;
         this.mlExperimentService = mlExperimentService;
@@ -79,6 +82,7 @@ public class AutoRetrainingService {
         this.sourceResolver = sourceResolver;
         this.kubernetesJobService = kubernetesJobService;
         this.transactionManager = transactionManager;
+        this.gitHubFileFetcherService = gitHubFileFetcherService;
     }
 
     public void processClaimedConfig(
@@ -418,6 +422,11 @@ public class AutoRetrainingService {
         }
     }
 
+    /**
+     * @deprecated La planification calendaire est supprimée.
+     * Utilisez directement tryValidateAndClaimInNewTransaction + processClaimedConfig.
+     */
+    @Deprecated
     public void launchScheduledRetraining(
             Long configId
     ) {
@@ -464,11 +473,6 @@ public class AutoRetrainingService {
         /**
          * Tentative atomique : valide rapidement la source et réclame la config.
          * Retourne 1 si claim réussi, 0 sinon.
-         *
-         * Lorsqu'aucune source Production valide n'existe (hors demande
-         * manuelle), l'échéance est AVANCÉE en base (état IDLE + next
-         * recalculé) afin de ne jamais laisser une configuration échue
-         * bloquée pour toujours. La tentative n'est pas réclamée.
          */
         public int tryValidateAndClaimInNewTransaction(Long configId) {
                 return executeInNewTransaction(() -> {
@@ -492,36 +496,36 @@ public class AutoRetrainingService {
                                 return 0;
                         }
 
-                        // Validate that a retraining source exists when not a manual request.
-                        if (!cfg.isManualTriggerRequested()) {
-                                Long resolved = null;
-                                try {
-                                        resolved = sourceResolver.resolveSourceExperimentIdOrNull(cfg.getProjectId(), cfg.getSourceExperimentId());
-                                } catch (Exception ignore) {
-                                }
-
-                                if (resolved == null) {
-                                        retrainingConfigRepository.updateStateForUnclaimedConfig(
-                                                        configId,
-                                                        RetrainingState.IDLE,
-                                                        null,
-                                                        "Aucune source Production valide : reporté.",
-                                                        now
-                                        );
-                                        System.out.println(
-                                                        "[AUTO_RETRAINING] Source invalid: skipped "
-                                                                        + "instead of blocking. configId="
-                                                                        + configId
-                                        );
-                                        return 0;
-                                }
+                        Long resolved = null;
+                        try {
+                                resolved = sourceResolver.resolveSourceExperimentIdOrNull(cfg.getProjectId(), cfg.getSourceExperimentId());
+                        } catch (Exception ignore) {
                         }
 
-                        // Finally, attempt the DB-level claim (same semantics as claimDueConfig)
+                        if (resolved == null) {
+                                retrainingConfigRepository.updateStateForUnclaimedConfig(
+                                                configId,
+                                                RetrainingState.IDLE,
+                                                null,
+                                                "Aucune source Production valide : reporté.",
+                                                now
+                                );
+                                System.out.println(
+                                                "[AUTO_RETRAINING] Source invalid: skipped "
+                                                                + "instead of blocking. configId="
+                                                                + configId
+                                );
+                                return 0;
+                        }
+
                         return retrainingConfigRepository.claimDueConfig(configId, now);
                 });
         }
 
+    /**
+     * @deprecated La planification calendaire est supprimée.
+     */
+    @Deprecated
     public void launchScheduledRetraining(
             RetrainingConfig config
     ) {
@@ -881,11 +885,18 @@ public class AutoRetrainingService {
         );
 
         try {
+            Path commitDir = gitHubFileFetcherService
+                    .fetchCommitArchive(repository, commitSha);
+
             MlExperimentResponse response =
                     mlExperimentService
-                            .retrainFromCurrentProductionExperiment(
+                            .retrainFromGitHubCommit(
                                     projectId,
                                     sourceExperimentId,
+                                    commitDir,
+                                    repository,
+                                    branch,
+                                    commitSha,
                                     RetrainingTriggerType.GITHUB_PUSH.name(),
                                     triggerMetadata
                             );
@@ -1021,11 +1032,10 @@ public class AutoRetrainingService {
                 int updated =
                         executeInNewTransaction(() -> {
                             LocalDateTime now = utcNow();
-                            config.scheduleNextFrom(now);
                             return retrainingConfigRepository
                                     .resetFinishedConfigToIdle(
                                             configId,
-                                            config.getNextRetrainingAt(),
+                                            null,
                                             now
                                     );
                         });

@@ -74,6 +74,7 @@ public class MlExperimentService {
     private final RunPipelineStepService runPipelineStepService;
     private final MetricNormalizationHelper metricNormalizationHelper;
     private final DatasetFileResolverService datasetFileResolverService;
+    private final GitHubFileFetcherService gitHubFileFetcherService;
 
     @Value("${app.upload.dir:uploads}")
     private String uploadDir;
@@ -100,7 +101,8 @@ public class MlExperimentService {
             PlatformTransactionManager transactionManager,
             RunPipelineStepService runPipelineStepService,
             MetricNormalizationHelper metricNormalizationHelper,
-            DatasetFileResolverService datasetFileResolverService
+            DatasetFileResolverService datasetFileResolverService,
+            GitHubFileFetcherService gitHubFileFetcherService
     ) {
         this.mlExperimentRepository = mlExperimentRepository;
         this.mlProjectRepository = mlProjectRepository;
@@ -119,6 +121,7 @@ public class MlExperimentService {
         this.runPipelineStepService = runPipelineStepService;
         this.metricNormalizationHelper = metricNormalizationHelper;
         this.datasetFileResolverService = datasetFileResolverService;
+        this.gitHubFileFetcherService = gitHubFileFetcherService;
     }
 
     /*
@@ -5883,6 +5886,398 @@ private void syncSingleProjectAutomatically(Long projectId) {
                 triggerType,
                 triggerMetadata
         );
+    }
+
+    /**
+     * Crée un réentraînement à partir des fichiers d'un commit GitHub.
+     *
+     * Contrairement à {@code retrainFromCurrentProductionExperiment} qui
+     * copie les fichiers de l'expériment Production, cette méthode crée de
+     * nouveaux {@link UploadedProjectFile} à partir du répertoire extrait
+     * de l'archive GitHub (commit exact).
+     */
+    @Transactional
+    public MlExperimentResponse retrainFromGitHubCommit(
+            Long projectId,
+            Long preferredSourceExperimentId,
+            Path commitDir,
+            String repository,
+            String branch,
+            String commitSha,
+            String triggerType,
+            String triggerMetadata
+    ) {
+        if (projectId == null) {
+            throw new IllegalArgumentException("projectId is required.");
+        }
+
+        MlProject project = mlProjectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Project not found: " + projectId
+                ));
+
+        MlExperiment sourceExperiment = null;
+        if (preferredSourceExperimentId != null) {
+            sourceExperiment = mlExperimentRepository
+                    .findByIdWithFiles(preferredSourceExperimentId)
+                    .orElse(null);
+        }
+
+        if (sourceExperiment == null) {
+            sourceExperiment = mlExperimentRepository
+                    .findCurrentProductionExperimentForProject(projectId)
+                    .flatMap(p -> mlExperimentRepository.findByIdWithFiles(p.getId()))
+                    .orElse(null);
+        }
+
+        String runtimeMode = "CUSTOM_DOCKERFILE";
+        String registeredModelName = "retrained_model";
+        String modelName = "retrained_model";
+        String primaryMetric = "accuracy";
+        String direction = "maximize";
+        String projectType = normalizeProjectType(project.getProjectType());
+
+        if (sourceExperiment != null) {
+            runtimeMode = firstNotBlank(
+                    sourceExperiment.getRuntimeMode(),
+                    getProjectRuntimeMode(project),
+                    "CUSTOM_DOCKERFILE"
+            );
+            registeredModelName = defaultValue(
+                    sourceExperiment.getRegisteredModelName(),
+                    buildRegisteredModelName(project)
+            );
+            modelName = defaultValue(sourceExperiment.getModelName(), registeredModelName);
+            primaryMetric = normalizeMetricKey(
+                    firstNotBlank(
+                            sourceExperiment.getPrimaryMetric(),
+                            project.getPrimaryMetric1(),
+                            "accuracy"
+                    )
+            );
+            direction = getDirectionFromMetric(primaryMetric);
+        }
+
+        runtimeMode = runtimeMode.trim().toUpperCase(Locale.ROOT);
+        if (!runtimeMode.equals("STANDARD_RUNTIME")
+                && !runtimeMode.equals("CUSTOM_DOCKERFILE")) {
+            runtimeMode = "CUSTOM_DOCKERFILE";
+        }
+
+        Path trainScript = gitHubFileFetcherService.resolveTrainingScript(commitDir);
+        Path dockerfile = gitHubFileFetcherService.resolveDockerfile(commitDir);
+        Path requirements = gitHubFileFetcherService.resolveRequirements(commitDir);
+        Path dataset = gitHubFileFetcherService.resolveDataset(commitDir);
+
+        if (trainScript == null) {
+            throw new IllegalStateException(
+                    "No training script (train.py, training.py, main.py) found in commit "
+                            + shortSha(commitSha) + " of " + repository
+            );
+        }
+
+        UploadedProjectFile modelFile = storeFileAsProjectFile(
+                project, trainScript, trainScript.getFileName().toString(),
+                UploadedFileType.TRAINING_SCRIPT, UploadedFileType.TRAINING_SCRIPT
+        );
+
+        UploadedProjectFile reqFile = null;
+        if (requirements != null) {
+            reqFile = storeFileAsProjectFile(
+                    project, requirements, requirements.getFileName().toString(),
+                    UploadedFileType.REQUIREMENTS, UploadedFileType.REQUIREMENTS
+            );
+        }
+
+        UploadedProjectFile datasetFile = null;
+        if (dataset != null) {
+            datasetFile = storeFileAsProjectFile(
+                    project, dataset, dataset.getFileName().toString(),
+                    UploadedFileType.DATASET_FILE, UploadedFileType.DATASET_FILE
+            );
+        }
+
+        Path dockerfilePath = null;
+        if (dockerfile != null) {
+            storeFileAsProjectFile(
+                    project, dockerfile, "Dockerfile",
+                    UploadedFileType.DOCKERFILE, UploadedFileType.DOCKERFILE
+            );
+            dockerfilePath = dockerfile;
+        }
+
+        String newRunName = buildUniqueRunName(
+                "github_retraining_" + buildMlflowExperimentName(project)
+        );
+
+        MlExperiment retraining = new MlExperiment();
+        retraining.setProject(project);
+        retraining.setExperimentName(newRunName);
+        retraining.setModelType(
+                sourceExperiment != null ? defaultValue(sourceExperiment.getModelType(), "CUSTOM") : "CUSTOM"
+        );
+        retraining.setModelName(modelName);
+        retraining.setRegisteredModelName(registeredModelName);
+        retraining.setTriggerType(triggerType);
+        retraining.setTriggerMetadata(triggerMetadata);
+        retraining.setMlflowExperimentName(buildMlflowExperimentName(project));
+        retraining.setPrimaryMetric(primaryMetric);
+        retraining.setDirection(direction);
+        retraining.setRuntimeMode(runtimeMode);
+        retraining.setTargetColumn(
+                sourceExperiment != null ? sourceExperiment.getTargetColumn() : null
+        );
+        retraining.setModelFile(modelFile);
+        retraining.setDatasetFile(datasetFile);
+        retraining.setCustomImageUri(
+                sourceExperiment != null ? sourceExperiment.getCustomImageUri() : null
+        );
+        retraining.setDockerfilePath(
+                dockerfile != null ? dockerfile.toString()
+                        : (sourceExperiment != null ? sourceExperiment.getDockerfilePath() : null)
+        );
+        retraining.setRequirementsPath(
+                reqFile != null ? reqFile.getFilePath() : null
+        );
+
+        retraining.setProduction(false);
+        retraining.setModelVersion(null);
+        retraining.setLatestVersion(null);
+        retraining.setProductionVersion(null);
+        retraining.setGlobalScore(null);
+        retraining.setPrimaryMetricValue(null);
+        retraining.setMlflowRunId(null);
+        retraining.setKubeflowRunId(null);
+        retraining.setKubeflowRunName(null);
+        retraining.setKubeflowStatus(null);
+        retraining.setErrorMessage(null);
+
+        retraining.setStatus(ExperimentStatus.CREATED);
+        retraining.setBuildStatus("GITHUB_COMMIT_WORKSPACE_READY");
+        retraining.setBuildLogs(
+                "Workspace built from GitHub commit " + shortSha(commitSha)
+                        + " of " + repository + ":" + branch
+                        + ". Files: train.py=" + (trainScript != null)
+                        + ", Dockerfile=" + (dockerfile != null)
+                        + ", requirements=" + (requirements != null)
+                        + ", dataset=" + (dataset != null)
+        );
+        retraining.setMessage(
+                "GitHub retraining created from commit " + shortSha(commitSha)
+                        + ". Runtime: " + runtimeMode + "."
+        );
+
+        MlExperiment savedExperiment = saveExperimentInNewTransaction(retraining);
+
+        System.out.println(
+                "[GITHUB_RETRAIN_EXPERIMENT] experimentId="
+                        + savedExperiment.getId()
+                        + ", projectId=" + projectId
+                        + ", repository=" + repository
+                        + ", branch=" + branch
+                        + ", commitSha=" + shortSha(commitSha)
+                        + ", runtime=" + runtimeMode
+                        + ", trainScript=" + trainScript.getFileName()
+                        + ", dataset=" + (dataset != null ? dataset.getFileName() : "none")
+        );
+
+        if ("CUSTOM_DOCKERFILE".equals(runtimeMode)) {
+            try {
+                String customImageUri = sourceExperiment != null
+                        ? sourceExperiment.getCustomImageUri() : null;
+
+                if (hasText(customImageUri)) {
+                    String jobName = kubernetesJobService
+                            .launchCustomImageTrainingJob(project, savedExperiment, customImageUri);
+
+                    MlExperiment updated = persistLaunchOutcomeInNewTransaction(
+                            savedExperiment.getId(),
+                            latest -> {
+                                latest.setKubeflowRunName(jobName);
+                                latest.setTrainingJobName(jobName);
+                                latest.setKubeflowStatus("RUNNING");
+                                latest.setBuildStatus("CUSTOM_IMAGE_JOB_RUNNING");
+                                latest.setBuildLogs("Kubernetes Job launched: " + jobName);
+                                latest.setMessage("GitHub retraining Job launched from commit " + shortSha(commitSha));
+                            }
+                    );
+
+                    triggerImmediateProjectSync(projectId);
+                    return mapToResponse(reloadExperimentForResponse(updated.getId()));
+                } else {
+                    retraining.setStatus(ExperimentStatus.CREATED);
+                    retraining.setBuildStatus("WAITING_FOR_IMAGE_BUILD");
+                    retraining.setBuildLogs("Waiting for CustomDockerRunWatcher to build image from commit.");
+                    retraining.setMessage("GitHub retraining from commit " + shortSha(commitSha) + ". Waiting for Kaniko image build.");
+
+                    MlExperiment saved = mlExperimentRepository.saveAndFlush(retraining);
+                    triggerImmediateProjectSync(projectId);
+                    return mapToResponse(reloadExperimentForResponse(saved.getId()));
+                }
+            } catch (Exception error) {
+                MlExperiment failed = persistLaunchOutcomeInNewTransaction(
+                        savedExperiment.getId(),
+                        latest -> {
+                            latest.setStatus(ExperimentStatus.FAILED);
+                            applyExecutionTimestampsForStatus(latest, ExperimentStatus.FAILED);
+                            latest.setBuildStatus("CUSTOM_IMAGE_JOB_FAILED");
+                            latest.setBuildLogs(limitForDatabase(error.getMessage(), 10000));
+                            latest.setErrorMessage(limitForDatabase(error.getMessage(), 2000));
+                            latest.setMessage("GitHub retraining could not launch Job.");
+                        }
+                );
+                notifyExperimentStatusChangedIfNeeded(ExperimentStatus.CREATED, failed);
+                return mapToResponse(reloadExperimentForResponse(failed.getId()));
+            }
+        }
+
+        savedExperiment.setStatus(ExperimentStatus.CREATED);
+        savedExperiment.setBuildStatus(null);
+        savedExperiment.setBuildLogs(null);
+        savedExperiment.setMessage("GitHub retraining from commit " + shortSha(commitSha) + ". Launching pipeline.");
+
+        MlExperiment savedForPipeline = saveExperimentInNewTransaction(savedExperiment);
+
+        try {
+            PipelineGatewayResponse gatewayResponse =
+                    pipelineClientService.launchCustomModelPipeline(
+                            savedForPipeline.getId(),
+                            project.getId(),
+                            project.getName(),
+                            modelName,
+                            registeredModelName,
+                            newRunName,
+                            sourceExperiment != null ? sourceExperiment.getTargetColumn() : null,
+                            primaryMetric,
+                            direction,
+                            projectType,
+                            runtimeMode,
+                            modelFile,
+                            datasetFile
+                    );
+
+            savedForPipeline.setKubeflowRunId(gatewayResponse.getKubeflowRunId());
+            savedForPipeline.setKubeflowRunName(
+                    defaultValue(gatewayResponse.getKubeflowRunName(), newRunName)
+            );
+            savedForPipeline.setRegisteredModelName(registeredModelName);
+
+            if (hasText(gatewayResponse.getMlflowRunId())
+                    && !isMlflowRunAlreadyLinkedToAnotherExperiment(
+                    gatewayResponse.getMlflowRunId(),
+                    savedForPipeline.getId()
+            )) {
+                savedForPipeline.setMlflowRunId(gatewayResponse.getMlflowRunId());
+            }
+
+            ExperimentStatus gatewayStatus = detectStatusFromGatewayResponse(gatewayResponse);
+            ExperimentStatus finalStatus =
+                    gatewayStatus == ExperimentStatus.FAILED
+                            ? ExperimentStatus.FAILED
+                            : ExperimentStatus.RUNNING;
+
+            String finalRegisteredModelName = registeredModelName;
+
+            MlExperiment updatedExperiment = persistLaunchOutcomeInNewTransaction(
+                    savedForPipeline.getId(),
+                    latest -> {
+                        latest.setKubeflowRunId(gatewayResponse.getKubeflowRunId());
+                        latest.setKubeflowRunName(
+                                defaultValue(gatewayResponse.getKubeflowRunName(), newRunName)
+                        );
+                        latest.setRegisteredModelName(finalRegisteredModelName);
+                        if (hasText(gatewayResponse.getMlflowRunId())
+                                && !isMlflowRunAlreadyLinkedToAnotherExperiment(
+                                gatewayResponse.getMlflowRunId(),
+                                latest.getId()
+                        )) {
+                            latest.setMlflowRunId(gatewayResponse.getMlflowRunId());
+                        }
+                        latest.setStatus(finalStatus);
+                        applyExecutionTimestampsForStatus(latest, finalStatus);
+                        if (gatewayStatus == ExperimentStatus.FAILED) {
+                            latest.setErrorMessage(limitForDatabase(gatewayResponse.getMessage(), 2000));
+                            latest.setMessage("GitHub retraining pipeline launch failed.");
+                        } else {
+                            latest.setErrorMessage(null);
+                            latest.setMessage("GitHub retraining launched from commit " + shortSha(commitSha) + ".");
+                        }
+                    }
+            );
+            triggerImmediateProjectSync(projectId);
+            return mapToResponse(reloadExperimentForResponse(updatedExperiment.getId()));
+
+        } catch (Exception error) {
+            MlExperiment failedExperiment = persistLaunchOutcomeInNewTransaction(
+                    savedForPipeline.getId(),
+                    latest -> {
+                        latest.setStatus(ExperimentStatus.FAILED);
+                        applyExecutionTimestampsForStatus(latest, ExperimentStatus.FAILED);
+                        latest.setErrorMessage(limitForDatabase(error.getMessage(), 2000));
+                        latest.setMessage("GitHub retraining could not launch pipeline.");
+                    }
+            );
+            notifyExperimentStatusChangedIfNeeded(ExperimentStatus.CREATED, failedExperiment);
+            return mapToResponse(reloadExperimentForResponse(failedExperiment.getId()));
+        }
+    }
+
+    private UploadedProjectFile storeFileAsProjectFile(
+            MlProject project,
+            Path source,
+            String originalName,
+            UploadedFileType fileType,
+            UploadedFileType role
+    ) {
+        try {
+            String storedName = UUID.randomUUID().toString().replace("-", "")
+                    + "-" + originalName.replaceAll("[^a-zA-Z0-9._-]", "_");
+
+            Path dest = Paths.get(uploadDir, "projects", String.valueOf(project.getId()), storedName);
+            Files.createDirectories(dest.getParent());
+            Files.copy(source, dest, StandardCopyOption.REPLACE_EXISTING);
+
+            UploadedProjectFile file = new UploadedProjectFile();
+            file.setProject(project);
+            file.setOriginalFileName(originalName);
+            file.setStoredFileName(storedName);
+            file.setFilePath(dest.toString());
+            file.setFileType(fileType);
+            file.setRole(role);
+            file.setSizeBytes(Files.size(source));
+            file.setContentType(detectContentType(originalName));
+            file.setFileExtension(extractExtension(originalName));
+
+            return uploadedProjectFileRepository.save(file);
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Failed to store GitHub commit file: " + originalName + " - " + e.getMessage(), e
+            );
+        }
+    }
+
+    private String detectContentType(String filename) {
+        if (filename == null) return "application/octet-stream";
+        String lower = filename.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".py")) return "text/x-python";
+        if (lower.endsWith(".txt")) return "text/plain";
+        if (lower.endsWith(".csv")) return "text/csv";
+        if (lower.endsWith(".json")) return "application/json";
+        if (lower.endsWith(".zip")) return "application/zip";
+        if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "text/yaml";
+        if (lower.endsWith(".dockerfile")) return "text/plain";
+        return "application/octet-stream";
+    }
+
+    private String extractExtension(String filename) {
+        if (filename == null) return null;
+        int dot = filename.lastIndexOf('.');
+        return dot >= 0 ? filename.substring(dot + 1).toLowerCase(Locale.ROOT) : null;
+    }
+
+    private String shortSha(String commitSha) {
+        if (commitSha == null) return "null";
+        return commitSha.length() <= 8 ? commitSha : commitSha.substring(0, 8);
     }
 
     private void validateRetrainingSourceOrThrow(

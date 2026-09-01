@@ -1,19 +1,11 @@
 package com.mlops.platform.dto;
 
-import com.mlops.platform.entity.RetrainingDataPolicy;
-import com.mlops.platform.entity.RetrainingFrequencyType;
 import com.mlops.platform.entity.RetrainingStrategy;
 
 public class RetrainingConfigRequest {
 
     private boolean enabled;
-    private RetrainingFrequencyType frequencyType;
-    private Integer frequencyValue;
 
-    /*
-     * Nouvelles options avancées.
-     * Si le frontend ne les envoie pas, le backend applique des valeurs par défaut.
-     */
     private RetrainingStrategy strategy;
     private Boolean failureMonitoringEnabled;
     private Boolean performanceMonitoringEnabled;
@@ -23,7 +15,6 @@ public class RetrainingConfigRequest {
     private Double maxPredictionErrorRatePercent;
     private Double performanceDropThresholdPercent;
     private Double dataDriftThresholdPercent;
-    private RetrainingDataPolicy dataPolicy;
     private Double globalScoreThreshold;
     private Double classificationMinimumGlobalScore;
     private Double regressionMinimumGlobalScore;
@@ -34,22 +25,6 @@ public class RetrainingConfigRequest {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
-    }
-
-    public RetrainingFrequencyType getFrequencyType() {
-        return frequencyType;
-    }
-
-    public void setFrequencyType(RetrainingFrequencyType frequencyType) {
-        this.frequencyType = frequencyType;
-    }
-
-    public Integer getFrequencyValue() {
-        return frequencyValue;
-    }
-
-    public void setFrequencyValue(Integer frequencyValue) {
-        this.frequencyValue = frequencyValue;
     }
 
     public RetrainingStrategy getStrategy() {
@@ -122,14 +97,6 @@ public class RetrainingConfigRequest {
 
     public void setDataDriftThresholdPercent(Double dataDriftThresholdPercent) {
         this.dataDriftThresholdPercent = dataDriftThresholdPercent;
-    }
-
-    public RetrainingDataPolicy getDataPolicy() {
-        return dataPolicy;
-    }
-
-    public void setDataPolicy(RetrainingDataPolicy dataPolicy) {
-        this.dataPolicy = dataPolicy;
     }
 
     public Double getGlobalScoreThreshold() {

@@ -183,9 +183,9 @@ class RetrainingDryRunServiceTest {
     }
 
     @Test
-    void diagnose_classifiesNotDue() {
+    void diagnose_classifiesEvaluatingStateAsNotDue() {
         RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
-        config.setNextRetrainingAt(now().plusDays(7));
+        config.setState(RetrainingState.EVALUATING);
 
         when(retrainingConfigRepository.findEnabledConfigs())
                 .thenReturn(List.of(config));

@@ -70,6 +70,8 @@ class RetrainingStateReconciliationTest {
     private KubernetesJobService kubernetesJobService;
     @Mock
     private PlatformTransactionManager transactionManager;
+    @Mock
+    private GitHubFileFetcherService gitHubFileFetcherService;
 
     private AutoRetrainingService service;
 
@@ -88,7 +90,8 @@ class RetrainingStateReconciliationTest {
                 retrainingDecisionService,
                 sourceResolver,
                 kubernetesJobService,
-                transactionManager
+                transactionManager,
+                gitHubFileFetcherService
         );
 
         ReflectionTestUtils.setField(service, "maxConsecutiveFailures", 3);

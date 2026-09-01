@@ -137,28 +137,6 @@ public class AutoRetrainingScheduler {
                 );
             }
 
-            List<RetrainingConfig> dueConfigs =
-                    retrainingConfigRepository
-                            .findDueConfigs(now);
-
-            int dueCount =
-                    dueConfigs == null
-                            ? 0
-                            : dueConfigs.size();
-
-            System.out.println(
-                    "[AUTO_RETRAINING] Found due configs="
-                            + dueCount
-            );
-
-            if (dueConfigs == null || dueConfigs.isEmpty()) {
-                return;
-            }
-
-            for (RetrainingConfig config : dueConfigs) {
-                processDueConfig(config);
-            }
-
         } catch (Exception schedulerError) {
             System.err.println(
                     "[AUTO_RETRAINING] Scheduler cycle failed. type="
@@ -173,87 +151,6 @@ public class AutoRetrainingScheduler {
 
         } finally {
             schedulerRunning.set(false);
-        }
-    }
-
-    private void processDueConfig(
-            RetrainingConfig config
-    ) {
-        if (config == null || config.getId() == null) {
-            return;
-        }
-
-        Long configId = config.getId();
-        Long projectId = config.getProjectId();
-        LocalDateTime claimTime = utcNow();
-
-            try {
-                int claimed = autoRetrainingService.tryValidateAndClaimInNewTransaction(configId);
-
-                System.out.println("[AUTO_RETRAINING] Claim configId=" + configId + ", projectId=" + projectId + ", result=" + claimed);
-
-                if (claimed != 1) {
-                    return;
-                }
-
-                autoRetrainingService.processClaimedConfig(configId);
-
-            } catch (Exception processingError) {
-            System.err.println(
-                    "[AUTO_RETRAINING] Failed configId="
-                            + configId
-                            + ", projectId="
-                            + projectId
-                            + ", reason="
-                            + safeMessage(
-                                    processingError.getMessage()
-                            )
-            );
-
-            safelyReleaseClaimAfterUnexpectedFailure(
-                    configId
-            );
-        }
-    }
-
-    private void safelyReleaseClaimAfterUnexpectedFailure(
-            Long configId
-    ) {
-        if (configId == null) {
-            return;
-        }
-
-        try {
-            LocalDateTime now = utcNow();
-
-            int released =
-                    executeInNewTransaction(
-                            () ->
-                                    retrainingConfigRepository
-                                            .releaseAfterFailure(
-                                                    configId,
-                                                    null,
-                                                    now
-                                            )
-                    );
-
-            System.out.println(
-                    "[AUTO_RETRAINING] Claim released. configId="
-                            + configId
-                            + ", result="
-                            + released
-            );
-
-        } catch (Exception releaseError) {
-            System.err.println(
-                    "[AUTO_RETRAINING] Could not release claim. "
-                            + "configId="
-                            + configId
-                            + ", reason="
-                            + safeMessage(
-                                    releaseError.getMessage()
-                            )
-            );
         }
     }
 

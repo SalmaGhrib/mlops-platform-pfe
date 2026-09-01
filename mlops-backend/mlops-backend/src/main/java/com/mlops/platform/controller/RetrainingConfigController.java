@@ -244,11 +244,6 @@ public class RetrainingConfigController {
         boolean activeExperimentExists = autoRetrainingService.hasActiveExperimentForProject(projectId);
         boolean running = config.isRunning() || activeExperimentExists;
 
-        boolean monitoringSmart = config.getStrategy() == RetrainingStrategy.MONITORING_SMART;
-        String nextRetrainingAt = monitoringSmart
-                ? null
-                : (config.getNextRetrainingAt() != null ? config.getNextRetrainingAt().toString() : null);
-
         ProjectRetrainingStatusResponse response = new ProjectRetrainingStatusResponse(
                 projectId,
                 config.isEnabled(),
@@ -257,7 +252,7 @@ public class RetrainingConfigController {
                 activeExperimentExists,
                 activeExperimentExists ? "ACTIVE" : (config.isRunning() ? "RUNNING" : (config.isEnabled() ? "IDLE" : "DISABLED")),
                 activeExperimentExists ? "Un réentraînement est en cours." : "Aucun réentraînement actif.",
-                nextRetrainingAt,
+                null,
                 config.getLastRetrainingAt() != null ? config.getLastRetrainingAt().toString() : null,
                 config.getLastDecisionReason(),
                 config.getLastTriggerReason()
@@ -309,14 +304,6 @@ public class RetrainingConfigController {
                         : null
         );
 
-        boolean monitoringSmart = config.getStrategy() == RetrainingStrategy.MONITORING_SMART;
-        summary.setNextRetrainingAt(
-                monitoringSmart
-                        ? null
-                        : (config.getNextRetrainingAt() != null
-                                ? config.getNextRetrainingAt().toString()
-                                : null)
-        );
         summary.setLastMonitoringCheckAt(
                 config.getLastMonitoringCheckAt() != null
                         ? config.getLastMonitoringCheckAt().toString()
@@ -336,11 +323,6 @@ public class RetrainingConfigController {
                 config.getCooldownUntil() != null
                         ? config.getCooldownUntil().toString()
                         : null
-        );
-        summary.setFrequencyLabel(
-                config.getFrequencyType() != null
-                        ? config.getFrequencyType() + "/" + config.getFrequencyValue()
-                        : "WEEK/1"
         );
 
         return ResponseEntity.ok(summary);

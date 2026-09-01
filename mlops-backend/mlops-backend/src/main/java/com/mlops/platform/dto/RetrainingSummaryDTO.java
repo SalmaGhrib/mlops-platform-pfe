@@ -13,13 +13,11 @@ public class RetrainingSummaryDTO {
     private String strategy = "MONITORING_SMART";
     private String state = "IDLE";
     private String lastRetrainingAt;
-    private String nextRetrainingAt;
     private String lastMonitoringCheckAt;
     private String nextMonitoringCheckAt;
     private String lastTriggerReason;
     private boolean running;
     private String cooldownUntil;
-    private String frequencyLabel;
 
     public RetrainingSummaryDTO() {
     }
@@ -64,14 +62,6 @@ public class RetrainingSummaryDTO {
         this.lastRetrainingAt = lastRetrainingAt;
     }
 
-    public String getNextRetrainingAt() {
-        return nextRetrainingAt;
-    }
-
-    public void setNextRetrainingAt(String nextRetrainingAt) {
-        this.nextRetrainingAt = nextRetrainingAt;
-    }
-
     public String getLastMonitoringCheckAt() {
         return lastMonitoringCheckAt;
     }
@@ -110,13 +100,5 @@ public class RetrainingSummaryDTO {
 
     public void setCooldownUntil(String cooldownUntil) {
         this.cooldownUntil = cooldownUntil;
-    }
-
-    public String getFrequencyLabel() {
-        return frequencyLabel;
-    }
-
-    public void setFrequencyLabel(String frequencyLabel) {
-        this.frequencyLabel = frequencyLabel;
     }
 }
