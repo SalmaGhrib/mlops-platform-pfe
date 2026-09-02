@@ -10,8 +10,6 @@ migrations
 *.log
 backend-running.jar
 backend-retraining-debug.log
-mini-mlops
-!mini-mlops/src/custom_models/platform_runner.py
 *.png
 *.jpg
 *.jpeg
@@ -21,3 +19,7 @@ __pycache__
 *.pyc
 *.whl
 backend-Dockerfile.quick
+
+mini-mlops/*
+!mini-mlops/src/
+!mini-mlops/src/**

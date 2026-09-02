@@ -54,6 +54,19 @@ class CustomDockerWorkspaceServiceTest {
         workspaceService = new CustomDockerWorkspaceService(uploadsStorageProperties, datasetFileResolverService);
 
         try {
+            Path customModelsDir = tempDir.resolve("src/custom_models");
+            Files.createDirectories(customModelsDir);
+            Files.writeString(tempDir.resolve("src/__init__.py"), "");
+            Files.writeString(customModelsDir.resolve("__init__.py"), "");
+            Files.writeString(customModelsDir.resolve("generic_pyfunc_wrapper.py"),
+                    "class GenericPyFuncWrapper:\n    pass\n");
+            Files.writeString(customModelsDir.resolve("import_detector.py"),
+                    "def detect_imports():\n    return []\n");
+            Files.writeString(customModelsDir.resolve("model_artifact_detector.py"),
+                    "def detect_model_artifact():\n    return None\n");
+            Files.writeString(tempDir.resolve("platform_runner.py"),
+                    "def main():\n    return None\n");
+
             var runnerField = CustomDockerWorkspaceService.class.getDeclaredField("platformRunnerPath");
             runnerField.setAccessible(true);
             runnerField.set(workspaceService, tempDir.resolve("platform_runner.py").toString());
@@ -355,6 +368,106 @@ class CustomDockerWorkspaceServiceTest {
         assertTrue(Files.exists(ws2.trainScriptPath()));
         assertEquals("print('exp1')", Files.readString(ws1.trainScriptPath()));
         assertEquals("print('exp2')", Files.readString(ws2.trainScriptPath()));
+    }
+
+    @Test
+    void runtimeFileMissingFailsFast() throws Exception {
+        Path trainPath = createValidTrainFile("missing-runtime-train.py");
+        Path dockerfilePath = createValidDockerfile();
+        Path reqPath = createValidRequirements();
+        Files.delete(tempDir.resolve("src/custom_models/generic_pyfunc_wrapper.py"));
+
+        MlProject project = buildProject(100L);
+        MlExperiment experiment = buildExperiment(300L, project,
+                buildFile(30L, "train.py", "missing-runtime-train.py", trainPath.toString(),
+                        UploadedFileType.TRAINING_SCRIPT, UploadedFileType.TRAINING_SCRIPT),
+                null, dockerfilePath.toString(), reqPath.toString());
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> workspaceService.prepareWorkspace(project, experiment));
+        assertTrue(ex.getMessage().contains("PLATFORM_RUNTIME_FILE_MISSING"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("generic_pyfunc_wrapper.py"), ex.getMessage());
+    }
+
+    @Test
+    void runtimeFileEmptyFailsFast() throws Exception {
+        Path trainPath = createValidTrainFile("empty-runtime-train.py");
+        Path dockerfilePath = createValidDockerfile();
+        Path reqPath = createValidRequirements();
+        Files.writeString(tempDir.resolve("src/custom_models/generic_pyfunc_wrapper.py"), "");
+
+        MlProject project = buildProject(100L);
+        MlExperiment experiment = buildExperiment(301L, project,
+                buildFile(31L, "train.py", "empty-runtime-train.py", trainPath.toString(),
+                        UploadedFileType.TRAINING_SCRIPT, UploadedFileType.TRAINING_SCRIPT),
+                null, dockerfilePath.toString(), reqPath.toString());
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> workspaceService.prepareWorkspace(project, experiment));
+        assertTrue(ex.getMessage().contains("PLATFORM_RUNTIME_FILE_EMPTY"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("generic_pyfunc_wrapper.py"), ex.getMessage());
+    }
+
+    @Test
+    void validRuntimeIsCopiedWithoutTruncation() throws Exception {
+        Path trainPath = createValidTrainFile("valid-runtime-train.py");
+        Path dockerfilePath = createValidDockerfile();
+        Path reqPath = createValidRequirements();
+        Path source = tempDir.resolve("src/custom_models/generic_pyfunc_wrapper.py");
+
+        MlProject project = buildProject(100L);
+        MlExperiment experiment = buildExperiment(302L, project,
+                buildFile(32L, "train.py", "valid-runtime-train.py", trainPath.toString(),
+                        UploadedFileType.TRAINING_SCRIPT, UploadedFileType.TRAINING_SCRIPT),
+                null, dockerfilePath.toString(), reqPath.toString());
+
+        CustomDockerWorkspace workspace = workspaceService.prepareWorkspace(project, experiment);
+        Path target = workspace.workspacePath().resolve("src/custom_models/generic_pyfunc_wrapper.py");
+
+        assertTrue(Files.size(source) > 0);
+        assertTrue(Files.exists(target));
+        assertEquals(Files.size(source), Files.size(target));
+        assertEquals(Files.readString(source), Files.readString(target));
+        assertDoesNotThrow(() -> workspaceService.validateWorkspace(workspace));
+    }
+
+    @Test
+    void platformRunnerMissingFailsFast() throws Exception {
+        Path trainPath = createValidTrainFile("missing-runner-train.py");
+        Path dockerfilePath = createValidDockerfile();
+        Path reqPath = createValidRequirements();
+        Files.delete(tempDir.resolve("platform_runner.py"));
+
+        MlProject project = buildProject(100L);
+        MlExperiment experiment = buildExperiment(303L, project,
+                buildFile(33L, "train.py", "missing-runner-train.py", trainPath.toString(),
+                        UploadedFileType.TRAINING_SCRIPT, UploadedFileType.TRAINING_SCRIPT),
+                null, dockerfilePath.toString(), reqPath.toString());
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> workspaceService.prepareWorkspace(project, experiment));
+        assertTrue(ex.getMessage().contains("PLATFORM_RUNTIME_FILE_MISSING"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("platform_runner.py"), ex.getMessage());
+    }
+
+    private Path createValidTrainFile(String name) throws Exception {
+        Path path = tempDir.resolve(name);
+        Files.writeString(path, "print('ok')");
+        return path;
+    }
+
+    private Path createValidDockerfile() throws Exception {
+        Path path = tempDir.resolve("docker/Dockerfile");
+        Files.createDirectories(path.getParent());
+        Files.writeString(path, "FROM python:3.11-slim\nCOPY train.py /app/train.py");
+        return path;
+    }
+
+    private Path createValidRequirements() throws Exception {
+        Path path = tempDir.resolve("docker/requirements.txt");
+        Files.createDirectories(path.getParent());
+        Files.writeString(path, "pandas");
+        return path;
     }
 
     // ═══════════════════════════════════════════════════════════════════

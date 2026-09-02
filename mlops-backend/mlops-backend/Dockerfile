@@ -4,6 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/opt/python-venv/bin:${PATH}"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH="/app/mini-mlops"
 
 USER root
 
@@ -33,7 +34,7 @@ RUN apt-get update \
 
 WORKDIR /app
 
-RUN mkdir -p /app/scripts
+RUN mkdir -p /app/scripts /app/mini-mlops/src
 
 # JAR Spring Boot
 COPY mlops-backend/mlops-backend/target/mlops-backend-0.0.1-SNAPSHOT.jar \
@@ -43,19 +44,34 @@ COPY mlops-backend/mlops-backend/target/mlops-backend-0.0.1-SNAPSHOT.jar \
 COPY mlops-backend/scripts/standardize_model_artifact.py \
      /app/scripts/standardize_model_artifact.py
 
-# Fichiers utilisés par Kaniko et le platform runner
-COPY mini-mlops/src/custom_models/platform_runner.py \
-     /app/mini-mlops/src/custom_models/platform_runner.py
+# Runtime Python complet utilisé par le backend pour préparer
+# les contextes Kaniko des entraînements custom.
+#
+# IMPORTANT :
+# auparavant seul platform_runner.py était copié.
+# Cela laissait generic_pyfunc_wrapper.py et les autres modules absents
+# du conteneur backend.
+COPY mini-mlops/src/ \
+     /app/mini-mlops/src/
 
+# Validation fail-fast.
+# Les modules fonctionnels doivent exister et être non vides.
 RUN chmod +x /app/scripts/standardize_model_artifact.py \
     && test -f /app/app.jar \
-    && test -f /app/scripts/standardize_model_artifact.py \
-    && test -f /app/mini-mlops/src/custom_models/platform_runner.py \
+    && test -s /app/scripts/standardize_model_artifact.py \
+    && test -f /app/mini-mlops/src/__init__.py \
+    && test -f /app/mini-mlops/src/custom_models/__init__.py \
+    && test -s /app/mini-mlops/src/custom_models/platform_runner.py \
+    && test -s /app/mini-mlops/src/custom_models/generic_pyfunc_wrapper.py \
+    && test -s /app/mini-mlops/src/custom_models/import_detector.py \
+    && test -s /app/mini-mlops/src/custom_models/model_artifact_detector.py \
     && grep -q "PLATFORM_RECOVERY" \
        /app/mini-mlops/src/custom_models/platform_runner.py \
+    && grep -q "class GenericPyFuncWrapper" \
+       /app/mini-mlops/src/custom_models/generic_pyfunc_wrapper.py \
     && python --version \
     && python -c "import mlflow, sklearn, pandas, numpy, joblib, cloudpickle; print('Backend Python dependencies OK')" \
-    && echo "platform_runner.py successfully included"
+    && echo "Complete mini-mlops runtime successfully included"
 
 EXPOSE 8081
 

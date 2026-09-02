@@ -3,7 +3,6 @@ package com.mlops.platform.service;
 import com.mlops.platform.config.UploadsStorageProperties;
 import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.MlProject;
-import com.mlops.platform.entity.UploadedFileType;
 import com.mlops.platform.entity.UploadedProjectFile;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -11,7 +10,6 @@ import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -34,6 +32,12 @@ public class CustomDockerWorkspaceService {
 
     private static final String WORKSPACES_SUBDIR = "workspaces";
 
+    /**
+     * Fichiers Python minimaux requis par platform_runner.py.
+     *
+     * Les __init__.py peuvent etre vides.
+     * Les modules fonctionnels doivent obligatoirement exister et etre non vides.
+     */
     private static final String[] PLATFORM_SRC_FILES = {
             "src/__init__.py",
             "src/custom_models/__init__.py",
@@ -112,6 +116,8 @@ public class CustomDockerWorkspaceService {
         DatasetResult datasetResult = resolveAndCopyDataset(experiment, project, workspacePath);
 
         // 5. Platform files
+        // IMPORTANT: fail-fast. Aucun fichier runtime manquant ne doit etre
+        // remplace silencieusement par un fichier vide.
         copyPlatformFiles(workspacePath);
 
         System.out.println("[CUSTOM_WORKSPACE] files:"
@@ -138,7 +144,9 @@ public class CustomDockerWorkspaceService {
 
     /**
      * Valide que tous les fichiers requis sont presents dans le workspace.
-     * Lance RuntimeException avec un code clair si un fichier manque.
+     *
+     * Pour les fichiers de runtime plateforme, une simple existence ne suffit pas :
+     * les modules Python fonctionnels doivent aussi etre des fichiers reguliers non vides.
      */
     public void validateWorkspace(CustomDockerWorkspace workspace) {
         validateExists(workspace.dockerfilePath(), "BUILD_CONTEXT_FILE_MISSING: Dockerfile");
@@ -146,17 +154,38 @@ public class CustomDockerWorkspaceService {
         validateExists(workspace.requirementsPath(), "BUILD_CONTEXT_FILE_MISSING: requirements.txt");
 
         if (workspace.datasetPath() != null) {
-            validateExists(workspace.datasetPath(),
-                    "BUILD_CONTEXT_FILE_MISSING: " + workspace.datasetPath().getFileName());
+            validateExists(
+                    workspace.datasetPath(),
+                    "BUILD_CONTEXT_FILE_MISSING: " + workspace.datasetPath().getFileName()
+            );
         }
 
         Path platformRunner = workspace.workspacePath().resolve("platform_runner.py");
-        validateExists(platformRunner, "BUILD_CONTEXT_FILE_MISSING: platform_runner.py");
+        validateNonEmptyRegularFile(
+                platformRunner,
+            "PLATFORM_RUNTIME_FILE_EMPTY: platform_runner.py"
+        );
 
-        Path srcInit = workspace.workspacePath().resolve("src").resolve("__init__.py");
-        validateExists(srcInit, "BUILD_CONTEXT_FILE_MISSING: src/__init__.py");
+        for (String relPath : PLATFORM_SRC_FILES) {
+            Path platformFile = workspace.workspacePath().resolve(relPath);
 
-        System.out.println("[CUSTOM_WORKSPACE] VALIDATION_SUCCESS experimentId=" + workspace.experimentId());
+            validateExists(
+                    platformFile,
+                    "PLATFORM_RUNTIME_FILE_MISSING: " + relPath
+            );
+
+            if (!isPackageInitFile(relPath)) {
+                validateNonEmptyRegularFile(
+                        platformFile,
+                    "PLATFORM_RUNTIME_FILE_EMPTY: " + relPath
+                );
+            }
+        }
+
+        System.out.println(
+                "[CUSTOM_WORKSPACE] VALIDATION_SUCCESS experimentId="
+                        + workspace.experimentId()
+        );
     }
 
     /**
@@ -208,7 +237,10 @@ public class CustomDockerWorkspaceService {
             }
         }
 
-        System.out.println("[CUSTOM_WORKSPACE] DOCKERFILE_SOURCE_VALIDATION_SUCCESS experimentId=" + workspace.experimentId());
+        System.out.println(
+                "[CUSTOM_WORKSPACE] DOCKERFILE_SOURCE_VALIDATION_SUCCESS experimentId="
+                        + workspace.experimentId()
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -233,22 +265,36 @@ public class CustomDockerWorkspaceService {
         return safeCopy(source.toString(), workspacePath.resolve("train.py"), "train.py");
     }
 
-    private DatasetResult resolveAndCopyDataset(MlExperiment experiment, MlProject project, Path workspacePath) {
-        UploadedProjectFile datasetFile = datasetFileResolverService.resolveDatasetFile(project, experiment);
+    private DatasetResult resolveAndCopyDataset(
+            MlExperiment experiment,
+            MlProject project,
+            Path workspacePath
+    ) {
+        UploadedProjectFile datasetFile =
+                datasetFileResolverService.resolveDatasetFile(project, experiment);
 
-        if (datasetFile == null || datasetFile.getFilePath() == null || datasetFile.getFilePath().isBlank()) {
-            System.out.println("[CUSTOM_WORKSPACE] No dataset resolved for experiment " + experiment.getId());
+        if (datasetFile == null
+                || datasetFile.getFilePath() == null
+                || datasetFile.getFilePath().isBlank()) {
+            System.out.println(
+                    "[CUSTOM_WORKSPACE] No dataset resolved for experiment "
+                            + experiment.getId()
+            );
             return new DatasetResult(null, false, null);
         }
 
         Path source = Path.of(datasetFile.getFilePath()).toAbsolutePath().normalize();
         if (!Files.exists(source)) {
-            System.out.println("[CUSTOM_WORKSPACE] Dataset file not found on disk: " + source);
+            System.out.println(
+                    "[CUSTOM_WORKSPACE] Dataset file not found on disk: " + source
+            );
             return new DatasetResult(null, false, null);
         }
 
         String originalName = datasetFile.getOriginalFileName() != null
-                ? datasetFile.getOriginalFileName().toLowerCase(java.util.Locale.ROOT) : "";
+                ? datasetFile.getOriginalFileName().toLowerCase(java.util.Locale.ROOT)
+                : "";
+
         boolean isArchive = originalName.endsWith(".zip")
                 || originalName.endsWith(".tar.gz")
                 || originalName.endsWith(".tgz")
@@ -263,19 +309,26 @@ public class CustomDockerWorkspaceService {
             Path mainCsv = extractZipDataset(zipDest, extractedDir);
 
             if (mainCsv == null) {
-                System.out.println("[CUSTOM_WORKSPACE] WARNING: No CSV found in ZIP archive. "
-                        + "datasetPath will point to ZIP.");
+                System.out.println(
+                        "[CUSTOM_WORKSPACE] WARNING: No CSV found in ZIP archive. "
+                                + "datasetPath will point to ZIP."
+                );
                 return new DatasetResult(zipDest, true, null);
             }
 
-            System.out.println("[CUSTOM_WORKSPACE] Dataset extracted: archive=" + zipDest.getFileName()
-                    + ", mainCsv=" + mainCsv.getFileName());
+            System.out.println(
+                    "[CUSTOM_WORKSPACE] Dataset extracted: archive="
+                            + zipDest.getFileName()
+                            + ", mainCsv="
+                            + mainCsv.getFileName()
+            );
+
             return new DatasetResult(mainCsv, true, extractedDir);
-        } else {
-            Path csvDest = workspacePath.resolve("dataset.csv");
-            safeCopy(source.toString(), csvDest, "dataset.csv");
-            return new DatasetResult(csvDest, false, null);
         }
+
+        Path csvDest = workspacePath.resolve("dataset.csv");
+        safeCopy(source.toString(), csvDest, "dataset.csv");
+        return new DatasetResult(csvDest, false, null);
     }
 
     private Path extractZipDataset(Path zipPath, Path extractedDir) {
@@ -286,6 +339,7 @@ public class CustomDockerWorkspaceService {
                  ZipInputStream zis = new ZipInputStream(is)) {
 
                 ZipEntry entry;
+
                 while ((entry = zis.getNextEntry()) != null) {
                     if (entry.isDirectory()) {
                         continue;
@@ -293,29 +347,35 @@ public class CustomDockerWorkspaceService {
 
                     String entryName = entry.getName();
                     String baseName = entryName.contains("/")
-                            ? entryName.substring(entryName.lastIndexOf('/') + 1) : entryName;
+                            ? entryName.substring(entryName.lastIndexOf('/') + 1)
+                            : entryName;
 
                     Path target = extractedDir.resolve(baseName).normalize();
+
                     if (!target.startsWith(extractedDir)) {
                         continue;
                     }
 
                     Files.createDirectories(target.getParent());
+
                     try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
                         byte[] buffer = new byte[8192];
                         int len;
+
                         while ((len = zis.read(buffer)) > 0) {
                             baos.write(buffer, 0, len);
                         }
+
                         Files.write(target, baos.toByteArray());
                     }
                 }
             }
 
-            // Find best CSV
             Path bestCsv = null;
+
             for (String candidate : DATASET_CANDIDATES) {
                 Path p = extractedDir.resolve(candidate);
+
                 if (Files.exists(p)) {
                     bestCsv = p;
                     break;
@@ -323,70 +383,231 @@ public class CustomDockerWorkspaceService {
             }
 
             if (bestCsv == null) {
-                // Fallback: single CSV in directory
-                try (DirectoryStream<Path> stream = Files.newDirectoryStream(extractedDir, "*.csv")) {
+                try (DirectoryStream<Path> stream =
+                             Files.newDirectoryStream(extractedDir, "*.csv")) {
+
                     Path single = null;
+
                     for (Path p : stream) {
                         if (single != null) {
                             single = null;
                             break;
                         }
+
                         single = p;
                     }
+
                     bestCsv = single;
                 }
             }
 
             return bestCsv;
+
         } catch (Exception e) {
-            throw new RuntimeException("Failed to extract ZIP dataset: " + e.getMessage(), e);
+            throw new RuntimeException(
+                    "Failed to extract ZIP dataset: " + e.getMessage(),
+                    e
+            );
         }
     }
 
+    /**
+     * Copie les fichiers runtime de la plateforme dans le workspace.
+     *
+     * REGLE DE SECURITE :
+     * - aucun module requis manquant n'est remplace par un fichier vide ;
+     * - un module fonctionnel vide fait echouer immediatement la preparation ;
+     * - la copie source/cible est verifiee.
+     */
     private void copyPlatformFiles(Path workspacePath) {
-        // platform_runner.py
-        Path runnerSource = Path.of(platformRunnerPath).toAbsolutePath().normalize();
-        if (Files.exists(runnerSource)) {
-            safeCopy(runnerSource.toString(), workspacePath.resolve("platform_runner.py"), "platform_runner.py");
-        } else {
-            System.out.println("[CUSTOM_WORKSPACE] WARNING: platform_runner.py not found at " + runnerSource);
-        }
+        Path runnerSource =
+                Path.of(platformRunnerPath).toAbsolutePath().normalize();
 
-        // src/ directory
-        Path srcDir = Path.of(platformRuntimeRoot).resolve("src").toAbsolutePath().normalize();
+        copyRequiredPlatformFile(
+                runnerSource,
+                workspacePath.resolve("platform_runner.py"),
+                "platform_runner.py",
+                false
+        );
+
+        Path srcDir = Path.of(platformRuntimeRoot)
+                .resolve("src")
+                .toAbsolutePath()
+                .normalize();
+
         for (String relPath : PLATFORM_SRC_FILES) {
-            Path source = srcDir.resolve(relPath.replaceFirst("^src/", ""));
-            Path target = workspacePath.resolve(relPath);
-            try {
-                Files.createDirectories(target.getParent());
-                if (Files.exists(source)) {
-                    safeCopy(source.toString(), target, relPath);
-                } else {
-                    Files.createDirectories(target.getParent());
-                    Files.writeString(target, "", StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-                    System.out.println("[CUSTOM_WORKSPACE] CREATED empty " + relPath + " (source missing)");
-                }
-            } catch (Exception e) {
-                System.out.println("[CUSTOM_WORKSPACE] WARNING: Failed to copy/create " + relPath + ": " + e.getMessage());
-            }
+            Path source =
+                    srcDir.resolve(relPath.replaceFirst("^src/", ""))
+                            .toAbsolutePath()
+                            .normalize();
+
+            Path target =
+                    workspacePath.resolve(relPath)
+                            .toAbsolutePath()
+                            .normalize();
+
+            copyRequiredPlatformFile(
+                    source,
+                    target,
+                    relPath,
+                    isPackageInitFile(relPath)
+            );
         }
+    }
+
+    /**
+     * Copie un fichier plateforme obligatoire et verifie son integrite.
+     */
+    private void copyRequiredPlatformFile(
+            Path source,
+            Path target,
+            String label,
+            boolean allowEmpty
+    ) {
+        try {
+            if (!Files.exists(source) || !Files.isRegularFile(source)) {
+                throw new IllegalStateException(
+                        "PLATFORM_RUNTIME_FILE_MISSING: "
+                                + label
+                                + " | source="
+                                + source
+                );
+            }
+
+            long sourceSize = Files.size(source);
+
+            if (!allowEmpty && sourceSize <= 0) {
+                throw new IllegalStateException(
+                        "PLATFORM_RUNTIME_FILE_EMPTY: "
+                                + label
+                                + " | source="
+                                + source
+                );
+            }
+
+            Files.createDirectories(target.getParent());
+
+            Files.copy(
+                    source,
+                    target,
+                    StandardCopyOption.REPLACE_EXISTING
+            );
+
+            if (!Files.exists(target) || !Files.isRegularFile(target)) {
+                throw new IllegalStateException(
+                        "PLATFORM_RUNTIME_COPY_MISSING: "
+                                + label
+                                + " | target="
+                                + target
+                );
+            }
+
+            long targetSize = Files.size(target);
+
+            if (!allowEmpty && targetSize <= 0) {
+                throw new IllegalStateException(
+                        "PLATFORM_RUNTIME_COPY_EMPTY: "
+                                + label
+                                + " | target="
+                                + target
+                );
+            }
+
+            if (targetSize != sourceSize) {
+                throw new IllegalStateException(
+                        "PLATFORM_RUNTIME_COPY_SIZE_MISMATCH: "
+                                + label
+                                + " | sourceSize="
+                                + sourceSize
+                                + ", targetSize="
+                                + targetSize
+                );
+            }
+
+            long mismatch = Files.mismatch(source, target);
+
+            if (mismatch != -1L) {
+                throw new IllegalStateException(
+                        "PLATFORM_RUNTIME_COPY_CONTENT_MISMATCH: "
+                                + label
+                                + " | firstMismatchByte="
+                                + mismatch
+                );
+            }
+
+            System.out.println(
+                    "[CUSTOM_WORKSPACE] COPIED platform runtime "
+                            + label
+                            + " source="
+                            + source
+                            + " target="
+                            + target
+                            + " size="
+                            + targetSize
+                            + " bytes"
+            );
+
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "PLATFORM_RUNTIME_COPY_FAILED: "
+                            + label
+                            + " | "
+                            + e.getMessage(),
+                    e
+            );
+        }
+    }
+
+    private boolean isPackageInitFile(String relPath) {
+        return relPath != null
+                && relPath.replace("\\", "/").endsWith("/__init__.py");
     }
 
     private Path safeCopy(String sourcePath, Path target, String label) {
         try {
             Path source = Path.of(sourcePath).toAbsolutePath().normalize();
+
             if (!Files.exists(source)) {
-                throw new RuntimeException("Source file not found for " + label + ": " + source);
+                throw new RuntimeException(
+                        "Source file not found for "
+                                + label
+                                + ": "
+                                + source
+                );
             }
-            Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
-            System.out.println("[CUSTOM_WORKSPACE] COPIED " + label
-                    + " source=" + source.getFileName()
-                    + " size=" + Files.size(target) + " bytes");
+
+            Files.createDirectories(target.toAbsolutePath().normalize().getParent());
+
+            Files.copy(
+                    source,
+                    target,
+                    StandardCopyOption.REPLACE_EXISTING
+            );
+
+            System.out.println(
+                    "[CUSTOM_WORKSPACE] COPIED "
+                            + label
+                            + " source="
+                            + source.getFileName()
+                            + " size="
+                            + Files.size(target)
+                            + " bytes"
+            );
+
             return target;
+
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
-            throw new RuntimeException("Failed to copy " + label + ": " + e.getMessage(), e);
+            throw new RuntimeException(
+                    "Failed to copy "
+                            + label
+                            + ": "
+                            + e.getMessage(),
+                    e
+            );
         }
     }
 
@@ -396,5 +617,27 @@ public class CustomDockerWorkspaceService {
         }
     }
 
-    private record DatasetResult(Path path, boolean isArchive, Path extractedDir) {}
+    private void validateNonEmptyRegularFile(Path path, String errorCode) {
+        try {
+            if (path == null
+                    || !Files.exists(path)
+                    || !Files.isRegularFile(path)
+                    || Files.size(path) <= 0) {
+                throw new RuntimeException(errorCode);
+            }
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    errorCode + " | " + e.getMessage(),
+                    e
+            );
+        }
+    }
+
+    private record DatasetResult(
+            Path path,
+            boolean isArchive,
+            Path extractedDir
+    ) {}
 }

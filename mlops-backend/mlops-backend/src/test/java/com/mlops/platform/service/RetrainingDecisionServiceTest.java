@@ -6,6 +6,7 @@ import com.mlops.platform.entity.MlExperiment;
 import com.mlops.platform.entity.PredictionLog;
 import com.mlops.platform.entity.RetrainingConfig;
 import com.mlops.platform.entity.RetrainingSecurityLevel;
+import com.mlops.platform.entity.RetrainingSeverity;
 import com.mlops.platform.entity.RetrainingStrategy;
 import com.mlops.platform.entity.RetrainingTriggerType;
 import com.mlops.platform.repository.MlExperimentRepository;
@@ -27,21 +28,27 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/*
- * Tests unitaires de la décision centralisée de réentraînement
- * (Mockito pur, sans Spring, sans base de données).
+/**
+ * Tests unitaires de la décision centralisée de réentraînement.
  *
- * Vérifie :
- *  1. la stratégie MONITORING_SMART ;
- *  2. la sécurité : jamais de réentraînement sur des données suspectes
- *     (SECURITY_ALERT_ONLY / BLOCK_MODEL) ;
- *  3. la demande manuelle et l'absence de source Production.
+ * Architecture actuelle :
+ * - stratégie automatique : MONITORING_SMART ;
+ * - déclencheurs métier : PERFORMANCE_DROP et DATA_DRIFT ;
+ * - les runs/prédictions en échec ne déclenchent pas de retraining ;
+ * - le data drift utilise uniquement les prédictions réussies de
+ *   l'expérience Production actuelle ;
+ * - un drift extrême reste un DATA_DRIFT valide et déclenche le retraining ;
+ * - la demande manuelle et l'absence de source Production restent gérées.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 class RetrainingDecisionServiceTest {
+
+    private static final Long PROJECT_ID = 1L;
+    private static final Long PRODUCTION_EXPERIMENT_ID = 100L;
 
     @Mock
     private PredictionLogRepository predictionLogRepository;
@@ -52,8 +59,6 @@ class RetrainingDecisionServiceTest {
     private RetrainingDecisionService service;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-
-    private static final Long PROJECT_ID = 1L;
 
     @BeforeEach
     void setUp() {
@@ -68,36 +73,77 @@ class RetrainingDecisionServiceTest {
         return LocalDateTime.now(Clock.systemUTC());
     }
 
-    private RetrainingConfig config(RetrainingStrategy strategy) {
+    private RetrainingConfig config() {
         RetrainingConfig config = new RetrainingConfig();
         config.setProjectId(PROJECT_ID);
         config.setEnabled(true);
-        config.setStrategy(strategy);
+        config.setStrategy(RetrainingStrategy.MONITORING_SMART);
         return config;
     }
 
-    private RetrainingConfig dueConfig(RetrainingStrategy strategy) {
-        RetrainingConfig config = config(strategy);
-        return config;
+    /**
+     * Configure une Production stable :
+     * - aucune baisse de performance ;
+     * - premières N et dernières N prédictions identiques ;
+     * - donc aucun data drift.
+     */
+    private void mockStableMonitoring(long recentPredictionCount, int minPredictions) {
+        MlExperiment production = productionExperiment(
+                PRODUCTION_EXPERIMENT_ID,
+                "model-a",
+                0.80
+        );
+
+        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(recentPredictionCount);
+
+        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(0L);
+
+        when(mlExperimentRepository.findCurrentProductionExperimentForProject(PROJECT_ID))
+                .thenReturn(Optional.of(production));
+
+        when(mlExperimentRepository.findEligibleProductionCandidates("model-a"))
+                .thenReturn(List.of(production));
+
+        int required = Math.max(2, minPredictions * 2);
+
+        when(predictionLogRepository.findSuccessfulPredictionsForProduction(
+                PROJECT_ID,
+                PRODUCTION_EXPERIMENT_ID
+        )).thenReturn(repeatedPredictions(required, "1.0"));
     }
 
-    private void noMonitoringSignals() {
-        when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
-                .thenReturn(0L);
-        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(100L);
-        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(0L);
+    private MlExperiment productionExperiment(
+            Long id,
+            String registeredModelName,
+            double globalScore
+    ) {
+        MlExperiment experiment = mock(MlExperiment.class);
+
+        when(experiment.getId()).thenReturn(id);
+        when(experiment.getRegisteredModelName()).thenReturn(registeredModelName);
+        when(experiment.getGlobalScore()).thenReturn(globalScore);
+
+        return experiment;
     }
 
     // ------------------------------------------------------------------
-    // SCHEDULED_ONLY
+    // MONITORING_SMART - aucun signal
     // ------------------------------------------------------------------
 
     @Test
-    void scheduledOnly_due_returnsRunWithScheduledTrigger() {
-        noMonitoringSignals();
-        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
+    void monitoringSmart_noSignal_returnsSkip() {
+        RetrainingConfig config = config();
+        config.setMinPredictionsForMonitoring(5);
+        config.setPerformanceDropThresholdPercent(5.0);
+        config.setDataDriftThresholdPercent(10.0);
+
+        mockStableMonitoring(10L, 5);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
@@ -108,42 +154,14 @@ class RetrainingDecisionServiceTest {
     }
 
     @Test
-    void scheduledOnly_notDue_returnsSkip() {
-        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
+    void monitoringSmart_withoutPredictions_returnsSkip() {
+        RetrainingConfig config = config();
+        config.setMinPredictionsForMonitoring(5);
 
-        RetrainingDecision decision = service.buildDecision(config, now(), true);
-
-        assertFalse(decision.isShouldRetrain());
-        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
-    }
-
-    // ------------------------------------------------------------------
-    // SCHEDULED_WITH_MONITORING
-    // ------------------------------------------------------------------
-
-    @Test
-    void scheduledWithMonitoring_due_noSignal_enoughPredictions_skips() {
-        noMonitoringSignals();
-        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
-        config.setMinPredictionsForMonitoring(30);
-
-        RetrainingDecision decision = service.buildDecision(config, now(), true);
-
-        assertFalse(decision.isShouldRetrain());
-        assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
-    }
-
-    @Test
-    void scheduledWithMonitoring_due_insufficientPredictions_runsScheduled() {
-        when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
-                .thenReturn(0L);
-        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(5L);
-        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(0L);
-
-        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
-        config.setMinPredictionsForMonitoring(30);
+        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(0L);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
@@ -153,17 +171,53 @@ class RetrainingDecisionServiceTest {
     }
 
     @Test
-    void scheduledWithMonitoring_due_highErrorRate_noLongerTriggers() {
-        when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
-                .thenReturn(0L);
-        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(40L);
-        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(10L);
+    void monitoringSmart_enoughStablePredictions_returnsMonitoringOk() {
+        RetrainingConfig config = config();
+        config.setMinPredictionsForMonitoring(30);
+        config.setDataDriftThresholdPercent(10.0);
 
-        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
+        mockStableMonitoring(100L, 30);
+
+        RetrainingDecision decision = service.buildDecision(config, now(), true);
+
+        assertFalse(decision.isShouldRetrain());
+        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
+        assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
+    }
+
+    @Test
+    void monitoringSmart_insufficientPredictions_returnsInsufficientData() {
+        RetrainingConfig config = config();
+        config.setMinPredictionsForMonitoring(30);
+
+        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(5L);
+
+        RetrainingDecision decision = service.buildDecision(config, now(), true);
+
+        assertFalse(decision.isShouldRetrain());
+        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
+        assertTrue(decision.getReasonCodes().contains("INSUFFICIENT_DATA"));
+    }
+
+    // ------------------------------------------------------------------
+    // Les erreurs de prédiction ne déclenchent plus le retraining
+    // ------------------------------------------------------------------
+
+    @Test
+    void failedPredictions_doNotTriggerRetraining() {
+        RetrainingConfig config = config();
         config.setMinPredictionsForMonitoring(30);
         config.setMaxPredictionErrorRatePercent(20.0);
+
+        mockStableMonitoring(40L, 30);
+
+        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(10L);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
@@ -173,193 +227,233 @@ class RetrainingDecisionServiceTest {
         assertEquals(RetrainingSecurityLevel.NONE, decision.getSecurityLevel());
     }
 
-    // ------------------------------------------------------------------
-    // SMART_MONITORING_ONLY
-    // ------------------------------------------------------------------
-
     @Test
-    void smartMonitoringOnly_dueButNoSignal_skips() {
-        noMonitoringSignals();
-        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
+    void highPredictionFailureRate_doesNotTriggerRetraining() {
+        RetrainingConfig config = config();
+        config.setMinPredictionsForMonitoring(30);
+        config.setMaxPredictionErrorRatePercent(20.0);
 
-        RetrainingDecision decision = service.buildDecision(config, now(), true);
+        mockStableMonitoring(40L, 30);
 
-        assertFalse(decision.isShouldRetrain());
-        assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
-    }
-
-    @Test
-    void smartMonitoringOnly_noSignal_returnsMonitoringOk() {
-        when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
-                .thenReturn(0L);
-        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(40L);
-        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(0L);
-
-        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
-
-        RetrainingDecision decision = service.buildDecision(config, now(), true);
-
-        assertFalse(decision.isShouldRetrain());
-        assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
-    }
-
-    // ------------------------------------------------------------------
-    // FULL_SMART
-    // ------------------------------------------------------------------
-
-    @Test
-    void fullSmart_noSignal_due_runsScheduled() {
-        noMonitoringSignals();
-        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
+        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(20L);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
         assertFalse(decision.isShouldRetrain());
         assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
+        assertEquals(RetrainingSecurityLevel.NONE, decision.getSecurityLevel());
         assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
     }
 
     @Test
-    void fullSmart_noSignal_notDue_skips() {
-        noMonitoringSignals();
-        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
+    void veryHighPredictionFailureRate_doesNotBlockModel() {
+        RetrainingConfig config = config();
+        config.setMinPredictionsForMonitoring(30);
+        config.setMaxPredictionErrorRatePercent(20.0);
+
+        mockStableMonitoring(40L, 30);
+
+        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(30L);
+
+        RetrainingDecision decision = service.buildDecision(config, now(), true);
+
+        assertFalse(decision.isShouldRetrain());
+        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
+        assertEquals(RetrainingSecurityLevel.NONE, decision.getSecurityLevel());
+    }
+
+    // ------------------------------------------------------------------
+    // Baseline Production du data drift
+    // ------------------------------------------------------------------
+
+    @Test
+    void monitoringSmart_usesProductionPredictionWindow() {
+        RetrainingConfig config = config();
+        config.setMinPredictionsForMonitoring(5);
+        config.setDataDriftThresholdPercent(10.0);
+
+        mockStableMonitoring(17L, 5);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
         assertFalse(decision.isShouldRetrain());
         assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
+        assertEquals(0.0,
+                decision.getObservedMetrics().get("dataDriftScorePercent"),
+                0.001);
+    }
+
+    @Test
+    void productionWindow_notEnoughSuccessfulPredictions_skips() {
+        RetrainingConfig config = config();
+        config.setMinPredictionsForMonitoring(5);
+        config.setDataDriftThresholdPercent(10.0);
+
+        MlExperiment production = productionExperiment(
+                PRODUCTION_EXPERIMENT_ID,
+                "model-a",
+                0.80
+        );
+
+        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(17L);
+
+        when(mlExperimentRepository.findCurrentProductionExperimentForProject(PROJECT_ID))
+                .thenReturn(Optional.of(production));
+
+        when(mlExperimentRepository.findEligibleProductionCandidates("model-a"))
+                .thenReturn(List.of(production));
+
+        // Il faut 10 prédictions réussies pour baseline=5 + recent=5.
+        when(predictionLogRepository.findSuccessfulPredictionsForProduction(
+                PROJECT_ID,
+                PRODUCTION_EXPERIMENT_ID
+        )).thenReturn(repeatedPredictions(9, "1.0"));
+
+        RetrainingDecision decision = service.buildDecision(config, now(), true);
+
+        assertFalse(decision.isShouldRetrain());
+        assertTrue(decision.getReasonCodes().contains("INSUFFICIENT_DRIFT_DATA"));
     }
 
     // ------------------------------------------------------------------
-    // Data drift
+    // DATA_DRIFT
     // ------------------------------------------------------------------
 
     @Test
     void dataDrift_detected_returnsRun() {
-        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
+        RetrainingConfig config = config();
         config.setDataDriftMonitoringEnabled(true);
         config.setPerformanceMonitoringEnabled(false);
         config.setFailureMonitoringEnabled(false);
         config.setMinPredictionsForMonitoring(3);
         config.setDataDriftThresholdPercent(25.0);
 
-        List<PredictionLog> baseline = predictions("1.0", "1.0", "1.0", "1.0", "1.0");
-        List<PredictionLog> recent = predictions("1.3", "1.3", "1.3", "1.3", "1.3");
+        MlExperiment production = productionExperiment(
+                PRODUCTION_EXPERIMENT_ID,
+                "model-a",
+                0.80
+        );
 
-        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(5L);
-        when(predictionLogRepository.findByProjectIdAndCreatedAtBetweenOrderByCreatedAtAsc(
-                eq(PROJECT_ID), any(), any())).thenReturn(baseline, recent);
+        when(mlExperimentRepository.findCurrentProductionExperimentForProject(PROJECT_ID))
+                .thenReturn(Optional.of(production));
+
+        when(mlExperimentRepository.findEligibleProductionCandidates("model-a"))
+                .thenReturn(List.of(production));
+
+        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(6L);
+
+        List<PredictionLog> productionPredictions = new ArrayList<>();
+        productionPredictions.addAll(predictions("1.0", "1.0", "1.0"));
+        productionPredictions.addAll(predictions("1.3", "1.3", "1.3"));
+
+        when(predictionLogRepository.findSuccessfulPredictionsForProduction(
+                PROJECT_ID,
+                PRODUCTION_EXPERIMENT_ID
+        )).thenReturn(productionPredictions);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
         assertTrue(decision.isShouldRetrain());
         assertEquals(RetrainingTriggerType.DATA_DRIFT, decision.getTriggerType());
         assertTrue(decision.getReasonCodes().contains("DATA_DRIFT"));
+        assertFalse(decision.getReasonCodes().contains("DRIFT_EXTREME"));
         assertEquals(RetrainingSecurityLevel.RETRAIN_RECOMMENDED, decision.getSecurityLevel());
+        assertEquals(30.0,
+                decision.getObservedMetrics().get("dataDriftScorePercent"),
+                0.001);
     }
 
     @Test
-    void dataDrift_extreme_blocksRetraining() {
-        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
+    void dataDrift_extreme_stillTriggersRetraining() {
+        RetrainingConfig config = config();
         config.setDataDriftMonitoringEnabled(true);
         config.setPerformanceMonitoringEnabled(false);
         config.setFailureMonitoringEnabled(false);
         config.setMinPredictionsForMonitoring(3);
         config.setDataDriftThresholdPercent(25.0);
 
-        List<PredictionLog> baseline = predictions("1.0", "1.0", "1.0", "1.0", "1.0");
-        List<PredictionLog> recent = predictions("100.0", "100.0", "100.0", "100.0", "100.0");
+        MlExperiment production = productionExperiment(
+                PRODUCTION_EXPERIMENT_ID,
+                "model-a",
+                0.80
+        );
 
-        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(5L);
-        when(predictionLogRepository.findByProjectIdAndCreatedAtBetweenOrderByCreatedAtAsc(
-                eq(PROJECT_ID), any(), any())).thenReturn(baseline, recent);
+        when(mlExperimentRepository.findCurrentProductionExperimentForProject(PROJECT_ID))
+                .thenReturn(Optional.of(production));
 
-        RetrainingDecision decision = service.buildDecision(config, now(), true);
+        when(mlExperimentRepository.findEligibleProductionCandidates("model-a"))
+                .thenReturn(List.of(production));
 
-        assertFalse(decision.isShouldRetrain());
-        assertEquals(RetrainingTriggerType.BLOCKED_BY_SECURITY, decision.getTriggerType());
-        assertEquals(RetrainingSecurityLevel.BLOCK_MODEL, decision.getSecurityLevel());
-        assertTrue(decision.getReasonCodes().contains("SUSPECT_DATA"));
-        assertTrue(decision.getReasonCodes().contains("BLOCKED_FOR_SECURITY"));
-    }
+        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(6L);
 
-    // ------------------------------------------------------------------
-    // Sécurité : taux d'erreur extrême
-    // ------------------------------------------------------------------
+        List<PredictionLog> productionPredictions = new ArrayList<>();
+        productionPredictions.addAll(predictions("1.0", "1.0", "1.0"));
+        productionPredictions.addAll(predictions("100.0", "100.0", "100.0"));
 
-    @Test
-    void errorRate_extreme_noLongerTriggers() {
-        when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
-                .thenReturn(0L);
-        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(40L);
-        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(20L);
-
-        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
-        config.setMinPredictionsForMonitoring(30);
-        config.setMaxPredictionErrorRatePercent(20.0);
+        when(predictionLogRepository.findSuccessfulPredictionsForProduction(
+                PROJECT_ID,
+                PRODUCTION_EXPERIMENT_ID
+        )).thenReturn(productionPredictions);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
-        assertFalse(decision.isShouldRetrain());
-        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
-        assertEquals(RetrainingSecurityLevel.NONE, decision.getSecurityLevel());
-        assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
-    }
-
-    @Test
-    void errorRate_blocked_noLongerBlocksModel() {
-        when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
-                .thenReturn(0L);
-        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(40L);
-        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(30L);
-
-        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
-        config.setMinPredictionsForMonitoring(30);
-        config.setMaxPredictionErrorRatePercent(20.0);
-
-        RetrainingDecision decision = service.buildDecision(config, now(), true);
-
-        assertFalse(decision.isShouldRetrain());
-        assertEquals(RetrainingSecurityLevel.NONE, decision.getSecurityLevel());
-        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
+        assertTrue(decision.isShouldRetrain());
+        assertEquals(RetrainingTriggerType.DATA_DRIFT, decision.getTriggerType());
+        assertEquals(RetrainingSecurityLevel.RETRAIN_RECOMMENDED, decision.getSecurityLevel());
+        assertEquals(RetrainingSeverity.CRITICAL, decision.getSeverity());
+        assertTrue(decision.getReasonCodes().contains("DATA_DRIFT"));
+        assertTrue(decision.getReasonCodes().contains("DRIFT_EXTREME"));
+        assertFalse(decision.getReasonCodes().contains("BLOCKED_FOR_SECURITY"));
     }
 
     // ------------------------------------------------------------------
-    // Baisse de performance (PERFORMANCE_DROP)
+    // PERFORMANCE_DROP
     // ------------------------------------------------------------------
 
     @Test
     void performanceDrop_detected_returnsRun() {
-        MlExperiment production = new MlExperiment();
-        production.setRegisteredModelName("model-a");
-        production.setGlobalScore(0.60);
+        MlExperiment production = productionExperiment(
+                PRODUCTION_EXPERIMENT_ID,
+                "model-a",
+                0.60
+        );
 
-        MlExperiment bestCandidate = new MlExperiment();
-        bestCandidate.setGlobalScore(0.80);
+        MlExperiment bestCandidate = productionExperiment(
+                101L,
+                "model-a",
+                0.80
+        );
 
-        when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
-                .thenReturn(0L);
-        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(40L);
-        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(0L);
-        when(mlExperimentRepository.findCurrentProductionExperimentForProject(eq(PROJECT_ID)))
+        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(40L);
+
+        when(mlExperimentRepository.findCurrentProductionExperimentForProject(PROJECT_ID))
                 .thenReturn(Optional.of(production));
+
         when(mlExperimentRepository.findEligibleProductionCandidates("model-a"))
                 .thenReturn(List.of(bestCandidate));
 
-        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
-        config.setFailureMonitoringEnabled(false);
+        RetrainingConfig config = config();
         config.setPerformanceMonitoringEnabled(true);
         config.setDataDriftMonitoringEnabled(false);
+        config.setFailureMonitoringEnabled(false);
         config.setMinPredictionsForMonitoring(30);
         config.setPerformanceDropThresholdPercent(5.0);
 
@@ -368,62 +462,105 @@ class RetrainingDecisionServiceTest {
         assertTrue(decision.isShouldRetrain());
         assertEquals(RetrainingTriggerType.PERFORMANCE_DROP, decision.getTriggerType());
         assertTrue(decision.getReasonCodes().contains("PERFORMANCE_DROP"));
+        assertEquals(RetrainingSecurityLevel.RETRAIN_RECOMMENDED, decision.getSecurityLevel());
     }
 
     @Test
     void performanceDrop_belowThreshold_skips() {
-        MlExperiment production = new MlExperiment();
-        production.setRegisteredModelName("model-a");
-        production.setGlobalScore(0.78);
+        MlExperiment production = productionExperiment(
+                PRODUCTION_EXPERIMENT_ID,
+                "model-a",
+                0.78
+        );
 
-        MlExperiment bestCandidate = new MlExperiment();
-        bestCandidate.setGlobalScore(0.80);
+        MlExperiment bestCandidate = productionExperiment(
+                101L,
+                "model-a",
+                0.80
+        );
 
-        when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
-                .thenReturn(0L);
-        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(40L);
-        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(0L);
-        when(mlExperimentRepository.findCurrentProductionExperimentForProject(eq(PROJECT_ID)))
+        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(40L);
+
+        when(mlExperimentRepository.findCurrentProductionExperimentForProject(PROJECT_ID))
                 .thenReturn(Optional.of(production));
+
         when(mlExperimentRepository.findEligibleProductionCandidates("model-a"))
                 .thenReturn(List.of(bestCandidate));
 
-        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
-        config.setFailureMonitoringEnabled(false);
+        when(predictionLogRepository.findSuccessfulPredictionsForProduction(
+                PROJECT_ID,
+                PRODUCTION_EXPERIMENT_ID
+        )).thenReturn(repeatedPredictions(60, "1.0"));
+
+        RetrainingConfig config = config();
         config.setPerformanceMonitoringEnabled(true);
-        config.setDataDriftMonitoringEnabled(false);
+        config.setDataDriftMonitoringEnabled(true);
+        config.setFailureMonitoringEnabled(false);
         config.setMinPredictionsForMonitoring(30);
         config.setPerformanceDropThresholdPercent(10.0);
+        config.setDataDriftThresholdPercent(10.0);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
         assertFalse(decision.isShouldRetrain());
         assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
+        assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
     }
 
     @Test
     void performanceDrop_noProductionModel_noRetrain() {
-        when(mlExperimentRepository.countFailedRunsForProjectSince(eq(PROJECT_ID), any(Integer.class)))
-                .thenReturn(0L);
-        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(40L);
-        when(predictionLogRepository.countByProjectIdAndSuccessFalseAndCreatedAtAfter(eq(PROJECT_ID), any()))
-                .thenReturn(0L);
-        when(mlExperimentRepository.findCurrentProductionExperimentForProject(eq(PROJECT_ID)))
+        when(predictionLogRepository.countByProjectIdAndCreatedAtAfter(
+                eq(PROJECT_ID),
+                any()
+        )).thenReturn(40L);
+
+        when(mlExperimentRepository.findCurrentProductionExperimentForProject(PROJECT_ID))
                 .thenReturn(Optional.empty());
 
-        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
-        config.setFailureMonitoringEnabled(false);
-        config.setPerformanceMonitoringEnabled(true);
-        config.setDataDriftMonitoringEnabled(false);
+        RetrainingConfig config = config();
         config.setMinPredictionsForMonitoring(30);
         config.setPerformanceDropThresholdPercent(5.0);
 
         RetrainingDecision decision = service.buildDecision(config, now(), true);
 
         assertFalse(decision.isShouldRetrain());
+        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
+        assertTrue(decision.getReasonCodes().contains("INSUFFICIENT_DRIFT_DATA"));
+    }
+
+    // ------------------------------------------------------------------
+    // Autres cas MONITORING_SMART
+    // ------------------------------------------------------------------
+
+    @Test
+    void monitoringSmart_stableWindow_doesNotRetrain() {
+        RetrainingConfig config = config();
+        config.setMinPredictionsForMonitoring(5);
+        config.setDataDriftThresholdPercent(10.0);
+
+        mockStableMonitoring(20L, 5);
+
+        RetrainingDecision decision = service.buildDecision(config, now(), true);
+
+        assertFalse(decision.isShouldRetrain());
+        assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
+        assertTrue(decision.getReasonCodes().contains("MONITORING_OK"));
+    }
+
+    @Test
+    void monitoringSmart_doesNotUseLegacyScheduleAsTrigger() {
+        RetrainingConfig config = config();
+        config.setMinPredictionsForMonitoring(5);
+
+        mockStableMonitoring(10L, 5);
+
+        RetrainingDecision decision = service.buildDecision(config, now(), true);
+
+        assertFalse(decision.isShouldRetrain());
+        assertNotEquals(RetrainingTriggerType.MANUAL, decision.getTriggerType());
         assertEquals(RetrainingTriggerType.SKIPPED_NO_SIGNAL, decision.getTriggerType());
     }
 
@@ -433,10 +570,11 @@ class RetrainingDecisionServiceTest {
 
     @Test
     void manualRequest_alwaysRunsEvenWithoutSource() {
-        RetrainingConfig config = config(RetrainingStrategy.MONITORING_SMART);
+        RetrainingConfig config = config();
         config.setManualTriggerRequested(true);
 
-        RetrainingDecision decision = service.buildDecision(config, now(), false);
+        RetrainingDecision decision =
+                service.buildDecision(config, now(), false);
 
         assertTrue(decision.isShouldRetrain());
         assertEquals(RetrainingTriggerType.MANUAL, decision.getTriggerType());
@@ -444,15 +582,19 @@ class RetrainingDecisionServiceTest {
     }
 
     @Test
-    void noValidSource_defersEvenWhenDue() {
-        RetrainingConfig config = dueConfig(RetrainingStrategy.MONITORING_SMART);
+    void noValidSource_defersRetraining() {
+        RetrainingConfig config = config();
 
-        RetrainingDecision decision = service.buildDecision(config, now(), false);
+        RetrainingDecision decision =
+                service.buildDecision(config, now(), false);
 
         assertFalse(decision.isShouldRetrain());
         assertTrue(decision.getReasonCodes().contains("NO_VALID_SOURCE"));
         assertTrue(decision.getReasonCodes().contains("DEFERRED"));
-        assertEquals(RetrainingSecurityLevel.SECURITY_ALERT_ONLY, decision.getSecurityLevel());
+        assertEquals(
+                RetrainingSecurityLevel.SECURITY_ALERT_ONLY,
+                decision.getSecurityLevel()
+        );
     }
 
     // ------------------------------------------------------------------
@@ -461,6 +603,7 @@ class RetrainingDecisionServiceTest {
 
     private List<PredictionLog> predictions(String... featureValues) {
         List<PredictionLog> logs = new ArrayList<>();
+
         for (String value : featureValues) {
             PredictionLog log = new PredictionLog();
             log.setProjectId(PROJECT_ID);
@@ -468,6 +611,20 @@ class RetrainingDecisionServiceTest {
             log.setSuccess(true);
             logs.add(log);
         }
+
+        return logs;
+    }
+
+    private List<PredictionLog> repeatedPredictions(
+            int count,
+            String featureValue
+    ) {
+        List<PredictionLog> logs = new ArrayList<>();
+
+        for (int i = 0; i < count; i++) {
+            logs.addAll(predictions(featureValue));
+        }
+
         return logs;
     }
 }
